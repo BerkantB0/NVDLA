@@ -1,0 +1,9 @@
+/ {
+    nvdla_0: nvdla@10200000 {
+        compatible = "nvidia,nv_small";
+        reg = <0x0 0x10200000 0x0 0x00020000>;
+        interrupts = <0 144 4>; /* VP IRQ 176 as GIC SPI 144, level-high. */
+        status = "okay";
+    };
+};
+
