@@ -5,7 +5,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy workloads \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy workloads abi-check \
         vp-reference vp-kernel vp-rootfs vp-kmod vp-test \
         petalinux-smoke petalinux-kmod test report clean
 
@@ -20,6 +20,7 @@ help:
 	  '  make unit            Run Python unit tests' \
 	  '  make vp-reference    Boot the stock NVDLA VP to the login prompt' \
 	  '  make workloads       Generate deterministic workload inputs/goldens' \
+	  '  make abi-check       Compare KMD/UMD ioctl headers after source fetch' \
 	  '  make test            Run the default fast regression gate' \
 	  '' \
 	  'Build lanes:' \
@@ -55,6 +56,10 @@ sources-heavy:
 workloads:
 	@mkdir -p artifacts/workloads
 	@$(PYTHON) -m nvdla_test_framework workload-generate --out artifacts/workloads
+
+abi-check:
+	@mkdir -p artifacts
+	@$(PYTHON) -m nvdla_test_framework abi-check --source .external/sources/nvdla-sw --out artifacts/abi-check.json
 
 vp-reference:
 	@scripts/vp_smoke.sh reference
