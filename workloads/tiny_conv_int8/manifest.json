@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "tiny_conv_int8",
+  "target_config": "nv_small",
+  "purpose": "Small deterministic CNN/loadable correctness check for forward-ported KMD changes.",
+  "status": "planned",
+  "repeat_count": 100,
+  "precision": "int8",
+  "tolerance": {
+    "type": "absolute",
+    "max_difference": 1
+  },
+  "model": {
+    "description": "1x1 convolution over a tiny tensor with fixed input and weights.",
+    "input_shape_nchw": [1, 1, 4, 4],
+    "output_shape_nchw": [1, 1, 4, 4],
+    "notes": "Generated Caffe prototxt/caffemodel and NVDLA loadable are build artifacts, not source-controlled binaries."
+  },
+  "artifacts": {
+    "prototxt": "artifacts/<run-id>/tiny_conv_int8/model.prototxt",
+    "caffemodel": "artifacts/<run-id>/tiny_conv_int8/model.caffemodel",
+    "loadable": "artifacts/<run-id>/tiny_conv_int8/model.nvdla",
+    "input": "artifacts/<run-id>/tiny_conv_int8/input.bin",
+    "golden": "artifacts/<run-id>/tiny_conv_int8/golden.bin",
+    "output": "artifacts/<run-id>/tiny_conv_int8/output.bin"
+  }
+}
+

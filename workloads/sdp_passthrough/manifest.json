@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "sdp_passthrough",
+  "target_config": "nv_small",
+  "purpose": "Minimal DBB/DMA read-write correctness check before convolution tests.",
+  "status": "planned",
+  "repeat_count": 100,
+  "tolerance": {
+    "type": "exact"
+  },
+  "runtime": {
+    "kind": "nvdla_runtime_or_debug_ioctl",
+    "notes": "Use a generated SDP pass-through loadable if available; otherwise use a temporary debug ioctl test during KMD bring-up."
+  },
+  "artifacts": {
+    "input": "artifacts/<run-id>/sdp_passthrough/input.bin",
+    "golden": "artifacts/<run-id>/sdp_passthrough/golden.bin",
+    "output": "artifacts/<run-id>/sdp_passthrough/output.bin"
+  }
+}
+
