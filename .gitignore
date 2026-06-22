@@ -1,0 +1,25 @@
+.external/
+.work/
+artifacts/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+*.log
+*.tmp
+*.swp
+
+# Heavy generated build outputs must be reproduced, not committed.
+*.ko
+*.dtb
+*.dtbo
+Image
+rootfs.*
+*.wic
+*.cpio
+*.tar
+*.tar.gz
+*.ext2
+*.ext4
+

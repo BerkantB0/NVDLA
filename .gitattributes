@@ -1,0 +1,11 @@
+*.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.json text eol=lf
+*.fragment text eol=lf
+*.defconfig text eol=lf
+*.bb text eol=lf
+*.bbappend text eol=lf
+*.dtsi text eol=lf
+

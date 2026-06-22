@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "project": "NVLDA-Peta",
+  "generated_for": "NVDLA PetaLinux 2024.1 driver correctness framework",
+  "hardware": {
+    "xsa": {
+      "path": "NVDLA_FPGA_wrapper.xsa",
+      "sha256": "2C4B9C3BE2B8323DD964CACF80495F183DB9AA49CB51ACFF013682310FF038D5",
+      "expected": {
+        "wrapper_instance": "xilNvDlaWrapper_0",
+        "csb_base": "0xA0000000",
+        "csb_high": "0xA000FFFF",
+        "interrupt_output": "dla_intr",
+        "interrupt_ps_port": "pl_ps_irq0",
+        "interrupt_sensitivity": "LEVEL_HIGH",
+        "dbb_axi_data_width": 64,
+        "dbb_memory_slave": "S_AXI_HP0_FPD",
+        "coherent_dma": false
+      }
+    }
+  },
+  "sources": {
+    "nvdla_sw": {
+      "url": "https://github.com/nvdla/sw.git",
+      "commit": "79538ba1b52b040a4a4645f630e457fa01839e90",
+      "local_path": ".external/sources/nvdla-sw"
+    },
+    "linux_xlnx": {
+      "url": "https://github.com/Xilinx/linux-xlnx.git",
+      "commit": "e29e392a451244a11aa3559738b6617536fde460",
+      "branch": "xlnx_rebase_v6.6_LTS_2024.1_update",
+      "local_path": ".external/sources/linux-xlnx"
+    },
+    "buildroot": {
+      "url": "https://github.com/buildroot/buildroot.git",
+      "commit": "1297c6d3dc26bd8f28724928e846106596ba7a71",
+      "tag": "2024.02.11",
+      "local_path": ".external/sources/buildroot"
+    }
+  },
+  "docker": {
+    "vp_reference": {
+      "image": "nvdla/vp:1.3",
+      "image_id": "sha256:d3a0983d00761fa5278c59ca9a87f2ebb3f813444f9d1c32c862e0ca021c4d43"
+    },
+    "vp_latest": {
+      "image": "nvdla/vp:latest",
+      "image_id": "sha256:3c6e810dcc0ebf3321c01c47828a8bbf51cf12c515618d9176130f8f93d5d874"
+    }
+  },
+  "petalinux": {
+    "install_dir": "/opt/pkg/petalinux/2024.1",
+    "base_version": "2024.1",
+    "metadata_revision": "b31575b49f230b006aa3193cb564368e357777ed"
+  },
+  "vp": {
+    "reference": {
+      "config": "/usr/local/nvdla/aarch64_nvdla.lua",
+      "csb_base": "0x10200000",
+      "csb_high": "0x1021FFFF",
+      "irq_number": 176,
+      "ram_base": "0xC0000000",
+      "ram_high": "0xFFFFFFFF"
+    }
+  }
+}
+
