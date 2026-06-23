@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import read_json, run_command, sha256_file, utc_run_id, write_json
+from .patches import patch_series_fingerprint
 
 
 KERNEL_BAD_PATTERNS = [
@@ -118,6 +119,7 @@ def run_vp_test(lane: str, lock_path: Path, timeout: int, out_dir: Path | None) 
             "boot": boot,
             "compiler": compiler,
             "sources": {"nvdla_sw": lock["sources"]["nvdla_sw"]["commit"]},
+            "patch_series": patch_series_fingerprint(),
             "docker": lock["docker"]["vp_latest"],
             "workloads": [],
         }
@@ -133,6 +135,7 @@ def run_vp_test(lane: str, lock_path: Path, timeout: int, out_dir: Path | None) 
                 "nvdla_sw": lock["sources"]["nvdla_sw"]["commit"],
                 "linux_xlnx": lock["sources"]["linux_xlnx"]["commit"],
             },
+            "patch_series": patch_series_fingerprint(),
             "workloads": [],
         }
 
@@ -140,4 +143,3 @@ def run_vp_test(lane: str, lock_path: Path, timeout: int, out_dir: Path | None) 
     print(f"VP {lane} status: {manifest['status']}")
     print(f"Artifacts: {out}")
     return 0 if manifest["status"] == "pass" else 1
-

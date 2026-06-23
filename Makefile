@@ -1,11 +1,14 @@
 SHELL := /usr/bin/env bash
 
 PYTHON ?= python3
+PATCHED_NVDLA_SW ?= .work/nvdla-sw-patched
 export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy workloads abi-check \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy \
+        patch-prepare patch-apply patch-status patch-format patch-check \
+        workloads abi-check \
         vp-reference vp-kernel vp-rootfs vp-kmod vp-test \
         petalinux-smoke petalinux-kmod test report clean
 
@@ -26,6 +29,9 @@ help:
 	  'Build lanes:' \
 	  '  make sources         Fetch pinned nvdla/sw sources only' \
 	  '  make sources-heavy   Also fetch pinned linux-xlnx and Buildroot' \
+	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
+	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
+	  '  make patch-format    Regenerate patches from the patched worktree commits' \
 	  '  make vp-kernel       Build the modern VP kernel (requires heavy sources)' \
 	  '  make vp-rootfs       Build the modern VP rootfs (requires heavy sources)' \
 	  '  make vp-kmod         Build opendla.ko against the VP kernel' \
@@ -53,13 +59,28 @@ sources:
 sources-heavy:
 	@scripts/fetch_sources.sh all
 
+patch-prepare:
+	@scripts/nvdla_patch_queue.sh prepare
+
+patch-apply:
+	@scripts/nvdla_patch_queue.sh apply
+
+patch-status:
+	@scripts/nvdla_patch_queue.sh status
+
+patch-format:
+	@scripts/nvdla_patch_queue.sh format
+
+patch-check:
+	@scripts/nvdla_patch_queue.sh check
+
 workloads:
 	@mkdir -p artifacts/workloads
 	@$(PYTHON) -m nvdla_test_framework workload-generate --out artifacts/workloads
 
-abi-check:
+abi-check: patch-apply
 	@mkdir -p artifacts
-	@$(PYTHON) -m nvdla_test_framework abi-check --source .external/sources/nvdla-sw --out artifacts/abi-check.json
+	@$(PYTHON) -m nvdla_test_framework abi-check --source $(PATCHED_NVDLA_SW) --out artifacts/abi-check.json
 
 vp-reference:
 	@scripts/vp_smoke.sh reference

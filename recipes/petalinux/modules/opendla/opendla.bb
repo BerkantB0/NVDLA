@@ -7,6 +7,8 @@ inherit module
 SRC_URI = "git://github.com/nvdla/sw.git;protocol=https;branch=master"
 SRCREV = "79538ba1b52b040a4a4645f630e457fa01839e90"
 
+require opendla-patches.inc
+
 S = "${WORKDIR}/git/kmd/port/linux"
 
 EXTRA_OEMAKE += "KDIR=${STAGING_KERNEL_DIR}"
@@ -22,4 +24,3 @@ do_install() {
 }
 
 FILES:${PN} += "${nonarch_base_libdir}/modules/${KERNEL_VERSION}/extra/opendla.ko"
-

@@ -11,7 +11,7 @@ WORK="${WORK_DIR:-$ROOT/.work/vp-modern}"
 SOURCES="$ROOT/.external/sources"
 LINUX="$SOURCES/linux-xlnx"
 BUILDROOT="$SOURCES/buildroot"
-NVDLA_SW="$SOURCES/nvdla-sw"
+NVDLA_SW="${PATCHED_NVDLA_SW:-$ROOT/.work/nvdla-sw-patched}"
 
 usage() {
   echo "Usage: $0 {kernel|rootfs|kmod|all}" >&2
@@ -57,7 +57,10 @@ build_rootfs() {
 }
 
 build_kmod() {
-  need_dir "$NVDLA_SW" "Run: make sources"
+  if [[ ! -d "$NVDLA_SW" ]]; then
+    "$ROOT/scripts/nvdla_patch_queue.sh" apply
+  fi
+  need_dir "$NVDLA_SW" "Run: make patch-apply"
   if [[ ! -d "$WORK/kernel" ]]; then
     echo "ERROR: VP kernel build dir not found at $WORK/kernel" >&2
     echo "       Run: make vp-kernel" >&2
@@ -82,4 +85,3 @@ case "$ACTION" in
   all) build_kernel; build_rootfs; build_kmod ;;
   *) usage; exit 2 ;;
 esac
-
