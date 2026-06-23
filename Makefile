@@ -9,7 +9,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 .PHONY: help doctor lock-check xsa-audit unit sources sources-heavy \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-kernel vp-rootfs vp-kmod vp-test \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-test \
         petalinux-smoke petalinux-kmod test report clean
 
 help:
@@ -32,6 +32,7 @@ help:
 	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
 	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
 	  '  make patch-format    Regenerate patches from the patched worktree commits' \
+	  '  make vp-toolchain    Build/check the pinned Buildroot VP cross compiler' \
 	  '  make vp-kernel       Build the modern VP kernel (requires heavy sources)' \
 	  '  make vp-rootfs       Build the modern VP rootfs (requires heavy sources)' \
 	  '  make vp-kmod         Build opendla.ko against the VP kernel' \
@@ -84,6 +85,9 @@ abi-check: patch-apply
 
 vp-reference:
 	@scripts/vp_smoke.sh reference
+
+vp-toolchain:
+	@scripts/vp_build.sh toolchain
 
 vp-kernel:
 	@scripts/vp_build.sh kernel
