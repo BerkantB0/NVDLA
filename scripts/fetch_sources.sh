@@ -5,6 +5,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 WHAT="${1:-nvdla-sw}"
+SOURCE_ROOT="${SOURCES_DIR:-}"
 
 json_value() {
   local expr="$1"
@@ -23,15 +24,30 @@ PY
 fetch_repo() {
   local name="$1"
   local key="$2"
-  local url commit path
+  local url commit lock_path path
   url="$(json_value "sources.$key.url")"
   commit="$(json_value "sources.$key.commit")"
-  path="$(json_value "sources.$key.local_path")"
+  lock_path="$(json_value "sources.$key.local_path")"
+  if [[ -n "$SOURCE_ROOT" ]]; then
+    path="${SOURCE_ROOT%/}/$(basename "$lock_path")"
+  else
+    path="$lock_path"
+  fi
 
-  mkdir -p "$(dirname "$path")"
+  if [[ "$key" == "linux_xlnx" && -z "$SOURCE_ROOT" ]]; then
+    echo "NOTE: linux-xlnx contains filenames reserved by Windows, such as aux.c." >&2
+    echo "      If this checkout fails on /mnt/c or NTFS, set SOURCES_DIR to a WSL ext4 path." >&2
+  fi
+
+  mkdir -p "$path"
   if [[ ! -d "$path/.git" ]]; then
-    echo "Cloning $name into $path"
-    git clone --no-checkout "$url" "$path"
+    echo "Initializing $name source repo at $path"
+    git -C "$path" init
+  fi
+  if git -C "$path" remote get-url origin >/dev/null 2>&1; then
+    git -C "$path" remote set-url origin "$url"
+  else
+    git -C "$path" remote add origin "$url"
   fi
   echo "Fetching $name commit $commit"
   git -C "$path" fetch --depth 1 origin "$commit"
@@ -59,4 +75,3 @@ case "$WHAT" in
     exit 2
     ;;
 esac
-

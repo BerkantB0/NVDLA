@@ -41,6 +41,18 @@ make sources-heavy
 
 Fetched repositories are stored under `.external/sources/` and are intentionally ignored by git.
 
+If the repository is checked out on a Windows-backed filesystem such as
+`/mnt/c`, place heavy Linux sources on the WSL ext4 filesystem instead:
+
+```sh
+export SOURCES_DIR=$HOME/src/nvdla-peta-sources
+make sources-heavy
+```
+
+Use the same `SOURCES_DIR` value for `make vp-toolchain`, `make vp-kernel`, and
+`make vp-kmod`. The `linux-xlnx` tree contains paths such as `aux.c`, which
+Windows reserves and may refuse to check out on NTFS-backed paths.
+
 ## Upstreamable Patch Queue
 
 Keep `.external/sources/nvdla-sw` pristine. Apply the tracked patch queue into the ignored worktree:
