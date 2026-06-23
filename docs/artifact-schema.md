@@ -5,17 +5,22 @@ Every test run writes a directory under `artifacts/<run-id>/`.
 Required files:
 
 - `manifest.json`: machine-readable run metadata and pass/fail status.
-- `serial.log`: VP or board serial console log, when available.
+- `environment.txt`: host, Docker, PetaLinux, and toolchain details.
+
+Runtime test runs also include, when available:
+
+- `serial.log`: VP or board serial console log.
 - `dmesg.log`: kernel log captured after module load and workload execution.
 - `runtime.stdout.log`: runtime stdout.
 - `runtime.stderr.log`: runtime stderr.
+
+Build-phase runs include one phase log, such as `toolchain.log`, `kernel.log`, `rootfs.log`, or `kmod.log`.
 
 Recommended files:
 
 - `output.bin`: raw output tensor from the accelerator.
 - `golden.bin`: golden tensor used for comparison.
 - `tensor-diff.json`: per-output comparison summary.
-- `environment.txt`: host, Docker, PetaLinux, and toolchain details.
 
 `manifest.json` must include:
 
@@ -40,5 +45,6 @@ Recommended files:
 }
 ```
 
-Large generated artifacts should remain in `artifacts/` and should not be committed.
+Modern VP build manifests additionally include `phase`, `toolchain`, `sources.nvdla_patch_series_sha256`, `artifacts`, and `logs`. A failed `vp-kmod` compile is valid evidence when the manifest status is `fail` and `kmod.log` contains the actionable Linux 6.6 compiler diagnostics.
 
+Large generated artifacts should remain in `artifacts/` and should not be committed.

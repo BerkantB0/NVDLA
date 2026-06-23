@@ -65,13 +65,25 @@ Local integration work belongs in this repository; KMD/UMD changes intended for 
 The modern VP lane is intentionally split so driver changes can be tested without rebuilding everything:
 
 ```sh
+make vp-toolchain
 make vp-kernel
 make vp-rootfs
 make vp-kmod
 LANE=modern make vp-test
 ```
 
-Set `CROSS_COMPILE` if the default `aarch64-linux-gnu-` toolchain is not available. The PetaLinux cross toolchain can also be used after sourcing `settings.sh`.
+Toolchain policy:
+
+- `CROSS_COMPILE=/path/to/prefix-` always wins when set.
+- Otherwise the framework uses the pinned Buildroot compiler at `.work/vp-modern/buildroot/host/bin/aarch64-buildroot-linux-gnu-`.
+- If the Buildroot compiler does not exist, the framework accepts an apt-installed `aarch64-linux-gnu-` compiler.
+- If neither exists, run `make vp-toolchain` or install `gcc-aarch64-linux-gnu g++-aarch64-linux-gnu bc bison flex libssl-dev make`.
+
+`make vp-toolchain` builds only the Buildroot host toolchain from the pinned Buildroot source. It is the preferred reproducible path because the resulting compiler is tied to `repro.lock.json`; the apt compiler fallback is useful for quick local compile triage.
+
+Each VP build target writes a run directory under `artifacts/<timestamp>-vp-<phase>/` with `manifest.json`, `environment.txt`, and the phase log. For `vp-kernel`, the manifest records the linux-xlnx source SHA, kernel image hash, kernel release when available, and toolchain identity. For `vp-kmod`, it records the patched `nvdla/sw` SHA, patch-series hash, selected toolchain, module hash when build succeeds, and the `kmod.log` compile output when build fails.
+
+The first Linux 6.6 milestone is considered useful even when `make vp-kmod` fails: the failure must be captured in `artifacts/*-vp-kmod/kmod.log` and should point to the next small upstreamable compatibility patch under `patches/nvdla-sw/`.
 
 ## PetaLinux KMD Lane
 
