@@ -15,6 +15,7 @@ ARTIFACTS="${ARTIFACTS_DIR:-$ROOT/artifacts}"
 BUILDROOT_CROSS="$WORK/buildroot/host/bin/aarch64-buildroot-linux-gnu-"
 APT_CROSS="aarch64-linux-gnu-"
 USER_CROSS_COMPILE="${CROSS_COMPILE:-}"
+VP_BUILD_PATH="${VP_BUILD_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
 CURRENT_RUN_ID=""
 CURRENT_RUN_DIR=""
@@ -123,6 +124,21 @@ Fix one of these ways:
   - export CROSS_COMPILE=/path/to/aarch64-linux-prefix-
 EOF
   return 2
+}
+
+require_buildroot_host_tools() {
+  local missing=()
+  local tool
+  for tool in cpio unzip; do
+    if ! PATH="$VP_BUILD_PATH" command -v "$tool" >/dev/null 2>&1; then
+      missing+=("$tool")
+    fi
+  done
+  if ((${#missing[@]} > 0)); then
+    echo "ERROR: missing Buildroot host tools: ${missing[*]}" >&2
+    echo "       Install in WSL: sudo apt-get install -y cpio unzip" >&2
+    return 2
+  fi
 }
 
 write_environment() {
@@ -289,11 +305,12 @@ build_toolchain() {
   fi
 
   require_dir "$BUILDROOT" "Run: make sources-heavy" || finish_fail "toolchain" "missing Buildroot source"
+  require_buildroot_host_tools || finish_fail "toolchain" "missing Buildroot host tools"
   mkdir -p "$WORK/buildroot"
   echo "Building VP Buildroot toolchain from $BUILDROOT"
-  run_logged "$log" make -C "$BUILDROOT" O="$WORK/buildroot" BR2_EXTERNAL="$ROOT/configs/vp/buildroot_external" nvdla_vp_modern_defconfig \
+  run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" BR2_EXTERNAL="$ROOT/configs/vp/buildroot_external" nvdla_vp_modern_defconfig \
     || finish_fail "toolchain" "Buildroot defconfig failed"
-  run_logged "$log" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" toolchain \
+  run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" toolchain \
     || finish_fail "toolchain" "Buildroot toolchain build failed"
 
   if resolve_cross_compile; then
@@ -337,11 +354,12 @@ build_rootfs() {
   start_run "rootfs"
   local log="$CURRENT_RUN_DIR/rootfs.log"
   require_dir "$BUILDROOT" "Run: make sources-heavy" || finish_fail "rootfs" "missing Buildroot source"
+  require_buildroot_host_tools || finish_fail "rootfs" "missing Buildroot host tools"
   mkdir -p "$WORK/buildroot"
   echo "Building VP rootfs from $BUILDROOT"
-  run_logged "$log" make -C "$BUILDROOT" O="$WORK/buildroot" BR2_EXTERNAL="$ROOT/configs/vp/buildroot_external" nvdla_vp_modern_defconfig \
+  run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" BR2_EXTERNAL="$ROOT/configs/vp/buildroot_external" nvdla_vp_modern_defconfig \
     || finish_fail "rootfs" "Buildroot defconfig failed"
-  run_logged "$log" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" \
+  run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" \
     || finish_fail "rootfs" "Buildroot rootfs build failed"
   resolve_cross_compile "quiet" || true
   write_manifest "pass" "rootfs"
