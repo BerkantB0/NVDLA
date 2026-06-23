@@ -41,6 +41,25 @@ make sources-heavy
 
 Fetched repositories are stored under `.external/sources/` and are intentionally ignored by git.
 
+## Upstreamable Patch Queue
+
+Keep `.external/sources/nvdla-sw` pristine. Apply the tracked patch queue into the ignored worktree:
+
+```sh
+make patch-apply
+make patch-status
+make patch-check
+make abi-check
+```
+
+Edit and commit upstreamable NVDLA changes inside `.work/nvdla-sw-patched`, then regenerate the patch queue with:
+
+```sh
+make patch-format
+```
+
+Local integration work belongs in this repository; KMD/UMD changes intended for a future `nvdla/sw` fork belong in `patches/nvdla-sw/*.patch`.
+
 ## Modern VP Build Lane
 
 The modern VP lane is intentionally split so driver changes can be tested without rebuilding everything:
@@ -68,4 +87,3 @@ The script installs the provided recipe skeleton into `project-spec/meta-user` a
 ## Git Workflow
 
 Use the branch `test/vp-driver-correctness-loop`. Commit only source, scripts, recipes, tests, documentation, and lock metadata. Do not commit `.external/`, `.work/`, `artifacts/`, kernel build trees, rootfs images, modules, logs, or generated tensors.
-
