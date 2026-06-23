@@ -1,0 +1,51 @@
+From 61514315d4b519ec04155c05d4579b254cc1e182 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 23 Jun 2026 00:00:00 +0000
+Subject: [PATCH] umd: allow render node override from environment
+
+The Linux UMD always opens /dev/dri/renderD128. That is convenient for the
+original virtual platform, but it makes bring-up on systems with multiple DRM
+devices brittle because render node numbering depends on probe order.
+
+Keep the existing default and allow tests or deployments to override it with
+NVDLA_DEVICE_NODE. This preserves the public ABI and existing behavior while
+making modern VP and PetaLinux validation deterministic.
+---
+ umd/port/linux/nvdla.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/umd/port/linux/nvdla.c b/umd/port/linux/nvdla.c
+index 6f827d0..9d8d712 100644
+--- a/umd/port/linux/nvdla.c
++++ b/umd/port/linux/nvdla.c
+@@ -51,6 +51,7 @@
+ #include "nvdla_os_inf.h"
+ 
+ #define NVDLA_DEVICE_NODE "/dev/dri/renderD128"
++#define NVDLA_DEVICE_NODE_ENV "NVDLA_DEVICE_NODE"
+ 
+ #define NVDLA_MEM_READ (PROT_READ)
+ #define NVDLA_MEM_WRITE (PROT_WRITE)
+@@ -232,6 +233,7 @@ NvDlaOpen(void *session_handle, NvU32 instance, void **device_handle)
+ {
+     NvDlaContext *pContext = NULL;
+     NvDlaError e = NvDlaSuccess;
++    const char *device_node;
+ 
+     if (instance > 0)
+         return NvDlaError_BadParameter;
+@@ -246,7 +248,10 @@ NvDlaOpen(void *session_handle, NvU32 instance, void **device_handle)
+ 
+     NvDlaMemset(pContext, 0, sizeof(NvDlaContext));
+ 
+-    pContext->fd = open(NVDLA_DEVICE_NODE, O_RDWR);
++    device_node = getenv(NVDLA_DEVICE_NODE_ENV);
++    if (!device_node || !device_node[0])
++        device_node = NVDLA_DEVICE_NODE;
++    pContext->fd = open(device_node, O_RDWR);
+     if (pContext->fd < 0) {
+         e = NvDlaError_ResourceError;
+         goto fail;
+-- 
+2.43.0
+
