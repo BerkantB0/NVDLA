@@ -299,8 +299,11 @@ build_toolchain() {
     finish_fail "toolchain" "user-provided CROSS_COMPILE was not executable"
   fi
 
-  if resolve_cross_compile "quiet"; then
-    write_manifest "pass" "toolchain" "existing cross compiler found"
+  if verify_cross_compile "$BUILDROOT_CROSS"; then
+    RESOLVED_CROSS_COMPILE="$BUILDROOT_CROSS"
+    TOOLCHAIN_SOURCE="buildroot"
+    export CROSS_COMPILE="$RESOLVED_CROSS_COMPILE"
+    write_manifest "pass" "toolchain" "existing Buildroot cross compiler found"
     return 0
   fi
 
@@ -313,7 +316,10 @@ build_toolchain() {
   run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" toolchain \
     || finish_fail "toolchain" "Buildroot toolchain build failed"
 
-  if resolve_cross_compile; then
+  if verify_cross_compile "$BUILDROOT_CROSS"; then
+    RESOLVED_CROSS_COMPILE="$BUILDROOT_CROSS"
+    TOOLCHAIN_SOURCE="buildroot"
+    export CROSS_COMPILE="$RESOLVED_CROSS_COMPILE"
     write_manifest "pass" "toolchain" "Buildroot toolchain ready"
     return 0
   fi
