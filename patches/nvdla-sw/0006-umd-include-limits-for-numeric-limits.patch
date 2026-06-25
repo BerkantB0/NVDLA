@@ -1,0 +1,33 @@
+From 2d90a998f52f5f1c1ee0b101ad7f7b2f16a9a1e4 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Thu, 25 Jun 2026 19:35:00 +0300
+Subject: [PATCH 6/7] umd: include limits for numeric_limits use
+
+The UMD Type.h helper uses std::numeric_limits in saturate(), but the header
+does not include <limits>. Older toolchains may have exposed numeric_limits
+indirectly through another C++ header, but GCC 12/libstdc++ does not guarantee
+that and fails to build the runtime.
+
+Include <limits> where std::numeric_limits is used. This is a local include
+fix and does not change the UMD ABI or runtime behavior.
+
+Tested: ARM64 Buildroot GCC 12.4.0 runtime compile.
+Signed-off-by: Codex <codex@local>
+---
+ umd/core/src/common/include/priv/Type.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/umd/core/src/common/include/priv/Type.h b/umd/core/src/common/include/priv/Type.h
+index 46a9490..9a0054f 100644
+--- a/umd/core/src/common/include/priv/Type.h
++++ b/umd/core/src/common/include/priv/Type.h
+@@ -33,6 +33,7 @@
+ #include <sstream>
+ #include <map>
+ #include <algorithm>
++#include <limits>
+ #include <exception>
+ 
+ #include "nvdla/IType.h"
+-- 
+2.43.0

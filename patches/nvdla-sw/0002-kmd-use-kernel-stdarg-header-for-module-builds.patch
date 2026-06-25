@@ -1,7 +1,7 @@
 From 1f6d82f8a99cb9daf84f660e5022b4ba3a8a0633 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Wed, 24 Jun 2026 21:14:00 +0300
-Subject: [PATCH 2/5] kmd: use kernel stdarg header for module builds
+Subject: [PATCH 2/7] kmd: use kernel stdarg header for module builds
 
 Linux external module builds use the kernel include environment rather than libc headers. On Linux 6.6 this leaves the compiler stdarg header unavailable to opendla.ko, so nvdla_core_callbacks.c fails before reaching the DRM and DMA-BUF API updates.
 

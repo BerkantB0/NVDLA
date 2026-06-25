@@ -1,0 +1,40 @@
+From 50dcb17d1ebf18b833a66ce3ef60042f44361213 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Thu, 25 Jun 2026 19:48:00 +0300
+Subject: [PATCH 7/7] umd: allow runtime executable linker flags
+
+Some modern cross toolchains default to position-independent executables. The
+runtime application links the upstream prebuilt static libjpeg.a, which is not
+PIC, so those toolchains can fail with relocation errors unless the executable
+link explicitly disables PIE.
+
+Add a RUNTIME_LDFLAGS hook to the nvdla_runtime executable link. The default is
+empty to preserve existing behavior; builders that use a default-PIE toolchain
+can pass RUNTIME_LDFLAGS=-no-pie without affecting libnvdla_runtime.so.
+
+Tested: ARM64 Buildroot GCC 12.4.0 runtime compile with RUNTIME_LDFLAGS=-no-pie.
+Signed-off-by: Codex <codex@local>
+---
+ umd/apps/runtime/Makefile | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/umd/apps/runtime/Makefile b/umd/apps/runtime/Makefile
+index e4b4bd8..05ff951 100644
+--- a/umd/apps/runtime/Makefile
++++ b/umd/apps/runtime/Makefile
+@@ -40,6 +40,7 @@ INCLUDES :=
+ MODULE_COMPILEFLAGS := -W -Wall -Wno-multichar -Wno-unused-parameter -Wno-unused-function -Werror-implicit-function-declaration
+ MODULE_CFLAGS := --std=c99
+ MODULE_CPPFLAGS := --std=c++11 -fexceptions -fno-rtti
++RUNTIME_LDFLAGS ?=
+ 
+ all:: $(TEST_BIN)
+ 
+@@ -52,4 +53,4 @@ include rules.mk
+ # the logic to compile and link stuff is in here
+ $(TEST_BIN): $(ALLMODULE_OBJS) $(SHARED_LIBS)
+ 	@echo building $(MODULE)  $@
+-	$(TOOLCHAIN_PREFIX)g++ $(ALLMODULE_OBJS) -pthread -L$(ROOT)/external/ -ljpeg -L$(ROOT)/out/core/src/runtime/libnvdla_runtime -lnvdla_runtime -o $@ -Wl,-rpath=.
++	$(TOOLCHAIN_PREFIX)g++ $(ALLMODULE_OBJS) $(RUNTIME_LDFLAGS) -pthread -L$(ROOT)/external/ -ljpeg -L$(ROOT)/out/core/src/runtime/libnvdla_runtime -lnvdla_runtime -o $@ -Wl,-rpath=.
+-- 
+2.43.0

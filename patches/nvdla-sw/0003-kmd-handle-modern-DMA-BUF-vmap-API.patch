@@ -1,7 +1,7 @@
 From 32b3080ff096abdbd41161c9ff2c689161a8815e Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Wed, 24 Jun 2026 21:22:31 +0300
-Subject: [PATCH 3/5] kmd: handle modern DMA-BUF vmap API
+Subject: [PATCH 3/7] kmd: handle modern DMA-BUF vmap API
 
 Linux 6.6 changed dma_buf_vmap and dma_buf_vunmap to use struct iosys_map instead of returning a raw pointer. The old NVDLA callbacks still call the raw pointer API and fail to compile after the stdarg header fix.
 
