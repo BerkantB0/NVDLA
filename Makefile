@@ -9,7 +9,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 .PHONY: help doctor lock-check xsa-audit unit sources sources-heavy \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-test \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-runtime vp-test \
         petalinux-smoke petalinux-kmod test report clean
 
 help:
@@ -36,6 +36,7 @@ help:
 	  '  make vp-kernel       Build the modern VP kernel (requires heavy sources)' \
 	  '  make vp-rootfs       Build the modern VP rootfs (requires heavy sources)' \
 	  '  make vp-kmod         Build opendla.ko against the VP kernel' \
+	  '  make vp-runtime      Build ARM64 nvdla_runtime and libnvdla_runtime.so' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
 	  '' \
 	  'Reports:' \
@@ -97,6 +98,9 @@ vp-rootfs:
 
 vp-kmod:
 	@scripts/vp_build.sh kmod
+
+vp-runtime:
+	@scripts/vp_build.sh runtime
 
 vp-test:
 	@$(PYTHON) -m nvdla_test_framework vp-test --lane "$${LANE:-reference}" --lock repro.lock.json --timeout "$${VP_TIMEOUT:-120}" --repeat "$${REPEAT:-1}"

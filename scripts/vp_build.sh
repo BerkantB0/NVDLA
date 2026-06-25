@@ -15,6 +15,7 @@ ARTIFACTS="${ARTIFACTS_DIR:-$ROOT/artifacts}"
 BUILDROOT_CROSS="$WORK/buildroot/host/bin/aarch64-buildroot-linux-gnu-"
 APT_CROSS="aarch64-linux-gnu-"
 USER_CROSS_COMPILE="${CROSS_COMPILE:-}"
+RUNTIME_LDFLAGS="${NVDLA_RUNTIME_LDFLAGS--no-pie}"
 VP_BUILD_PATH="${VP_BUILD_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
 CURRENT_RUN_ID=""
@@ -28,7 +29,7 @@ TOOLCHAIN_VERSION=""
 TOOLCHAIN_CXX_VERSION=""
 
 usage() {
-  echo "Usage: $0 {toolchain|kernel|rootfs|kmod|all}" >&2
+  echo "Usage: $0 {toolchain|kernel|rootfs|kmod|runtime|all}" >&2
 }
 
 start_run() {
@@ -206,6 +207,7 @@ write_environment() {
     echo "toolchain_machine=$TOOLCHAIN_MACHINE"
     echo "toolchain_version=$TOOLCHAIN_VERSION"
     echo "toolchain_cxx_version=$TOOLCHAIN_CXX_VERSION"
+    echo "runtime_ldflags=$RUNTIME_LDFLAGS"
   } >"$CURRENT_RUN_DIR/environment.txt"
 }
 
@@ -219,7 +221,7 @@ write_manifest() {
   export PHASE="$phase"
   export STATUS="$status"
   export REASON="$reason"
-  export ROOT WORK LINUX BUILDROOT NVDLA_SW ARCH
+  export ROOT WORK LINUX BUILDROOT NVDLA_SW ARCH RUNTIME_LDFLAGS
   export TOOLCHAIN_SOURCE RESOLVED_CROSS_COMPILE TOOLCHAIN_GCC TOOLCHAIN_GXX TOOLCHAIN_MACHINE TOOLCHAIN_VERSION TOOLCHAIN_CXX_VERSION
   python3 - <<'PY'
 import hashlib
@@ -286,6 +288,10 @@ known_artifacts = {
     "rootfs_ext4": work / "buildroot" / "images" / "rootfs.ext4",
     "rootfs_smoke_ext4": work / "buildroot" / "images" / "rootfs-smoke.ext4",
     "module": work / "modules" / "opendla.ko",
+    "runtime_binary": work / "runtime" / "nvdla_runtime",
+    "runtime_library": work / "runtime" / "libnvdla_runtime.so",
+    "runtime_binary_readelf": work / "runtime" / "nvdla_runtime.readelf.txt",
+    "runtime_library_readelf": work / "runtime" / "libnvdla_runtime.so.readelf.txt",
 }
 
 manifest = {
@@ -317,6 +323,17 @@ manifest = {
     },
     "driver": {
         "module_sha256": sha256(known_artifacts["module"]),
+    },
+    "runtime": {
+        "binary_sha256": sha256(known_artifacts["runtime_binary"]),
+        "library_sha256": sha256(known_artifacts["runtime_library"]),
+        "ldflags": os.environ.get("RUNTIME_LDFLAGS") or None,
+        "binary_readelf": str(known_artifacts["runtime_binary_readelf"])
+        if known_artifacts["runtime_binary_readelf"].is_file()
+        else None,
+        "library_readelf": str(known_artifacts["runtime_library_readelf"])
+        if known_artifacts["runtime_library_readelf"].is_file()
+        else None,
     },
     "artifacts": {
         name: {
@@ -542,11 +559,60 @@ build_kmod() {
   write_manifest "pass" "kmod"
 }
 
+build_runtime() {
+  start_run "runtime"
+  local log="$CURRENT_RUN_DIR/runtime.log"
+  if [[ ! -d "$NVDLA_SW" ]]; then
+    "$ROOT/scripts/nvdla_patch_queue.sh" apply
+  fi
+  require_dir "$NVDLA_SW" "Run: make patch-apply" || finish_fail "runtime" "missing patched nvdla/sw worktree"
+  require_dir "$NVDLA_SW/umd" "Run: make patch-apply" || finish_fail "runtime" "missing NVDLA UMD path"
+  resolve_cross_compile_cxx || finish_fail "runtime" "no ARM64 C++ Linux cross compiler"
+
+  local umd="$NVDLA_SW/umd"
+  local runtime_bin="$umd/out/apps/runtime/nvdla_runtime/nvdla_runtime"
+  local runtime_lib="$umd/out/core/src/runtime/libnvdla_runtime/libnvdla_runtime.so"
+  local dst="$WORK/runtime"
+
+  echo "Building NVDLA UMD/runtime from $umd"
+  echo "Using TOOLCHAIN_PREFIX=$RESOLVED_CROSS_COMPILE ($TOOLCHAIN_SOURCE)"
+  echo "Using RUNTIME_LDFLAGS=$RUNTIME_LDFLAGS"
+  run_logged "$log" make -C "$umd" runtime TOP="$umd" TOOLCHAIN_PREFIX="$RESOLVED_CROSS_COMPILE" RUNTIME_LDFLAGS="$RUNTIME_LDFLAGS" \
+    || finish_fail "runtime" "NVDLA UMD/runtime build failed; see runtime.log"
+
+  if [[ ! -f "$runtime_bin" ]]; then
+    finish_fail "runtime" "nvdla_runtime output was not produced"
+  fi
+  if [[ ! -f "$runtime_lib" ]]; then
+    finish_fail "runtime" "libnvdla_runtime.so output was not produced"
+  fi
+
+  mkdir -p "$dst"
+  cp "$runtime_bin" "$dst/nvdla_runtime"
+  cp "$runtime_lib" "$dst/libnvdla_runtime.so"
+  chmod 0755 "$dst/nvdla_runtime"
+
+  "${RESOLVED_CROSS_COMPILE}readelf" -d "$dst/nvdla_runtime" >"$dst/nvdla_runtime.readelf.txt" 2>&1 \
+    || finish_fail "runtime" "readelf failed for nvdla_runtime"
+  "${RESOLVED_CROSS_COMPILE}readelf" -d "$dst/libnvdla_runtime.so" >"$dst/libnvdla_runtime.so.readelf.txt" 2>&1 \
+    || finish_fail "runtime" "readelf failed for libnvdla_runtime.so"
+  {
+    echo "Runtime artifact hashes:"
+    sha256sum "$dst/nvdla_runtime" "$dst/libnvdla_runtime.so" "$dst/nvdla_runtime.readelf.txt" "$dst/libnvdla_runtime.so.readelf.txt"
+    echo
+    echo "nvdla_runtime dynamic dependencies:"
+    grep -E "Shared library|NEEDED|RPATH|RUNPATH" "$dst/nvdla_runtime.readelf.txt" || true
+  } | tee -a "$log"
+
+  write_manifest "pass" "runtime"
+}
+
 case "$ACTION" in
   toolchain) build_toolchain ;;
   kernel) build_kernel ;;
   rootfs) build_rootfs ;;
   kmod) build_kmod ;;
-  all) build_toolchain; build_kernel; build_rootfs; build_kmod ;;
+  runtime) build_runtime ;;
+  all) build_toolchain; build_kernel; build_rootfs; build_kmod; build_runtime ;;
   *) usage; exit 2 ;;
 esac
