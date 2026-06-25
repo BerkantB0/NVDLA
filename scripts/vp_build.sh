@@ -22,8 +22,10 @@ CURRENT_RUN_DIR=""
 RESOLVED_CROSS_COMPILE=""
 TOOLCHAIN_SOURCE=""
 TOOLCHAIN_GCC=""
+TOOLCHAIN_GXX=""
 TOOLCHAIN_MACHINE=""
 TOOLCHAIN_VERSION=""
+TOOLCHAIN_CXX_VERSION=""
 
 usage() {
   echo "Usage: $0 {toolchain|kernel|rootfs|kmod|all}" >&2
@@ -68,13 +70,26 @@ run_logged() {
 refresh_toolchain_metadata() {
   local prefix="$1"
   TOOLCHAIN_GCC="$(command -v "${prefix}gcc" 2>/dev/null || true)"
+  TOOLCHAIN_GXX="$(command -v "${prefix}g++" 2>/dev/null || true)"
   TOOLCHAIN_MACHINE="$("${prefix}gcc" -dumpmachine 2>/dev/null || true)"
   TOOLCHAIN_VERSION="$("${prefix}gcc" --version 2>/dev/null | head -n 1 || true)"
+  TOOLCHAIN_CXX_VERSION="$("${prefix}g++" --version 2>/dev/null | head -n 1 || true)"
 }
 
 verify_cross_compile() {
   local prefix="$1"
   if ! command -v "${prefix}gcc" >/dev/null 2>&1; then
+    return 1
+  fi
+  refresh_toolchain_metadata "$prefix"
+}
+
+verify_cross_compile_cxx() {
+  local prefix="$1"
+  if ! verify_cross_compile "$prefix"; then
+    return 1
+  fi
+  if ! command -v "${prefix}g++" >/dev/null 2>&1; then
     return 1
   fi
   refresh_toolchain_metadata "$prefix"
@@ -126,6 +141,27 @@ EOF
   return 2
 }
 
+resolve_cross_compile_cxx() {
+  resolve_cross_compile "$@" || return $?
+  if command -v "${RESOLVED_CROSS_COMPILE}g++" >/dev/null 2>&1; then
+    refresh_toolchain_metadata "$RESOLVED_CROSS_COMPILE"
+    return 0
+  fi
+
+  cat >&2 <<EOF
+ERROR: ARM64 C++ cross compiler not found for:
+  CROSS_COMPILE=$RESOLVED_CROSS_COMPILE
+
+Runtime builds require ${RESOLVED_CROSS_COMPILE}g++.
+
+Fix one of these ways:
+  - run: make vp-toolchain
+  - install apt packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+  - export CROSS_COMPILE=/path/to/aarch64-linux-prefix-
+EOF
+  return 2
+}
+
 require_buildroot_host_tools() {
   local missing=()
   local tool
@@ -166,8 +202,10 @@ write_environment() {
     echo "toolchain_source=$TOOLCHAIN_SOURCE"
     echo "cross_compile=$RESOLVED_CROSS_COMPILE"
     echo "toolchain_gcc=$TOOLCHAIN_GCC"
+    echo "toolchain_gxx=$TOOLCHAIN_GXX"
     echo "toolchain_machine=$TOOLCHAIN_MACHINE"
     echo "toolchain_version=$TOOLCHAIN_VERSION"
+    echo "toolchain_cxx_version=$TOOLCHAIN_CXX_VERSION"
   } >"$CURRENT_RUN_DIR/environment.txt"
 }
 
@@ -182,7 +220,7 @@ write_manifest() {
   export STATUS="$status"
   export REASON="$reason"
   export ROOT WORK LINUX BUILDROOT NVDLA_SW ARCH
-  export TOOLCHAIN_SOURCE RESOLVED_CROSS_COMPILE TOOLCHAIN_GCC TOOLCHAIN_MACHINE TOOLCHAIN_VERSION
+  export TOOLCHAIN_SOURCE RESOLVED_CROSS_COMPILE TOOLCHAIN_GCC TOOLCHAIN_GXX TOOLCHAIN_MACHINE TOOLCHAIN_VERSION TOOLCHAIN_CXX_VERSION
   python3 - <<'PY'
 import hashlib
 import json
@@ -268,8 +306,10 @@ manifest = {
         "source": os.environ.get("TOOLCHAIN_SOURCE") or None,
         "cross_compile": os.environ.get("RESOLVED_CROSS_COMPILE") or None,
         "gcc": os.environ.get("TOOLCHAIN_GCC") or None,
+        "gxx": os.environ.get("TOOLCHAIN_GXX") or None,
         "machine": os.environ.get("TOOLCHAIN_MACHINE") or None,
         "version": os.environ.get("TOOLCHAIN_VERSION") or None,
+        "cxx_version": os.environ.get("TOOLCHAIN_CXX_VERSION") or None,
     },
     "kernel": {
         "version": kernel_release(work),
@@ -309,38 +349,50 @@ build_toolchain() {
   local log="$CURRENT_RUN_DIR/toolchain.log"
 
   if [[ -n "$USER_CROSS_COMPILE" ]]; then
-    if resolve_cross_compile; then
+    if verify_cross_compile_cxx "$USER_CROSS_COMPILE"; then
+      RESOLVED_CROSS_COMPILE="$USER_CROSS_COMPILE"
+      TOOLCHAIN_SOURCE="user"
+      export CROSS_COMPILE="$RESOLVED_CROSS_COMPILE"
       write_manifest "pass" "toolchain" "using user-provided CROSS_COMPILE"
       return 0
     fi
-    finish_fail "toolchain" "user-provided CROSS_COMPILE was not executable"
+    finish_fail "toolchain" "user-provided CROSS_COMPILE did not provide gcc and g++"
   fi
 
-  if verify_cross_compile "$BUILDROOT_CROSS"; then
+  if verify_cross_compile_cxx "$BUILDROOT_CROSS"; then
     RESOLVED_CROSS_COMPILE="$BUILDROOT_CROSS"
     TOOLCHAIN_SOURCE="buildroot"
     export CROSS_COMPILE="$RESOLVED_CROSS_COMPILE"
-    write_manifest "pass" "toolchain" "existing Buildroot cross compiler found"
+    write_manifest "pass" "toolchain" "existing Buildroot C/C++ cross compiler found"
     return 0
+  fi
+  local clean_stale_toolchain=0
+  if verify_cross_compile "$BUILDROOT_CROSS"; then
+    echo "Existing Buildroot cross compiler is missing g++; rebuilding with C++ enabled"
+    clean_stale_toolchain=1
   fi
 
   require_dir "$BUILDROOT" "Run: make sources-heavy" || finish_fail "toolchain" "missing Buildroot source"
   require_buildroot_host_tools || finish_fail "toolchain" "missing Buildroot host tools"
   mkdir -p "$WORK/buildroot"
+  if ((clean_stale_toolchain)); then
+    run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" clean \
+      || finish_fail "toolchain" "Buildroot clean of stale C-only toolchain failed"
+  fi
   echo "Building VP Buildroot toolchain from $BUILDROOT"
   run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" BR2_EXTERNAL="$ROOT/configs/vp/buildroot_external" nvdla_vp_modern_defconfig \
     || finish_fail "toolchain" "Buildroot defconfig failed"
   run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" toolchain \
     || finish_fail "toolchain" "Buildroot toolchain build failed"
 
-  if verify_cross_compile "$BUILDROOT_CROSS"; then
+  if verify_cross_compile_cxx "$BUILDROOT_CROSS"; then
     RESOLVED_CROSS_COMPILE="$BUILDROOT_CROSS"
     TOOLCHAIN_SOURCE="buildroot"
     export CROSS_COMPILE="$RESOLVED_CROSS_COMPILE"
     write_manifest "pass" "toolchain" "Buildroot toolchain ready"
     return 0
   fi
-  finish_fail "toolchain" "Buildroot completed but compiler was not found"
+  finish_fail "toolchain" "Buildroot completed but gcc/g++ was not found"
 }
 
 build_kernel() {
