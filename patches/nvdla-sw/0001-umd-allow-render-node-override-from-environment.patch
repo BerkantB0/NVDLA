@@ -1,7 +1,7 @@
 From 6c8d03b748a3d28974e06ac7aa08e762e26e747a Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Tue, 23 Jun 2026 00:00:00 +0000
-Subject: [PATCH 1/4] umd: allow render node override from environment
+Subject: [PATCH 1/5] umd: allow render node override from environment
 
 The Linux UMD always opens /dev/dri/renderD128. That is convenient for the
 original virtual platform, but it makes bring-up on systems with multiple DRM
@@ -10,6 +10,8 @@ devices brittle because render node numbering depends on probe order.
 Keep the existing default and allow tests or deployments to override it with
 NVDLA_DEVICE_NODE. This preserves the public ABI and existing behavior while
 making modern VP and PetaLinux validation deterministic.
+
+Signed-off-by: Codex <codex@local>
 ---
  umd/port/linux/nvdla.c | 7 ++++++-
  1 file changed, 6 insertions(+), 1 deletion(-)
@@ -30,7 +32,7 @@ index 6f827d0..9d8d712 100644
  {
      NvDlaContext *pContext = NULL;
      NvDlaError e = NvDlaSuccess;
-+    const char *device_node;
++	const char *device_node;
  
      if (instance > 0)
          return NvDlaError_BadParameter;
@@ -39,13 +41,12 @@ index 6f827d0..9d8d712 100644
      NvDlaMemset(pContext, 0, sizeof(NvDlaContext));
  
 -    pContext->fd = open(NVDLA_DEVICE_NODE, O_RDWR);
-+    device_node = getenv(NVDLA_DEVICE_NODE_ENV);
-+    if (!device_node || !device_node[0])
-+        device_node = NVDLA_DEVICE_NODE;
-+    pContext->fd = open(device_node, O_RDWR);
++	device_node = getenv(NVDLA_DEVICE_NODE_ENV);
++	if (!device_node || !device_node[0])
++		device_node = NVDLA_DEVICE_NODE;
++	pContext->fd = open(device_node, O_RDWR);
      if (pContext->fd < 0) {
          e = NvDlaError_ResourceError;
          goto fail;
 -- 
 2.43.0
-
