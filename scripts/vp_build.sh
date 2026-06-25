@@ -379,13 +379,14 @@ build_kmod() {
   fi
   require_dir "$NVDLA_SW" "Run: make patch-apply" || finish_fail "kmod" "missing patched nvdla/sw worktree"
   require_dir "$WORK/kernel" "Run: make vp-kernel" || finish_fail "kmod" "missing VP kernel build directory"
+  require_dir "$LINUX" "Run: make sources-heavy" || finish_fail "kmod" "missing linux-xlnx source"
   resolve_cross_compile || finish_fail "kmod" "no ARM64 Linux cross compiler"
 
   local kmd="$NVDLA_SW/kmd/port/linux"
   require_dir "$kmd" "Run: make patch-apply" || finish_fail "kmod" "missing NVDLA KMD path"
   echo "Building opendla.ko against $WORK/kernel"
   echo "Using CROSS_COMPILE=$RESOLVED_CROSS_COMPILE ($TOOLCHAIN_SOURCE)"
-  run_logged "$log" make -C "$kmd" KDIR="$WORK/kernel" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" \
+  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" M="$kmd" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" modules \
     || finish_fail "kmod" "opendla.ko build failed; see kmod.log"
   mkdir -p "$WORK/modules"
   cp "$kmd/opendla.ko" "$WORK/modules/opendla.ko"

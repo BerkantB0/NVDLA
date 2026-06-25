@@ -96,6 +96,8 @@ Toolchain policy:
 
 `make vp-toolchain` builds only the Buildroot host toolchain from the pinned Buildroot source. It is the preferred reproducible path because the resulting compiler is tied to `repro.lock.json`; the apt compiler fallback is useful for quick local compile triage.
 
+PetaLinux's host package checks may require `gcc-multilib`, which can conflict with Ubuntu's apt `aarch64-linux-gnu-` cross compiler packages. That is acceptable for this framework: keep `make vp-toolchain` as the default reproducible compiler path and treat apt cross compilers as disposable local convenience packages.
+
 The Buildroot calls run with a clean Linux-only `PATH` by default because WSL may
 import Windows paths with spaces. Override `VP_BUILD_PATH` only if a required
 host tool lives outside `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`.

@@ -5,10 +5,11 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 ACTION="${1:-}"
-SOURCE="${NVDLA_SW_SOURCE:-$ROOT/.external/sources/nvdla-sw}"
+SOURCES="${SOURCES_DIR:-$ROOT/.external/sources}"
+SOURCE="${NVDLA_SW_SOURCE:-$SOURCES/nvdla-sw}"
 WORK="${PATCHED_NVDLA_SW:-$ROOT/.work/nvdla-sw-patched}"
 PATCH_DIR="${NVDLA_PATCH_DIR:-$ROOT/patches/nvdla-sw}"
-LINUX="${LINUX_SOURCE:-$ROOT/.external/sources/linux-xlnx}"
+LINUX="${LINUX_SOURCE:-$SOURCES/linux-xlnx}"
 BASE="$(python3 - <<'PY'
 import json
 with open("repro.lock.json", "r", encoding="utf-8") as f:

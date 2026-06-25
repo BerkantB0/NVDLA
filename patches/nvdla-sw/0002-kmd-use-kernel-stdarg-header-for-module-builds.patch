@@ -1,0 +1,40 @@
+From 1f6d82f8a99cb9daf84f660e5022b4ba3a8a0633 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 24 Jun 2026 21:14:00 +0300
+Subject: [PATCH 2/4] kmd: use kernel stdarg header for module builds
+
+Linux external module builds use the kernel include environment rather than libc headers. On Linux 6.6 this leaves the compiler stdarg header unavailable to opendla.ko, so nvdla_core_callbacks.c fails before reaching the DRM and DMA-BUF API updates.
+
+Use linux/stdarg.h, which provides va_list and va_start and va_end in kernel builds while keeping the callback implementation unchanged.
+
+Tested with make vp-kmod against linux-xlnx 6.6.80-ge29e392a4512. The compile now reaches the subsequent dma_buf_vmap API change.
+
+Signed-off-by: Codex <codex@local>
+---
+ kmd/port/linux/nvdla_core_callbacks.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/kmd/port/linux/nvdla_core_callbacks.c b/kmd/port/linux/nvdla_core_callbacks.c
+index 316d8b5..47b7076 100644
+--- a/kmd/port/linux/nvdla_core_callbacks.c
++++ b/kmd/port/linux/nvdla_core_callbacks.c
+@@ -32,8 +32,6 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include <stdarg.h>
+-
+ #include <linux/dma-buf.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/fs.h>
+@@ -49,6 +47,7 @@
+ #include <linux/printk.h>
+ #include <linux/slab.h>
+ #include <linux/spinlock.h>
++#include <linux/stdarg.h>
+ #include <linux/time.h>
+ #include <linux/uaccess.h>
+ 
+-- 
+2.43.0
+

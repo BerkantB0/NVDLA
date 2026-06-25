@@ -1,0 +1,264 @@
+From 91673e45631b2caf3833644e2e8636926d052bec Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 24 Jun 2026 21:42:21 +0300
+Subject: [PATCH 4/4] kmd: update DRM GEM helpers for Linux 6.x
+
+Linux 6.x removed the CMA GEM helper header, moved GEM object callbacks into drm_gem_object_funcs, removed old object unreference helpers, made vm_flags read-only, and changed coherent-memory declaration APIs. The old NVDLA KMD therefore fails to build after the DMA-BUF updates.
+
+Use the modern DMA GEM helper names, assign GEM object funcs for the NVDLA GEM object, use drm_gem_object_put and vm_flags_clear on modern kernels, and keep the legacy callbacks for older kernels. For modern kernels, do not call the non-exported coherent-memory declaration helpers from common KMD code. Platform DMA memory must come from normal firmware or device-tree setup.
+
+Tested with make vp-kmod against linux-xlnx 6.6.80-ge29e392a4512. The build produced opendla.ko.
+
+Signed-off-by: Codex <codex@local>
+---
+ kmd/port/linux/nvdla_gem.c | 123 ++++++++++++++++++++++++++++++++-----
+ 1 file changed, 109 insertions(+), 14 deletions(-)
+
+diff --git a/kmd/port/linux/nvdla_gem.c b/kmd/port/linux/nvdla_gem.c
+index 5df0bed..5ffbf0b 100644
+--- a/kmd/port/linux/nvdla_gem.c
++++ b/kmd/port/linux/nvdla_gem.c
+@@ -33,7 +33,22 @@
+  */
+ 
+ #include <drm/drm.h>
++#include <drm/drm_device.h>
++#include <drm/drm_drv.h>
++#include <drm/drm_file.h>
++#include <drm/drm_ioctl.h>
++#include <drm/drm_prime.h>
++#include <linux/dma-mapping.h>
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++#include <drm/drm_gem_dma_helper.h>
++#include <linux/iosys-map.h>
++#define nvdla_drm_gem_vm_ops drm_gem_dma_vm_ops
++#else
+ #include <drm/drm_gem_cma_helper.h>
++#define nvdla_drm_gem_vm_ops drm_gem_cma_vm_ops
++#endif
+ 
+ #include <nvdla_linux.h>
+ #include <nvdla_ioctl.h>
+@@ -48,6 +63,44 @@ struct nvdla_gem_object {
+ 	unsigned long dma_attrs;
+ };
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++static const struct drm_gem_object_funcs nvdla_gem_object_funcs;
++
++static int nvdla_declare_coherent_memory(struct device *dev)
++{
++	return 0;
++}
++
++static void nvdla_release_coherent_memory(struct device *dev)
++{
++}
++
++#define nvdla_drm_dev_put(drm) drm_dev_put(drm)
++#define nvdla_gem_object_put(obj) drm_gem_object_put(obj)
++#else
++static int nvdla_declare_coherent_memory(struct device *dev)
++{
++	int dma;
++
++	dma = dma_declare_coherent_memory(dev, 0xC0000000, 0xC0000000,
++					  0x40000000,
++					  DMA_MEMORY_MAP |
++					  DMA_MEMORY_EXCLUSIVE);
++	if (!(dma & DMA_MEMORY_MAP))
++		return -ENOMEM;
++
++	return 0;
++}
++
++static void nvdla_release_coherent_memory(struct device *dev)
++{
++	dma_release_declared_memory(dev);
++}
++
++#define nvdla_drm_dev_put(drm) drm_dev_unref(drm)
++#define nvdla_gem_object_put(obj) drm_gem_object_unreference_unlocked(obj)
++#endif
++
+ static int32_t nvdla_fill_task_desc(struct nvdla_ioctl_submit_task *local_task,
+ 				struct nvdla_task *task)
+ {
+@@ -161,6 +214,9 @@ nvdla_gem_create_object(struct drm_device *drm, uint32_t size)
+ 	dobj = &nobj->object;
+ 
+ 	drm_gem_private_object_init(drm, dobj, size);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++	dobj->funcs = &nvdla_gem_object_funcs;
++#endif
+ 
+ 	ret = nvdla_gem_alloc(nobj);
+ 	if (ret)
+@@ -205,7 +261,7 @@ nvdla_gem_create_with_handle(struct drm_file *file_priv,
+ 	if (ret)
+ 		goto free_drm_object;
+ 
+-	drm_gem_object_unreference_unlocked(dobj);
++	nvdla_gem_object_put(dobj);
+ 
+ 	return nobj;
+ 
+@@ -236,7 +292,11 @@ static int32_t nvdla_drm_gem_object_mmap(struct drm_gem_object *dobj,
+ 	struct nvdla_gem_object *nobj = to_nvdla_obj(dobj);
+ 	struct drm_device *drm = dobj->dev;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++	vm_flags_clear(vma, VM_PFNMAP);
++#else
+ 	vma->vm_flags &= ~VM_PFNMAP;
++#endif
+ 	vma->vm_pgoff = 0;
+ 
+ 	ret = dma_mmap_attrs(drm->dev, vma, nobj->kvaddr, nobj->dma_addr,
+@@ -297,6 +357,23 @@ static struct sg_table
+ 	return sgt;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++static int nvdla_drm_gem_prime_vmap(struct drm_gem_object *obj,
++				    struct iosys_map *map)
++{
++	struct nvdla_gem_object *nobj = to_nvdla_obj(obj);
++
++	iosys_map_set_vaddr(map, nobj->kvaddr);
++
++	return 0;
++}
++
++static void nvdla_drm_gem_prime_vunmap(struct drm_gem_object *obj,
++				       struct iosys_map *map)
++{
++	/* Nothing to do */
++}
++#else
+ static void *nvdla_drm_gem_prime_vmap(struct drm_gem_object *obj)
+ {
+ 	struct nvdla_gem_object *nobj = to_nvdla_obj(obj);
+@@ -308,6 +385,7 @@ static void nvdla_drm_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr)
+ {
+ 	/* Nothing to do */
+ }
++#endif
+ 
+ int32_t nvdla_gem_dma_addr(struct drm_device *dev, struct drm_file *file,
+ 			uint32_t fd, dma_addr_t *addr)
+@@ -329,7 +407,7 @@ int32_t nvdla_gem_dma_addr(struct drm_device *dev, struct drm_file *file,
+ 
+ 	*addr = nobj->dma_addr;
+ 
+-	drm_gem_object_put_unlocked(dobj);
++	nvdla_gem_object_put(dobj);
+ 
+ 	return 0;
+ }
+@@ -352,7 +430,7 @@ static int32_t nvdla_gem_map_offset(struct drm_device *drm, void *data,
+ 	args->offset = drm_vma_node_offset_addr(&dobj->vma_node);
+ 
+ out:
+-	drm_gem_object_unreference_unlocked(dobj);
++	nvdla_gem_object_put(dobj);
+ 
+ 	return 0;
+ }
+@@ -362,9 +440,24 @@ static int32_t nvdla_gem_destroy(struct drm_device *drm, void *data,
+ {
+ 	struct nvdla_gem_destroy_args *args = data;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++	return drm_gem_handle_delete(file, args->handle);
++#else
+ 	return drm_gem_dumb_destroy(file, drm, args->handle);
++#endif
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++static const struct drm_gem_object_funcs nvdla_gem_object_funcs = {
++	.free = nvdla_gem_free_object,
++	.get_sg_table = nvdla_drm_gem_prime_get_sg_table,
++	.vmap = nvdla_drm_gem_prime_vmap,
++	.vunmap = nvdla_drm_gem_prime_vunmap,
++	.mmap = nvdla_drm_gem_mmap_buf,
++	.vm_ops = &nvdla_drm_gem_vm_ops,
++};
++#endif
++
+ static const struct file_operations nvdla_drm_fops = {
+ 	.owner = THIS_MODULE,
+ 	.open = drm_open,
+@@ -387,21 +480,27 @@ static const struct drm_ioctl_desc nvdla_drm_ioctls[] = {
+ };
+ 
+ static struct drm_driver nvdla_drm_driver = {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++	.driver_features = DRIVER_GEM | DRIVER_RENDER,
++#else
+ 	.driver_features = DRIVER_GEM | DRIVER_PRIME | DRIVER_RENDER,
+ 
+-	.gem_vm_ops = &drm_gem_cma_vm_ops,
++	.gem_vm_ops = &nvdla_drm_gem_vm_ops,
+ 
+ 	.gem_free_object_unlocked = nvdla_gem_free_object,
++#endif
+ 
+ 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
+ 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
+-	.gem_prime_export = drm_gem_prime_export,
+ 	.gem_prime_import = drm_gem_prime_import,
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
++	.gem_prime_export = drm_gem_prime_export,
+ 	.gem_prime_get_sg_table	= nvdla_drm_gem_prime_get_sg_table,
+ 	.gem_prime_vmap		= nvdla_drm_gem_prime_vmap,
+ 	.gem_prime_vunmap	= nvdla_drm_gem_prime_vunmap,
+ 	.gem_prime_mmap		= nvdla_drm_gem_mmap_buf,
++#endif
+ 
+ 	.ioctls = nvdla_drm_ioctls,
+ 	.num_ioctls = ARRAY_SIZE(nvdla_drm_ioctls),
+@@ -417,7 +516,6 @@ static struct drm_driver nvdla_drm_driver = {
+ 
+ int32_t nvdla_drm_probe(struct nvdla_device *nvdla_dev)
+ {
+-	int32_t dma;
+ 	int32_t err;
+ 	struct drm_device *drm;
+ 	struct drm_driver *driver = &nvdla_drm_driver;
+@@ -436,23 +534,20 @@ int32_t nvdla_drm_probe(struct nvdla_device *nvdla_dev)
+ 	 * TODO Register separate driver for memory and use DT node to
+ 	 * read memory range
+ 	 */
+-	dma = dma_declare_coherent_memory(drm->dev, 0xC0000000, 0xC0000000,
+-			0x40000000, DMA_MEMORY_MAP | DMA_MEMORY_EXCLUSIVE);
+-	if (!(dma & DMA_MEMORY_MAP)) {
+-		err = -ENOMEM;
++	err = nvdla_declare_coherent_memory(drm->dev);
++	if (err)
+ 		goto unref;
+-	}
+ 
+ 	return 0;
+ 
+ unref:
+-	drm_dev_unref(drm);
++	nvdla_drm_dev_put(drm);
+ 	return err;
+ }
+ 
+ void nvdla_drm_remove(struct nvdla_device *nvdla_dev)
+ {
+ 	drm_dev_unregister(nvdla_dev->drm);
+-	dma_release_declared_memory(&nvdla_dev->pdev->dev);
+-	drm_dev_unref(nvdla_dev->drm);
++	nvdla_release_coherent_memory(&nvdla_dev->pdev->dev);
++	nvdla_drm_dev_put(nvdla_dev->drm);
+ }
+-- 
+2.43.0
+
