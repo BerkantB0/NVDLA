@@ -6,22 +6,119 @@ cd "$ROOT"
 
 PETALINUX_DIR="${PETALINUX_DIR:-/opt/pkg/petalinux/2024.1}"
 PROJECT="${PETALINUX_PROJECT:-}"
+ARTIFACTS="${ARTIFACTS_DIR:-$ROOT/artifacts}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_ID="${RUN_ID:-$STAMP-petalinux-kmod}"
+RUN_DIR="$ARTIFACTS/$RUN_ID"
+BUILD_LOG="$RUN_DIR/petalinux-kmod.log"
+SETTINGS_LOG="$RUN_DIR/petalinux-settings.log"
+MODULE_PATH=""
+
+mkdir -p "$RUN_DIR"
+
+patch_series_sha() {
+  python3 - <<'PY'
+import hashlib
+from pathlib import Path
+
+root = Path.cwd()
+patches = sorted((root / "patches" / "nvdla-sw").glob("*.patch"))
+digest = hashlib.sha256()
+for patch in patches:
+    digest.update(patch.name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(patch.read_bytes())
+print(digest.hexdigest() if patches else "")
+PY
+}
+
+write_manifest() {
+  local status="$1"
+  local reason="${2:-}"
+  export MANIFEST_PATH="$RUN_DIR/manifest.json"
+  export RUN_ID_CURRENT="$RUN_ID"
+  export STATUS="$status"
+  export REASON="$reason"
+  export ROOT PETALINUX_DIR PROJECT RUN_DIR BUILD_LOG SETTINGS_LOG MODULE_PATH
+  export PATCH_SERIES_SHA
+  python3 - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+
+def sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+run_dir = Path(os.environ["RUN_DIR"])
+module = Path(os.environ["MODULE_PATH"]) if os.environ.get("MODULE_PATH") else None
+logs = sorted(path.name for path in run_dir.glob("*.log"))
+manifest = {
+    "schema_version": 1,
+    "run_id": os.environ["RUN_ID_CURRENT"],
+    "lane": "petalinux-kmod",
+    "status": os.environ["STATUS"],
+    "reason": os.environ.get("REASON") or None,
+    "petalinux": {
+        "install_dir": os.environ["PETALINUX_DIR"],
+    },
+    "project": os.environ.get("PROJECT") or None,
+    "sources": {
+        "nvdla_patch_series_sha256": os.environ.get("PATCH_SERIES_SHA") or None,
+    },
+    "driver": {
+        "module_path": str(module) if module else None,
+        "module_sha256": sha256(module) if module else None,
+    },
+    "logs": logs,
+}
+Path(os.environ["MANIFEST_PATH"]).write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+  echo "Wrote $RUN_DIR/manifest.json"
+}
+
+finish_blocked() {
+  local reason="$1"
+  echo "BLOCKED: $reason" | tee -a "$BUILD_LOG" >&2
+  write_manifest "blocked" "$reason"
+  exit 2
+}
+
+finish_fail() {
+  local reason="$1"
+  echo "ERROR: $reason" | tee -a "$BUILD_LOG" >&2
+  write_manifest "fail" "$reason"
+  exit 1
+}
+
+PATCH_SERIES_SHA="$(patch_series_sha)"
 
 if [[ -z "$PROJECT" ]]; then
-  echo "ERROR: PETALINUX_PROJECT must point to an existing PetaLinux project" >&2
-  exit 2
+  finish_blocked "PETALINUX_PROJECT must point to an existing PetaLinux project"
 fi
 if [[ ! -d "$PROJECT/project-spec/meta-user" ]]; then
-  echo "ERROR: not a PetaLinux project or missing meta-user: $PROJECT" >&2
-  exit 2
+  finish_fail "not a PetaLinux project or missing meta-user: $PROJECT"
 fi
 if [[ ! -f "$PETALINUX_DIR/settings.sh" ]]; then
-  echo "ERROR: PetaLinux settings not found at $PETALINUX_DIR/settings.sh" >&2
-  exit 2
+  finish_fail "PetaLinux settings not found at $PETALINUX_DIR/settings.sh"
 fi
 
 set +u
-source "$PETALINUX_DIR/settings.sh"
+if ! source "$PETALINUX_DIR/settings.sh" >"$SETTINGS_LOG" 2>&1; then
+  set -u
+  finish_fail "failed to source PetaLinux settings"
+fi
 set -u
 
 DEST="$PROJECT/project-spec/meta-user/recipes-modules/opendla"
@@ -41,6 +138,23 @@ if compgen -G "$PATCH_DIR/*.patch" >/dev/null; then
   done
 fi
 
-echo "Installed opendla recipe skeleton into $DEST"
-echo "Building opendla in $PROJECT"
-petalinux-build -p "$PROJECT" -c opendla
+{
+  echo "Installed opendla recipe skeleton into $DEST"
+  echo "Building opendla in $PROJECT"
+} | tee "$BUILD_LOG"
+
+set +e
+petalinux-build -p "$PROJECT" -c opendla 2>&1 | tee -a "$BUILD_LOG"
+BUILD_STATUS=${PIPESTATUS[0]}
+set -e
+
+MODULE_PATH="$(find "$PROJECT" -type f -name opendla.ko 2>/dev/null | sort | head -n 1 || true)"
+if [[ "$BUILD_STATUS" -ne 0 ]]; then
+  finish_fail "petalinux-build -c opendla failed"
+fi
+if [[ -z "$MODULE_PATH" ]]; then
+  finish_fail "petalinux-build completed but opendla.ko was not found"
+fi
+
+write_manifest "pass"
+echo "PetaLinux KMD build passed: $MODULE_PATH"

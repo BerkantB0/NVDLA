@@ -87,6 +87,33 @@ make vp-kmod
 LANE=modern make vp-test
 ```
 
+`LANE=modern make vp-test` auto-discovers these files from `WORK_DIR` unless
+they are overridden explicitly:
+
+- `VP_MODERN_KERNEL`: defaults to `$WORK_DIR/kernel/arch/arm64/boot/Image`
+- `VP_MODERN_ROOTFS`: defaults to `$WORK_DIR/buildroot/images/rootfs.ext4`
+- `VP_MODERN_KO`: defaults to `$WORK_DIR/modules/opendla.ko`
+- `VP_MODERN_DTB`: optional; when present, the runner passes it with `-dtb`
+
+The modern VP test builds a small target-side `nvdla-kmd-smoke` utility with the
+same cross compiler policy as the VP build lane. The utility opens
+`NVDLA_DEVICE_NODE` or the first `/dev/dri/renderD*`, then exercises GEM create,
+map-offset, `mmap`, read/write, and destroy. It does not submit accelerator
+workloads yet.
+
+Useful controls:
+
+```sh
+VP_TIMEOUT=180 LANE=modern make vp-test
+REPEAT=100 VP_TIMEOUT=300 LANE=modern make vp-test
+```
+
+Every modern VP run archives `serial.log`, `dmesg.log`, `module-load.log`,
+`dev-dri.txt`, runtime stdout/stderr, the generated VP Lua file, payload files,
+and `manifest.json`. A run is marked `blocked` when required artifacts are not
+available, `fail` when boot/module/smoke checks fail, and `pass` only when all
+modern VP smoke criteria are satisfied.
+
 Toolchain policy:
 
 - `CROSS_COMPILE=/path/to/prefix-` always wins when set.

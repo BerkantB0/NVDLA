@@ -30,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     vp.add_argument("--lock", required=True, type=Path)
     vp.add_argument("--timeout", type=int, default=35)
     vp.add_argument("--out-dir", type=Path)
+    vp.add_argument("--work-dir", type=Path)
+    vp.add_argument("--sources-dir", type=Path)
+    vp.add_argument("--docker-image")
+    vp.add_argument("--repeat", type=int, default=1)
 
     workloads = sub.add_parser("workload-generate", help="Generate deterministic workload inputs/goldens")
     workloads.add_argument("--out", required=True, type=Path)
@@ -48,7 +52,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "lock-check":
         return run_lock_check(args.lock, args.xsa, args.out)
     if args.command == "vp-test":
-        return run_vp_test(args.lane, args.lock, args.timeout, args.out_dir)
+        return run_vp_test(
+            args.lane,
+            args.lock,
+            args.timeout,
+            args.out_dir,
+            args.work_dir,
+            args.sources_dir,
+            args.docker_image,
+            args.repeat,
+        )
     if args.command == "workload-generate":
         return generate_workloads(args.out)
     if args.command == "abi-check":

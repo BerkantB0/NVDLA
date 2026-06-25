@@ -1,6 +1,7 @@
 .gitattributes text eol=lf
 *.md text eol=lf
 *.py text eol=lf
+*.c text eol=lf
 *.sh text eol=lf
 Makefile text eol=lf
 *.json text eol=lf

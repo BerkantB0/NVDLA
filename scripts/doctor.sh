@@ -6,10 +6,23 @@ cd "$ROOT"
 
 echo "Repository: $ROOT"
 
+UNAME="$(uname -s 2>/dev/null || echo unknown)"
 if [[ -r /proc/version ]] && grep -qi microsoft /proc/version; then
+  echo "Host shell: WSL ($UNAME)"
   echo "WSL: detected"
+elif [[ "$UNAME" == MINGW* || "$UNAME" == MSYS* || "$UNAME" == CYGWIN* ]]; then
+  echo "Host shell: Windows POSIX layer ($UNAME)"
+  echo "WARNING: WSL not detected in this shell; run the full framework from Ubuntu WSL" >&2
 else
-  echo "WARNING: WSL not detected; this framework is designed for Ubuntu WSL" >&2
+  echo "Host shell: Linux/other ($UNAME)"
+  echo "WARNING: WSL not detected in this shell; this framework is designed for Ubuntu WSL" >&2
+fi
+
+if command -v wsl.exe >/dev/null 2>&1; then
+  echo "wsl.exe: $(command -v wsl.exe)"
+  if ! wsl.exe --list --verbose >/tmp/nvdla-wsl-list.log 2>&1; then
+    echo "WARNING: wsl.exe is present but this launcher could not list distros; continuing with current shell facts" >&2
+  fi
 fi
 
 for tool in python3 git make docker; do
@@ -46,4 +59,3 @@ if grep -qi 'not a supported OS' /tmp/nvdla-petalinux-settings.log; then
 fi
 
 echo "Doctor check passed"
-

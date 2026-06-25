@@ -99,7 +99,7 @@ vp-kmod:
 	@scripts/vp_build.sh kmod
 
 vp-test:
-	@$(PYTHON) -m nvdla_test_framework vp-test --lane "$${LANE:-reference}" --lock repro.lock.json
+	@$(PYTHON) -m nvdla_test_framework vp-test --lane "$${LANE:-reference}" --lock repro.lock.json --timeout "$${VP_TIMEOUT:-120}" --repeat "$${REPEAT:-1}"
 
 petalinux-smoke:
 	@scripts/petalinux_smoke.sh
