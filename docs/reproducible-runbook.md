@@ -90,10 +90,23 @@ LANE=modern make vp-test
 `LANE=modern make vp-test` auto-discovers these files from `WORK_DIR` unless
 they are overridden explicitly:
 
-- `VP_MODERN_KERNEL`: defaults to `$WORK_DIR/kernel/arch/arm64/boot/Image`
-- `VP_MODERN_ROOTFS`: defaults to `$WORK_DIR/buildroot/images/rootfs.ext4`
+- `VP_MODERN_KERNEL`: defaults to `$WORK_DIR/kernel/arch/arm64/boot/Image.vp2m`, then falls back to `Image`
+- `VP_MODERN_ROOTFS`: defaults to `$WORK_DIR/buildroot/images/rootfs-smoke.ext4`, then falls back to `rootfs.ext4`
 - `VP_MODERN_KO`: defaults to `$WORK_DIR/modules/opendla.ko`
 - `VP_MODERN_DTB`: optional; when present, the runner passes it with `-dtb`
+
+The old NVDLA VP/QEMU wrapper cannot boot the raw Linux 6.6 ARM64 `Image`
+produced by the minimal kernel config because its header uses `text_offset=0`,
+which overlaps the wrapper's loader region. `make vp-kernel` therefore also
+writes `Image.vp2m`, a generated image with the ARM64 header text offset set to
+`0x200000`. The raw `Image` remains available for inspection, but the smoke
+lane uses `Image.vp2m`.
+
+`make vp-rootfs` writes the normal Buildroot `rootfs.ext4` and a generated
+`rootfs-smoke.ext4` that adds `/etc/init.d/S99nvdla-smoke`. The autorun hook
+mounts the VP payload share, runs the smoke script, prints deterministic status
+markers, and powers off the VP. This avoids relying on interactive serial login
+timing during automated smoke tests.
 
 The modern VP test builds a small target-side `nvdla-kmd-smoke` utility with the
 same cross compiler policy as the VP build lane. The utility opens
@@ -119,7 +132,7 @@ Toolchain policy:
 - `CROSS_COMPILE=/path/to/prefix-` always wins when set.
 - Otherwise the framework uses the pinned Buildroot compiler at `.work/vp-modern/buildroot/host/bin/aarch64-buildroot-linux-gnu-`.
 - If the Buildroot compiler does not exist, the framework accepts an apt-installed `aarch64-linux-gnu-` compiler.
-- If neither exists, run `make vp-toolchain` or install `gcc-aarch64-linux-gnu g++-aarch64-linux-gnu bc bison flex libssl-dev make cpio unzip`.
+- If neither exists, run `make vp-toolchain` or install `gcc-aarch64-linux-gnu g++-aarch64-linux-gnu bc bison flex libssl-dev make cpio unzip e2fsprogs`.
 
 `make vp-toolchain` builds only the Buildroot host toolchain from the pinned Buildroot source. It is the preferred reproducible path because the resulting compiler is tied to `repro.lock.json`; the apt compiler fallback is useful for quick local compile triage.
 
@@ -129,7 +142,7 @@ The Buildroot calls run with a clean Linux-only `PATH` by default because WSL ma
 import Windows paths with spaces. Override `VP_BUILD_PATH` only if a required
 host tool lives outside `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`.
 
-Each VP build target writes a run directory under `artifacts/<timestamp>-vp-<phase>/` with `manifest.json`, `environment.txt`, and the phase log. For `vp-kernel`, the manifest records the linux-xlnx source SHA, kernel image hash, kernel release when available, and toolchain identity. For `vp-kmod`, it records the patched `nvdla/sw` SHA, patch-series hash, selected toolchain, module hash when build succeeds, and the `kmod.log` compile output when build fails.
+Each VP build target writes a run directory under `artifacts/<timestamp>-vp-<phase>/` with `manifest.json`, `environment.txt`, and the phase log. For `vp-kernel`, the manifest records the linux-xlnx source SHA, raw and VP-compatible kernel image hashes, kernel release when available, and toolchain identity. For `vp-rootfs`, it records the normal and smoke rootfs hashes. For `vp-kmod`, it records the patched `nvdla/sw` SHA, patch-series hash, selected toolchain, module hash when build succeeds, and the `kmod.log` compile output when build fails.
 
 The first Linux 6.6 milestone is considered useful even when `make vp-kmod` fails: the failure must be captured in `artifacts/*-vp-kmod/kmod.log` and should point to the next small upstreamable compatibility patch under `patches/nvdla-sw/`.
 

@@ -141,6 +141,21 @@ require_buildroot_host_tools() {
   fi
 }
 
+require_rootfs_postprocess_tools() {
+  local missing=()
+  local tool
+  for tool in debugfs; do
+    if ! PATH="$VP_BUILD_PATH" command -v "$tool" >/dev/null 2>&1; then
+      missing+=("$tool")
+    fi
+  done
+  if ((${#missing[@]} > 0)); then
+    echo "ERROR: missing rootfs postprocess tools: ${missing[*]}" >&2
+    echo "       Install in WSL: sudo apt-get install -y e2fsprogs" >&2
+    return 2
+  fi
+}
+
 write_environment() {
   local phase="$1"
   {
@@ -228,8 +243,10 @@ run_dir = Path(os.environ["MANIFEST_PATH"]).parent
 
 known_artifacts = {
     "kernel_image": work / "kernel" / "arch" / "arm64" / "boot" / "Image",
+    "kernel_image_vp2m": work / "kernel" / "arch" / "arm64" / "boot" / "Image.vp2m",
     "kernel_config": work / "kernel" / ".config",
     "rootfs_ext4": work / "buildroot" / "images" / "rootfs.ext4",
+    "rootfs_smoke_ext4": work / "buildroot" / "images" / "rootfs-smoke.ext4",
     "module": work / "modules" / "opendla.ko",
 }
 
@@ -334,26 +351,103 @@ build_kernel() {
   mkdir -p "$WORK/kernel"
   echo "Building VP kernel from $LINUX"
   echo "Using CROSS_COMPILE=$RESOLVED_CROSS_COMPILE ($TOOLCHAIN_SOURCE)"
-  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" defconfig \
-    || finish_fail "kernel" "kernel defconfig failed"
+  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" tinyconfig \
+    || finish_fail "kernel" "kernel tinyconfig failed"
   run_logged "$log" "$LINUX/scripts/config" --file "$WORK/kernel/.config" \
+    --enable CONFIG_EFI \
+    --enable CONFIG_EFI_STUB \
+    --enable CONFIG_MODULES \
+    --enable CONFIG_PRINTK \
+    --enable CONFIG_KALLSYMS \
+    --enable CONFIG_BINFMT_ELF \
+    --enable CONFIG_BINFMT_SCRIPT \
+    --enable CONFIG_BLOCK \
+    --enable CONFIG_BLK_DEV \
+    --enable CONFIG_EXT4_FS \
+    --enable CONFIG_DEVTMPFS \
+    --enable CONFIG_DEVTMPFS_MOUNT \
+    --enable CONFIG_PROC_FS \
+    --enable CONFIG_SYSFS \
+    --enable CONFIG_TMPFS \
+    --enable CONFIG_TTY \
+    --enable CONFIG_SERIAL_AMBA_PL011 \
+    --enable CONFIG_SERIAL_AMBA_PL011_CONSOLE \
+    --enable CONFIG_NET \
+    --enable CONFIG_UNIX \
+    --enable CONFIG_INET \
+    --enable CONFIG_VIRTIO_MENU \
+    --enable CONFIG_VIRTIO \
+    --enable CONFIG_VIRTIO_MMIO \
+    --enable CONFIG_VIRTIO_BLK \
+    --enable CONFIG_NET_9P \
+    --enable CONFIG_NET_9P_VIRTIO \
+    --enable CONFIG_9P_FS \
+    --enable CONFIG_9P_FS_POSIX_ACL \
     --enable CONFIG_DRM \
+    --enable CONFIG_DRM_ARCPGU \
     --enable CONFIG_DMA_SHARED_BUFFER \
     --enable CONFIG_CMA \
     --enable CONFIG_DMA_CMA \
-    --enable CONFIG_MODULES \
-    --enable CONFIG_DEVTMPFS \
-    --enable CONFIG_DEVTMPFS_MOUNT \
-    --enable CONFIG_VIRTIO \
-    --enable CONFIG_VIRTIO_BLK \
-    --enable CONFIG_NET_9P \
-    --enable CONFIG_9P_FS \
+    --set-val CONFIG_CMA_SIZE_MBYTES 256 \
     || finish_fail "kernel" "kernel config update failed"
   run_logged "$log" make -C "$LINUX" O="$WORK/kernel" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" olddefconfig \
     || finish_fail "kernel" "kernel olddefconfig failed"
-  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" -j"$(nproc)" Image modules dtbs \
+  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" -j"$(nproc)" Image modules \
     || finish_fail "kernel" "kernel build failed"
+  if ! run_logged "$log" python3 - "$WORK/kernel/arch/arm64/boot/Image" "$WORK/kernel/arch/arm64/boot/Image.vp2m" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+data = bytearray(src.read_bytes())
+if len(data) < 0x40 or data[0x38:0x3c] != b"ARMd":
+    raise SystemExit(f"{src} is not an ARM64 Image")
+data[8:16] = (0x200000).to_bytes(8, "little")
+dst.write_bytes(data)
+PY
+  then
+    finish_fail "kernel" "VP-compatible Image header patch failed"
+  fi
   write_manifest "pass" "kernel"
+}
+
+write_rootfs_autorun_script() {
+  local script="$1"
+  cat >"$script" <<'EOF'
+#!/bin/sh
+echo "__NVDLA_AUTORUN_BEGIN__"
+mkdir -p /mnt/r
+mount -t 9p -o trans=virtio,version=9p2000.L r /mnt/r || mount -t 9p -o trans=virtio r /mnt/r
+STATUS=$?
+echo "__NVDLA_STATUS_payload_mount=$STATUS"
+if [ "$STATUS" -eq 0 ]; then
+    sh /mnt/r/run-modern-smoke.sh
+    STATUS=$?
+fi
+echo "__NVDLA_SCRIPT_EXIT__=$STATUS"
+sync
+poweroff -f
+EOF
+  chmod 0755 "$script"
+}
+
+build_smoke_rootfs() {
+  local log="$1"
+  local base="$WORK/buildroot/images/rootfs.ext4"
+  local smoke="$WORK/buildroot/images/rootfs-smoke.ext4"
+  local script="$WORK/buildroot/images/S99nvdla-smoke"
+  require_rootfs_postprocess_tools || return 2
+  if [[ ! -f "$base" ]]; then
+    echo "ERROR: missing Buildroot rootfs image: $base" >&2
+    return 2
+  fi
+  cp "$base" "$smoke"
+  write_rootfs_autorun_script "$script"
+  run_logged "$log" env PATH="$VP_BUILD_PATH" debugfs -w -R "write $script /etc/init.d/S99nvdla-smoke" "$smoke" \
+    || return 1
+  run_logged "$log" env PATH="$VP_BUILD_PATH" debugfs -w -R "set_inode_field /etc/init.d/S99nvdla-smoke mode 0100755" "$smoke" \
+    || return 1
 }
 
 build_rootfs() {
@@ -361,12 +455,14 @@ build_rootfs() {
   local log="$CURRENT_RUN_DIR/rootfs.log"
   require_dir "$BUILDROOT" "Run: make sources-heavy" || finish_fail "rootfs" "missing Buildroot source"
   require_buildroot_host_tools || finish_fail "rootfs" "missing Buildroot host tools"
+  require_rootfs_postprocess_tools || finish_fail "rootfs" "missing rootfs postprocess tools"
   mkdir -p "$WORK/buildroot"
   echo "Building VP rootfs from $BUILDROOT"
   run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" BR2_EXTERNAL="$ROOT/configs/vp/buildroot_external" nvdla_vp_modern_defconfig \
     || finish_fail "rootfs" "Buildroot defconfig failed"
   run_logged "$log" env PATH="$VP_BUILD_PATH" make -C "$BUILDROOT" O="$WORK/buildroot" -j"$(nproc)" \
     || finish_fail "rootfs" "Buildroot rootfs build failed"
+  build_smoke_rootfs "$log" || finish_fail "rootfs" "rootfs smoke autorun image creation failed"
   resolve_cross_compile "quiet" || true
   write_manifest "pass" "rootfs"
 }
