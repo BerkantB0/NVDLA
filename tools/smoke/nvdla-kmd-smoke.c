@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,28 @@ _Static_assert(DRM_NVDLA_GEM_DESTROY == 0x03, "unexpected GEM destroy ioctl comm
 _Static_assert(sizeof(struct nvdla_gem_create_args) == 16, "unexpected GEM create ABI size");
 _Static_assert(sizeof(struct nvdla_gem_map_offset_args) == 16, "unexpected GEM map ABI size");
 _Static_assert(sizeof(struct nvdla_gem_destroy_args) == 4, "unexpected GEM destroy ABI size");
+
+static void log_stage(const char *fmt, ...)
+{
+	FILE *kmsg;
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	printf("\n");
+	va_end(ap);
+
+	kmsg = fopen("/dev/kmsg", "w");
+	if (!kmsg)
+		return;
+
+	fprintf(kmsg, "nvdla-kmd-smoke: ");
+	va_start(ap, fmt);
+	vfprintf(kmsg, fmt, ap);
+	va_end(ap);
+	fprintf(kmsg, "\n");
+	fclose(kmsg);
+}
 
 static int find_render_node(char *path, size_t path_size)
 {
@@ -110,9 +133,14 @@ int main(void)
 	int fd = -1;
 	int ret = 1;
 
+	setvbuf(stdout, NULL, _IONBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+
+	log_stage("stage=find-render-node");
 	if (find_render_node(node, sizeof(node)) != 0)
 		return 2;
 
+	log_stage("stage=open node=%s", node);
 	fd = open(node, O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
 		fprintf(stderr, "failed to open %s: %s\n", node, strerror(errno));
@@ -121,6 +149,7 @@ int main(void)
 
 	printf("opened %s\n", node);
 
+	log_stage("stage=gem-create size=%u", SMOKE_BUFFER_SIZE);
 	if (ioctl(fd, DRM_IOCTL_NVDLA_GEM_CREATE, &create_args) != 0) {
 		fprintf(stderr, "DRM_IOCTL_NVDLA_GEM_CREATE failed: %s\n", strerror(errno));
 		goto out;
@@ -130,6 +159,7 @@ int main(void)
 	       create_args.handle, (unsigned long long)create_args.size);
 
 	map_args.handle = create_args.handle;
+	log_stage("stage=gem-map-offset handle=%u", create_args.handle);
 	if (ioctl(fd, DRM_IOCTL_NVDLA_GEM_MMAP, &map_args) != 0) {
 		fprintf(stderr, "DRM_IOCTL_NVDLA_GEM_MMAP failed: %s\n", strerror(errno));
 		goto out_destroy;
@@ -137,6 +167,7 @@ int main(void)
 
 	printf("mmap offset=0x%llx\n", (unsigned long long)map_args.offset);
 
+	log_stage("stage=mmap");
 	mapped = mmap(NULL, SMOKE_BUFFER_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
 		      fd, (off_t)map_args.offset);
 	if (mapped == MAP_FAILED) {
@@ -144,9 +175,11 @@ int main(void)
 		goto out_destroy;
 	}
 
+	log_stage("stage=write-pattern");
 	for (uint32_t i = 0; i < SMOKE_BUFFER_SIZE; ++i)
 		mapped[i] = (uint8_t)(i ^ 0x5aU);
 
+	log_stage("stage=verify-pattern");
 	for (uint32_t i = 0; i < SMOKE_BUFFER_SIZE; ++i) {
 		uint8_t expected = (uint8_t)(i ^ 0x5aU);
 

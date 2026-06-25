@@ -45,6 +45,16 @@ def _path_from_env(name: str, default: Path) -> Path:
     return _expand_path(value) if value else default
 
 
+def _path_from_env_or_first(name: str, candidates: list[Path]) -> Path:
+    value = os.environ.get(name)
+    if value:
+        return _expand_path(value)
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
 def _git_sha(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -172,13 +182,19 @@ def _modern_paths(
         "linux": sources / "linux-xlnx",
         "buildroot": sources / "buildroot",
         "patched_nvdla_sw": patched,
-        "kernel": _path_from_env(
+        "kernel": _path_from_env_or_first(
             "VP_MODERN_KERNEL",
-            work / "kernel" / "arch" / "arm64" / "boot" / "Image",
+            [
+                work / "kernel" / "arch" / "arm64" / "boot" / "Image.vp2m",
+                work / "kernel" / "arch" / "arm64" / "boot" / "Image",
+            ],
         ),
-        "rootfs": _path_from_env(
+        "rootfs": _path_from_env_or_first(
             "VP_MODERN_ROOTFS",
-            work / "buildroot" / "images" / "rootfs.ext4",
+            [
+                work / "buildroot" / "images" / "rootfs-smoke.ext4",
+                work / "buildroot" / "images" / "rootfs.ext4",
+            ],
         ),
         "module": _path_from_env("VP_MODERN_KO", work / "modules" / "opendla.ko"),
         "dtb": dtb,
@@ -275,6 +291,7 @@ def _write_payload(paths: dict[str, Path | None], out_dir: Path, repeat: int) ->
 set +e
 
 repeat={max(1, repeat)}
+smoke_timeout="${{NVDLA_SMOKE_TIMEOUT:-30}}"
 
 cat_section() {{
     name="$1"
@@ -317,9 +334,26 @@ SMOKE_STATUS=97
 i=1
 while [ "$i" -le "$repeat" ]; do
     if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ -n "$NODE" ]; then
-        NVDLA_DEVICE_NODE="$NODE" /mnt/r/nvdla-kmd-smoke \
-            >/tmp/runtime.stdout.log 2>/tmp/runtime.stderr.log
-        SMOKE_STATUS=$?
+        rm -f /tmp/runtime.status
+        (
+            NVDLA_DEVICE_NODE="$NODE" /mnt/r/nvdla-kmd-smoke \
+                >/tmp/runtime.stdout.log 2>/tmp/runtime.stderr.log
+            echo "$?" >/tmp/runtime.status
+        ) &
+        SMOKE_PID=$!
+        elapsed=0
+        while [ ! -f /tmp/runtime.status ] && [ "$elapsed" -lt "$smoke_timeout" ]; do
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        if [ -f /tmp/runtime.status ]; then
+            SMOKE_STATUS="$(cat /tmp/runtime.status)"
+        else
+            SMOKE_STATUS=124
+            kill "$SMOKE_PID" 2>/dev/null
+            echo "nvdla-kmd-smoke timed out after ${{smoke_timeout}}s" \
+                >>/tmp/runtime.stderr.log
+        fi
     else
         echo "module_status=$MODULE_STATUS dri_status=$DRI_STATUS node=$NODE" \
             >/tmp/runtime.stdout.log
@@ -337,7 +371,7 @@ cat_section smoke_stdout /tmp/runtime.stdout.log
 cat_section smoke_stderr /tmp/runtime.stderr.log
 echo "__NVDLA_STATUS_smoke=$SMOKE_STATUS"
 
-dmesg >/tmp/dmesg.log 2>&1
+dmesg 2>&1 | tail -n 200 >/tmp/dmesg.log
 cat_section dmesg /tmp/dmesg.log
 
 echo "__NVDLA_RESULT__ module=$MODULE_STATUS dri=$DRI_STATUS smoke=$SMOKE_STATUS repeat=$repeat"
@@ -373,7 +407,7 @@ def _write_modern_lua(paths: dict[str, Path | None], out_dir: Path) -> Path:
     extra_arguments = (
         f"-machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 1024 "
         f"-kernel /vp-kernel/{kernel.name}{dtb_arg} "
-        "--append \"root=/dev/vda rw console=ttyAMA0\" "
+        "--append \"root=/dev/vda\" "
         f"-drive file=/vp-rootfs/{rootfs.name},if=none,format=raw,id=hd0,snapshot=on "
         "-device virtio-blk-device,drive=hd0 "
         "-fsdev local,id=r,path=/payload,security_model=none "
@@ -414,17 +448,17 @@ def _docker_mount(path: Path, target: str, readonly: bool = False) -> str:
     return f"{path.resolve()}:{target}{suffix}"
 
 
-def _reader_thread(proc: subprocess.Popen[str], chunks: "queue.Queue[str]") -> None:
+def _reader_thread(proc: subprocess.Popen[bytes], chunks: "queue.Queue[str]") -> None:
     assert proc.stdout is not None
     while True:
         chunk = proc.stdout.read(1)
-        if chunk == "":
+        if chunk == b"":
             break
-        chunks.put(chunk)
+        chunks.put(chunk.decode("utf-8", errors="replace"))
 
 
 def _drain_until(
-    proc: subprocess.Popen[str],
+    proc: subprocess.Popen[bytes],
     chunks: "queue.Queue[str]",
     output: list[str],
     timeout: int,
@@ -452,29 +486,30 @@ def _run_modern_serial(command: list[str], timeout: int, out_dir: Path) -> dict[
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        bufsize=0,
     )
     reader = threading.Thread(target=_reader_thread, args=(proc, chunks), daemon=True)
     reader.start()
 
-    def has_login_or_shell(text: str) -> bool:
-        return "login:" in text or text.rstrip().endswith("#")
+    def has_login_shell_or_script_exit(text: str) -> bool:
+        return "login:" in text or text.rstrip().endswith("#") or "__NVDLA_SCRIPT_EXIT__=" in text
 
-    login_seen = _drain_until(proc, chunks, serial, min(90, timeout), has_login_or_shell)
+    _drain_until(proc, chunks, serial, min(90, timeout), has_login_shell_or_script_exit)
+    initial_text = "".join(serial)
+    login_seen = "login:" in initial_text or initial_text.rstrip().endswith("#")
     if login_seen and proc.stdin:
         text = "".join(serial)
         if "login:" in text:
-            proc.stdin.write("root\n")
+            proc.stdin.write(b"root\r")
             proc.stdin.flush()
             _drain_until(proc, chunks, serial, 20, lambda value: value.rstrip().endswith("#"))
         proc.stdin.write(
-            "mkdir -p /mnt/r; "
-            "mount -t 9p -o trans=virtio,version=9p2000.L r /mnt/r || "
-            "mount -t 9p -o trans=virtio r /mnt/r; "
-            "sh /mnt/r/run-modern-smoke.sh; "
-            "echo __NVDLA_SCRIPT_EXIT__=$?; "
-            "poweroff -f\n"
+            b"mkdir -p /mnt/r; "
+            b"mount -t 9p -o trans=virtio,version=9p2000.L r /mnt/r || "
+            b"mount -t 9p -o trans=virtio r /mnt/r; "
+            b"sh /mnt/r/run-modern-smoke.sh; "
+            b"echo __NVDLA_SCRIPT_EXIT__=$?; "
+            b"poweroff -f\r"
         )
         proc.stdin.flush()
 
@@ -487,13 +522,20 @@ def _run_modern_serial(command: list[str], timeout: int, out_dir: Path) -> dict[
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+    reader.join(timeout=5)
+    while not chunks.empty():
+        serial.append(chunks.get())
     _drain_until(proc, chunks, serial, 2)
 
     log = "".join(serial)
+    completed = completed or "__NVDLA_SCRIPT_EXIT__=" in log
+    autorun_seen = "__NVDLA_AUTORUN_BEGIN__" in log
     _write_text(out_dir / "serial.log", log)
     return {
         "returncode": proc.returncode,
         "login_seen": login_seen,
+        "autorun_seen": autorun_seen,
+        "userspace_seen": login_seen or autorun_seen or completed,
         "script_completed": completed,
         "serial_log": "serial.log",
     }
@@ -646,7 +688,7 @@ def _run_modern_vp(
     }
     render_node = _extract_render_node(serial)
     pass_conditions = [
-        run["login_seen"],
+        run["userspace_seen"],
         run["script_completed"],
         statuses["module_load"] == 0,
         statuses["dev_dri"] == 0,
