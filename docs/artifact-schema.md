@@ -63,11 +63,14 @@ patterns, and repeat count. A missing kernel/rootfs/module is recorded as
 
 Modern VP runtime manifests set `modern.mode` to `runtime` and add runtime
 binary/library/client hashes, the workload loadable and golden hashes, output
-hashes, `runtime.server_log`, `runtime.client_log`, `runtime.compare_log`, and
-`workloads[]` comparison records. Runtime mode passes only when the VP boots,
-the KMD loads, a render node exists, the runtime server is ready, the flatbuffer
-client exits cleanly, the output `.dimg` exactly matches the pinned golden, and
-serial plus `dmesg` contain no bad kernel or VP patterns.
+hashes, `modern.probe_config`, `runtime.server_log`, `runtime.client_log`,
+`runtime.compare_log`, payload timeout settings, and `workloads[]` comparison
+records. Generated workloads include target-compatible metadata, and runtime
+mode rejects a run when the probed KMD config does not match the workload
+target. Runtime mode passes only when the VP boots, the KMD loads, a render node
+exists, the runtime server is ready, the flatbuffer client exits cleanly, the
+workload target matches the probed config, the output `.dimg` exactly matches
+the pinned golden, and serial plus `dmesg` contain no bad kernel or VP patterns.
 
 PetaLinux KMD build manifests use `lane: "petalinux-kmod"` and include the
 PetaLinux install path, project path when configured, patch-series hash, module

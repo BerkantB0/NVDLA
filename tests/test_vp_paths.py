@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nvdla_test_framework.vp import _bad_patterns, _modern_paths, _write_modern_lua
+from nvdla_test_framework.vp import (
+    _bad_patterns,
+    _extract_probe_config,
+    _modern_paths,
+    _workload_config_check,
+    _write_modern_lua,
+)
 
 
 class ModernVpPathTests(unittest.TestCase):
@@ -96,6 +102,36 @@ class ModernVpPathTests(unittest.TestCase):
         self.assertIn("TLM_ADDRESS_ERROR_RESPONSE", bad)
         self.assertIn("sc_signal<.*cannot have more than one driver", bad)
         self.assertIn("Error: \\(E[0-9]+\\)", bad)
+
+    def test_probe_config_is_extracted_from_driver_log(self) -> None:
+        log = "opendla: loading\nProbe NVDLA config nvidia,nvdla_os_initial\n"
+
+        self.assertEqual(_extract_probe_config(log), "nvidia,nvdla_os_initial")
+
+    def test_workload_config_check_reports_mismatch(self) -> None:
+        manifest = {
+            "target": {
+                "config": "nv_small",
+                "compatible": ["nvidia,nv_small"],
+            }
+        }
+
+        result = _workload_config_check(manifest, "nvidia,nvdla_os_initial")
+
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("workload expects", result["reason"])
+
+    def test_workload_config_check_accepts_aliases(self) -> None:
+        manifest = {
+            "target": {
+                "config": "nv_full",
+                "compatible": ["nvidia,nvdla_os_initial", "nvidia,nv_full"],
+            }
+        }
+
+        result = _workload_config_check(manifest, "nvidia,nvdla_os_initial")
+
+        self.assertEqual(result["status"], "pass")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -9,9 +10,24 @@ from .common import repo_root, run_command, sha256_file, write_json
 
 
 NVDLA_SW_BASE_SHA = "79538ba1b52b040a4a4645f630e457fa01839e90"
-SDP_REGRESSION_NAME = "sdp_regression_small"
-SDP_LOADABLE_REL = Path("regression/flatbufs/kmd/SDP/SDP_X1_L0_0_small_fbuf")
-SDP_GOLDEN_GLOB = "regression/golden/*SDP_X1_L0_0_small*/dla/o_000000.dimg"
+SDP_REGRESSION_SPECS: dict[str, dict[str, Any]] = {
+    "sdp_regression_full": {
+        "loadable": Path("regression/flatbufs/kmd/SDP/SDP_X1_L0_0_fbuf"),
+        "golden_dir_re": r"^SDP_X1_L0_0_[0-9a-f]+$",
+        "target": {
+            "config": "nv_full",
+            "compatible": ["nvidia,nvdla_os_initial", "nvidia,nv_full"],
+        },
+    },
+    "sdp_regression_small": {
+        "loadable": Path("regression/flatbufs/kmd/SDP/SDP_X1_L0_0_small_fbuf"),
+        "golden_dir_re": r"^SDP_X1_L0_0_small_[0-9a-f]+$",
+        "target": {
+            "config": "nv_small",
+            "compatible": ["nvidia,nv_small"],
+        },
+    },
+}
 
 
 def _write_bytes(path: Path, values: list[int]) -> None:
@@ -140,22 +156,35 @@ layer {
     return manifest
 
 
-def _generate_sdp_regression_small(root: Path, source_root: Path | None = None) -> dict[str, Any]:
+def _find_sdp_golden(source: Path, pattern: str) -> Path:
+    golden_root = source / "regression" / "golden"
+    matches = sorted(
+        path / "dla" / "o_000000.dimg"
+        for path in golden_root.iterdir()
+        if path.is_dir() and re.fullmatch(pattern, path.name)
+    )
+    if not matches:
+        raise FileNotFoundError(
+            f"missing upstream SDP golden matching {pattern} under {golden_root}; run make patch-apply"
+        )
+    return matches[0]
+
+
+def _generate_sdp_regression(root: Path, name: str, source_root: Path | None = None) -> dict[str, Any]:
+    if name not in SDP_REGRESSION_SPECS:
+        raise KeyError(f"unknown SDP regression workload: {name}")
+
     source = source_root or _default_nvdla_sw_source()
-    loadable_src = source / SDP_LOADABLE_REL
-    golden_matches = sorted(source.glob(SDP_GOLDEN_GLOB))
+    spec = SDP_REGRESSION_SPECS[name]
+    loadable_src = source / spec["loadable"]
 
     if not loadable_src.is_file():
         raise FileNotFoundError(
             f"missing upstream SDP loadable: {loadable_src}; run make patch-apply or set PATCHED_NVDLA_SW"
         )
-    if not golden_matches:
-        raise FileNotFoundError(
-            f"missing upstream SDP golden matching {SDP_GOLDEN_GLOB} under {source}; run make patch-apply"
-        )
 
-    golden_src = golden_matches[0]
-    out = root / SDP_REGRESSION_NAME
+    golden_src = _find_sdp_golden(source, spec["golden_dir_re"])
+    out = root / name
     loadable = out / "loadable.fbuf"
     golden = out / "golden" / "o_000000.dimg"
 
@@ -166,9 +195,10 @@ def _generate_sdp_regression_small(root: Path, source_root: Path | None = None) 
 
     manifest: dict[str, Any] = {
         "schema_version": 1,
-        "name": SDP_REGRESSION_NAME,
+        "name": name,
         "kind": "upstream_nvdla_flatbuffer_regression",
         "upstream_base_sha": NVDLA_SW_BASE_SHA,
+        "target": spec["target"],
         "source": {
             "nvdla_sw": str(source),
             "nvdla_sw_sha": _git_sha(source),
@@ -194,6 +224,14 @@ def _generate_sdp_regression_small(root: Path, source_root: Path | None = None) 
     return manifest
 
 
+def _generate_sdp_regression_full(root: Path, source_root: Path | None = None) -> dict[str, Any]:
+    return _generate_sdp_regression(root, "sdp_regression_full", source_root)
+
+
+def _generate_sdp_regression_small(root: Path, source_root: Path | None = None) -> dict[str, Any]:
+    return _generate_sdp_regression(root, "sdp_regression_small", source_root)
+
+
 def generate_workloads(out_dir: Path) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -201,6 +239,7 @@ def generate_workloads(out_dir: Path) -> int:
         "workloads": [
             _generate_sdp_passthrough(out_dir),
             _generate_tiny_conv(out_dir),
+            _generate_sdp_regression_full(out_dir),
             _generate_sdp_regression_small(out_dir),
         ],
     }

@@ -25,7 +25,7 @@ The first two workloads are deliberately small:
 - `sdp_passthrough`: minimal read/write sanity workload for the DBB/DMA path.
 - `tiny_conv_int8`: deterministic small CNN/loadable targeting `nv_small`, with fixed inputs and a CPU golden result.
 
-Each workload must define its input hash, loadable hash, expected output hash, acceptable tolerance, and repeat count. The default stability gate is 100 repeated runs with identical results and no kernel warnings.
+Each workload must define its input hash, loadable hash, expected output hash, acceptable tolerance, repeat count, and target NVDLA configuration. The runtime gate records the driver's probed compatible string and fails generated workloads when the workload target does not match the probed VP or board configuration. The default stability gate is 100 repeated runs with identical results and no kernel warnings.
 
 ## Failure Policy
 
@@ -39,4 +39,3 @@ A run fails if any of the following occurs:
 - A repeated-run test produces non-deterministic output.
 
 All failures must preserve the serial log, `dmesg`, runtime stdout/stderr, manifest, and tensor diff summary under `artifacts/<run-id>/`.
-

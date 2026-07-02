@@ -50,6 +50,16 @@ def _path_from_env(name: str, default: Path) -> Path:
     return _expand_path(value) if value else default
 
 
+def _int_from_env(name: str, default: int, minimum: int = 1) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return max(minimum, int(value))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
+
 def _path_from_env_or_first(name: str, candidates: list[Path]) -> Path:
     value = os.environ.get(name)
     if value:
@@ -333,6 +343,8 @@ def _write_payload(
     _copy_file(module, payload / "opendla.ko")
 
     if mode == "runtime":
+        runtime_timeout = _int_from_env("NVDLA_RUNTIME_TIMEOUT", 180)
+        server_start_timeout = _int_from_env("NVDLA_SERVER_START_TIMEOUT", 45)
         runtime_binary = paths["runtime_binary"]
         runtime_library = paths["runtime_library"]
         assert isinstance(runtime_binary, Path)
@@ -350,8 +362,8 @@ def _write_payload(
 set +e
 
 repeat={max(1, repeat)}
-runtime_timeout="${{NVDLA_RUNTIME_TIMEOUT:-120}}"
-server_start_timeout="${{NVDLA_SERVER_START_TIMEOUT:-45}}"
+runtime_timeout="{runtime_timeout}"
+server_start_timeout="{server_start_timeout}"
 
 cat_section() {{
     name="$1"
@@ -524,6 +536,8 @@ exit 1
             "loadable": str(payload / "loadable.fbuf"),
             "golden": str(payload / "golden" / "o_000000.dimg"),
             "script": str(script),
+            "runtime_timeout_seconds": runtime_timeout,
+            "server_start_timeout_seconds": server_start_timeout,
         }
 
     script = payload / "run-modern-smoke.sh"
@@ -817,6 +831,39 @@ def _extract_render_node(log: str) -> str | None:
     return value or None
 
 
+def _extract_probe_config(log: str) -> str | None:
+    match = re.search(r"Probe NVDLA config\s+([^\s\r\n]+)", log)
+    return match.group(1).strip() if match else None
+
+
+def _workload_config_check(workload_manifest: dict[str, Any], probe_config: str | None) -> dict[str, Any]:
+    target = workload_manifest.get("target") or {}
+    compatible = target.get("compatible") or []
+    if isinstance(compatible, str):
+        compatible = [compatible]
+    if not compatible:
+        return {
+            "status": "unknown",
+            "reason": "workload manifest has no target compatible metadata",
+        }
+    if not probe_config:
+        return {
+            "status": "fail",
+            "reason": "driver probe config was not found in logs",
+            "target": target,
+        }
+    status = "pass" if probe_config in compatible else "fail"
+    result = {
+        "status": status,
+        "probe_config": probe_config,
+        "target": target,
+        "compatible": compatible,
+    }
+    if status != "pass":
+        result["reason"] = f"VP probed {probe_config}, workload expects one of {', '.join(compatible)}"
+    return result
+
+
 def _write_modern_logs(out_dir: Path) -> dict[str, str]:
     serial = (out_dir / "serial.log").read_text(encoding="utf-8", errors="replace")
     outputs = {
@@ -947,6 +994,7 @@ def _run_modern_vp(
     serial = (out_dir / "serial.log").read_text(encoding="utf-8", errors="replace")
     dmesg = (out_dir / "dmesg.log").read_text(encoding="utf-8", errors="replace")
     bad = sorted(set(_bad_patterns(serial) + _bad_patterns(dmesg)))
+    probe_config = _extract_probe_config(serial + "\n" + dmesg)
     statuses = {
         "module_vermagic": _extract_status(serial, "module_vermagic"),
         "module_load": _extract_status(serial, "module_load"),
@@ -962,8 +1010,10 @@ def _run_modern_vp(
     render_node = _extract_render_node(serial)
     runtime_output = out_dir / "runtime-output" / "o_000000.dimg"
     host_compare: dict[str, Any] | None = None
+    config_check: dict[str, Any] | None = None
     workload_records: list[dict[str, Any]] = []
     if mode == "runtime" and workload is not None:
+        config_check = _workload_config_check(workload["manifest"], probe_config)
         host_compare = compare_exact_files(workload["golden"], runtime_output)
         write_json(out_dir / "runtime-output-compare.json", host_compare)
         workload_records.append(
@@ -975,9 +1025,14 @@ def _run_modern_vp(
                 "output_path": str(runtime_output),
                 "output_sha256": _path_hash(runtime_output),
                 "tolerance": workload["manifest"].get("tolerance", {"type": "exact"}),
+                "target": workload["manifest"].get("target"),
+                "config_check": config_check,
                 "repeat": max(1, repeat),
                 "compare": host_compare,
-                "status": host_compare["status"],
+                "status": "pass"
+                if host_compare["status"] == "pass"
+                and (config_check is None or config_check["status"] != "fail")
+                else "fail",
             }
         )
 
@@ -993,6 +1048,7 @@ def _run_modern_vp(
             statuses["runtime"] == 0,
             statuses["script_exit"] == 0,
             host_compare is not None and host_compare["status"] == "pass",
+            config_check is None or config_check["status"] != "fail",
             not bad,
         ]
     else:
@@ -1008,7 +1064,10 @@ def _run_modern_vp(
     status = "pass" if all(pass_conditions) else "fail"
     reason = None
     if status != "pass":
-        reason = f"modern VP {mode} did not satisfy all pass criteria"
+        if config_check and config_check["status"] == "fail":
+            reason = config_check.get("reason")
+        else:
+            reason = f"modern VP {mode} did not satisfy all pass criteria"
 
     return {
         "status": status,
@@ -1035,6 +1094,7 @@ def _run_modern_vp(
             "client_log": "runtime-client.log",
             "compare_log": "runtime-compare.log",
             "host_compare": "runtime-output-compare.json" if host_compare else None,
+            "workload_config_check": config_check,
         },
         "docker": {
             "image": image,
@@ -1044,6 +1104,7 @@ def _run_modern_vp(
         "run": run,
         "statuses": statuses,
         "render_node": render_node,
+        "probe_config": probe_config,
         "bad_patterns": bad,
         "logs": logs,
         "smoke_build": smoke_build,
