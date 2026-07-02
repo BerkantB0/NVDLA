@@ -16,6 +16,11 @@ Runtime test runs also include, when available:
 - `dev-dri.txt`: target-side `/dev/dri` render-node listing.
 - `runtime.stdout.log`: runtime stdout.
 - `runtime.stderr.log`: runtime stderr.
+- `runtime-server.log`: target-side `nvdla_runtime -s` server log.
+- `runtime-client.log`: target-side flatbuffer client log.
+- `runtime-compare.log`: target-side golden comparison summary.
+- `runtime-output-compare.json`: host-side exact comparison summary.
+- `runtime-output/o_000000.dimg`: output tensor returned by the runtime server.
 
 Build-phase runs include one phase log, such as `toolchain.log`, `kernel.log`, `rootfs.log`, or `kmod.log`.
 
@@ -55,6 +60,14 @@ with discovered artifact paths, kernel/rootfs/module/smoke hashes, Docker
 command, module-load status, render-node status, smoke status, bad kernel log
 patterns, and repeat count. A missing kernel/rootfs/module is recorded as
 `blocked` rather than `fail`.
+
+Modern VP runtime manifests set `modern.mode` to `runtime` and add runtime
+binary/library/client hashes, the workload loadable and golden hashes, output
+hashes, `runtime.server_log`, `runtime.client_log`, `runtime.compare_log`, and
+`workloads[]` comparison records. Runtime mode passes only when the VP boots,
+the KMD loads, a render node exists, the runtime server is ready, the flatbuffer
+client exits cleanly, the output `.dimg` exactly matches the pinned golden, and
+serial plus `dmesg` contain no bad kernel or VP patterns.
 
 PetaLinux KMD build manifests use `lane: "petalinux-kmod"` and include the
 PetaLinux install path, project path when configured, patch-series hash, module
