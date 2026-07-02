@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-import json
+import os
+import shutil
 from pathlib import Path
+from typing import Any
 
-from .common import sha256_file, write_json
+from .common import repo_root, run_command, sha256_file, write_json
+
+
+NVDLA_SW_BASE_SHA = "79538ba1b52b040a4a4645f630e457fa01839e90"
+SDP_REGRESSION_NAME = "sdp_regression_small"
+SDP_LOADABLE_REL = Path("regression/flatbufs/kmd/SDP/SDP_X1_L0_0_small_fbuf")
+SDP_GOLDEN_GLOB = "regression/golden/*SDP_X1_L0_0_small*/dla/o_000000.dimg"
 
 
 def _write_bytes(path: Path, values: list[int]) -> None:
@@ -14,6 +22,56 @@ def _write_bytes(path: Path, values: list[int]) -> None:
 def _int8(value: int) -> int:
     value = max(-128, min(127, value))
     return value if value >= 0 else value + 256
+
+
+def _default_nvdla_sw_source() -> Path:
+    return Path(os.environ.get("PATCHED_NVDLA_SW", repo_root() / ".work" / "nvdla-sw-patched"))
+
+
+def _git_sha(path: Path) -> str | None:
+    cp = run_command(["git", "-C", str(path), "rev-parse", "HEAD"], timeout=15)
+    if cp.returncode != 0:
+        return None
+    return cp.stdout.strip()
+
+
+def _first_mismatch(expected: Path, actual: Path) -> int | None:
+    with expected.open("rb") as exp, actual.open("rb") as act:
+        offset = 0
+        while True:
+            lhs = exp.read(1024 * 1024)
+            rhs = act.read(1024 * 1024)
+            if lhs == rhs:
+                if not lhs:
+                    return None
+                offset += len(lhs)
+                continue
+            for idx, (left, right) in enumerate(zip(lhs, rhs)):
+                if left != right:
+                    return offset + idx
+            return offset + min(len(lhs), len(rhs))
+
+
+def compare_exact_files(expected: Path, actual: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "tolerance": {"type": "exact"},
+        "expected_path": str(expected),
+        "actual_path": str(actual),
+        "expected_sha256": sha256_file(expected) if expected.is_file() else None,
+        "actual_sha256": sha256_file(actual) if actual.is_file() else None,
+        "expected_size_bytes": expected.stat().st_size if expected.is_file() else None,
+        "actual_size_bytes": actual.stat().st_size if actual.is_file() else None,
+    }
+    if not expected.is_file() or not actual.is_file():
+        result["status"] = "fail"
+        result["reason"] = "missing expected or actual file"
+        return result
+    mismatch = _first_mismatch(expected, actual)
+    result["first_mismatch_offset"] = mismatch
+    result["status"] = "pass" if mismatch is None else "fail"
+    if mismatch is not None:
+        result["reason"] = "files differ"
+    return result
 
 
 def _generate_sdp_passthrough(root: Path) -> dict:
@@ -82,6 +140,60 @@ layer {
     return manifest
 
 
+def _generate_sdp_regression_small(root: Path, source_root: Path | None = None) -> dict[str, Any]:
+    source = source_root or _default_nvdla_sw_source()
+    loadable_src = source / SDP_LOADABLE_REL
+    golden_matches = sorted(source.glob(SDP_GOLDEN_GLOB))
+
+    if not loadable_src.is_file():
+        raise FileNotFoundError(
+            f"missing upstream SDP loadable: {loadable_src}; run make patch-apply or set PATCHED_NVDLA_SW"
+        )
+    if not golden_matches:
+        raise FileNotFoundError(
+            f"missing upstream SDP golden matching {SDP_GOLDEN_GLOB} under {source}; run make patch-apply"
+        )
+
+    golden_src = golden_matches[0]
+    out = root / SDP_REGRESSION_NAME
+    loadable = out / "loadable.fbuf"
+    golden = out / "golden" / "o_000000.dimg"
+
+    loadable.parent.mkdir(parents=True, exist_ok=True)
+    golden.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(loadable_src, loadable)
+    shutil.copy2(golden_src, golden)
+
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "name": SDP_REGRESSION_NAME,
+        "kind": "upstream_nvdla_flatbuffer_regression",
+        "upstream_base_sha": NVDLA_SW_BASE_SHA,
+        "source": {
+            "nvdla_sw": str(source),
+            "nvdla_sw_sha": _git_sha(source),
+            "loadable": str(loadable_src.relative_to(source)),
+            "golden": str(golden_src.relative_to(source)),
+        },
+        "loadable": {
+            "path": "loadable.fbuf",
+            "sha256": sha256_file(loadable),
+            "size_bytes": loadable.stat().st_size,
+        },
+        "golden_outputs": [
+            {
+                "name": "o_000000.dimg",
+                "path": "golden/o_000000.dimg",
+                "sha256": sha256_file(golden),
+                "size_bytes": golden.stat().st_size,
+            }
+        ],
+        "tolerance": {"type": "exact"},
+    }
+    write_json(out / "generated-manifest.json", manifest)
+    return manifest
+
+
 def generate_workloads(out_dir: Path) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -89,9 +201,9 @@ def generate_workloads(out_dir: Path) -> int:
         "workloads": [
             _generate_sdp_passthrough(out_dir),
             _generate_tiny_conv(out_dir),
+            _generate_sdp_regression_small(out_dir),
         ],
     }
     write_json(out_dir / "manifest.json", summary)
     print(f"Generated workload artifacts in {out_dir}")
     return 0
-

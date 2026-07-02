@@ -76,7 +76,7 @@ patch-format:
 patch-check:
 	@scripts/nvdla_patch_queue.sh check
 
-workloads:
+workloads: patch-apply
 	@mkdir -p artifacts/workloads
 	@$(PYTHON) -m nvdla_test_framework workload-generate --out artifacts/workloads
 
