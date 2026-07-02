@@ -444,6 +444,7 @@ build_kernel() {
     --enable CONFIG_NET \
     --enable CONFIG_UNIX \
     --enable CONFIG_INET \
+    --enable CONFIG_FUTEX \
     --enable CONFIG_VIRTIO_MENU \
     --enable CONFIG_VIRTIO \
     --enable CONFIG_VIRTIO_MMIO \
