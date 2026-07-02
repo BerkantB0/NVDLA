@@ -34,6 +34,8 @@ def main(argv: list[str] | None = None) -> int:
     vp.add_argument("--sources-dir", type=Path)
     vp.add_argument("--docker-image")
     vp.add_argument("--repeat", type=int, default=1)
+    vp.add_argument("--mode", choices=["smoke", "runtime"], default="smoke")
+    vp.add_argument("--workload", default="sdp_regression_small")
 
     workloads = sub.add_parser("workload-generate", help="Generate deterministic workload inputs/goldens")
     workloads.add_argument("--out", required=True, type=Path)
@@ -61,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
             args.sources_dir,
             args.docker_image,
             args.repeat,
+            args.mode,
+            args.workload,
         )
     if args.command == "workload-generate":
         return generate_workloads(args.out)

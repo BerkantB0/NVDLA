@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nvdla_test_framework.vp import _modern_paths
+from nvdla_test_framework.vp import _bad_patterns, _modern_paths, _write_modern_lua
 
 
 class ModernVpPathTests(unittest.TestCase):
@@ -34,6 +34,8 @@ class ModernVpPathTests(unittest.TestCase):
             self.assertEqual(paths["kernel"], image_vp2m)
             self.assertEqual(paths["rootfs"], rootfs_smoke)
             self.assertEqual(paths["module"], module)
+            self.assertEqual(paths["runtime_binary"], work / "runtime" / "nvdla_runtime")
+            self.assertEqual(paths["runtime_library"], work / "runtime" / "libnvdla_runtime.so")
 
     def test_explicit_artifact_overrides_win(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -43,13 +45,20 @@ class ModernVpPathTests(unittest.TestCase):
             kernel = root / "custom-Image"
             rootfs = root / "custom-rootfs.ext4"
             module = root / "custom-opendla.ko"
-            for path in (kernel, rootfs, module):
+            runtime_binary = root / "custom-runtime"
+            runtime_library = root / "custom-runtime.so"
+            workloads_dir = root / "custom-workloads"
+            for path in (kernel, rootfs, module, runtime_binary, runtime_library):
                 path.write_bytes(b"x")
+            workloads_dir.mkdir()
 
             env = {
                 "VP_MODERN_KERNEL": os.fspath(kernel),
                 "VP_MODERN_ROOTFS": os.fspath(rootfs),
                 "VP_MODERN_KO": os.fspath(module),
+                "VP_RUNTIME_BIN": os.fspath(runtime_binary),
+                "VP_RUNTIME_LIB": os.fspath(runtime_library),
+                "WORKLOADS_DIR": os.fspath(workloads_dir),
             }
             with patch.dict(os.environ, env, clear=False):
                 paths = _modern_paths(work, sources)
@@ -57,6 +66,36 @@ class ModernVpPathTests(unittest.TestCase):
             self.assertEqual(paths["kernel"], kernel)
             self.assertEqual(paths["rootfs"], rootfs)
             self.assertEqual(paths["module"], module)
+            self.assertEqual(paths["runtime_binary"], runtime_binary)
+            self.assertEqual(paths["runtime_library"], runtime_library)
+            self.assertEqual(paths["workloads_dir"], workloads_dir)
+
+    def test_modern_lua_matches_qemu_virt_ram_base(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            kernel = root / "Image.vp2m"
+            rootfs = root / "rootfs-smoke.ext4"
+            kernel.write_bytes(b"kernel")
+            rootfs.write_bytes(b"rootfs")
+
+            lua = _write_modern_lua({"kernel": kernel, "rootfs": rootfs, "dtb": None}, root)
+            text = lua.read_text(encoding="utf-8")
+
+            self.assertIn("base_addr = 0x40000000", text)
+            self.assertIn("high_addr = 0x7fffffff", text)
+            self.assertIn("-kernel /vp-kernel/Image.vp2m", text)
+
+    def test_bad_patterns_cover_vp_and_systemc_failures(self) -> None:
+        log = """
+        GP: TLM_ADDRESS_ERROR_RESPONSE
+        Error: (E115) sc_signal<T> cannot have more than one driver
+        """
+
+        bad = _bad_patterns(log)
+
+        self.assertIn("TLM_ADDRESS_ERROR_RESPONSE", bad)
+        self.assertIn("sc_signal<.*cannot have more than one driver", bad)
+        self.assertIn("Error: \\(E[0-9]+\\)", bad)
 
 
 if __name__ == "__main__":

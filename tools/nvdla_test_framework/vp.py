@@ -12,6 +12,7 @@ from typing import Any
 
 from .common import read_json, repo_root, run_command, sha256_file, utc_run_id, write_json
 from .patches import patch_series_fingerprint
+from .workloads import compare_exact_files
 
 
 KERNEL_BAD_PATTERNS = [
@@ -21,9 +22,13 @@ KERNEL_BAD_PATTERNS = [
     r"DMA-API",
     r"scheduler timeout",
     r"interrupt timeout",
+    r"TLM_ADDRESS_ERROR_RESPONSE",
+    r"sc_signal<.*cannot have more than one driver",
+    r"Error: \(E[0-9]+\)",
 ]
 
 SMOKE_SOURCE = repo_root() / "tools" / "smoke" / "nvdla-kmd-smoke.c"
+RUNTIME_CLIENT = repo_root() / "tools" / "runtime" / "nvdla_flatbuf_client.py"
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -197,6 +202,9 @@ def _modern_paths(
             ],
         ),
         "module": _path_from_env("VP_MODERN_KO", work / "modules" / "opendla.ko"),
+        "runtime_binary": _path_from_env("VP_RUNTIME_BIN", work / "runtime" / "nvdla_runtime"),
+        "runtime_library": _path_from_env("VP_RUNTIME_LIB", work / "runtime" / "libnvdla_runtime.so"),
+        "workloads_dir": _path_from_env("WORKLOADS_DIR", root / "artifacts" / "workloads"),
         "dtb": dtb,
     }
 
@@ -214,6 +222,39 @@ def _check_required_paths(paths: dict[str, Path | None], required: list[str]) ->
         if not path or not path.exists():
             missing.append(f"{name}: {path}")
     return missing
+
+
+def _resolve_workload(paths: dict[str, Path | None], workload_name: str) -> dict[str, Any]:
+    workloads_dir = paths["workloads_dir"]
+    assert isinstance(workloads_dir, Path)
+    workload_dir = workloads_dir / workload_name
+    manifest_path = workload_dir / "generated-manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"missing workload manifest: {manifest_path}; run make workloads")
+
+    manifest = read_json(manifest_path)
+    loadable = workload_dir / manifest["loadable"]["path"]
+    golden_outputs = manifest.get("golden_outputs") or []
+    if not golden_outputs:
+        raise FileNotFoundError(f"workload manifest has no golden_outputs: {manifest_path}")
+    golden = workload_dir / golden_outputs[0]["path"]
+    missing = []
+    if not loadable.is_file():
+        missing.append(f"loadable: {loadable}")
+    if not golden.is_file():
+        missing.append(f"golden: {golden}")
+    if missing:
+        raise FileNotFoundError("missing workload files:\n" + "\n".join(missing))
+
+    return {
+        "name": workload_name,
+        "dir": workload_dir,
+        "manifest_path": manifest_path,
+        "manifest": manifest,
+        "loadable": loadable,
+        "golden": golden,
+        "output_name": golden_outputs[0].get("name", "o_000000.dimg"),
+    }
 
 
 def _build_smoke_binary(paths: dict[str, Path | None], out_dir: Path) -> dict[str, Any]:
@@ -277,13 +318,213 @@ def _build_smoke_binary(paths: dict[str, Path | None], out_dir: Path) -> dict[st
     }
 
 
-def _write_payload(paths: dict[str, Path | None], out_dir: Path, repeat: int) -> dict[str, Any]:
+def _write_payload(
+    paths: dict[str, Path | None],
+    out_dir: Path,
+    repeat: int,
+    mode: str,
+    workload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = out_dir / "payload"
     payload.mkdir(parents=True, exist_ok=True)
 
     module = paths["module"]
     assert isinstance(module, Path)
     _copy_file(module, payload / "opendla.ko")
+
+    if mode == "runtime":
+        runtime_binary = paths["runtime_binary"]
+        runtime_library = paths["runtime_library"]
+        assert isinstance(runtime_binary, Path)
+        assert isinstance(runtime_library, Path)
+        assert workload is not None
+        _copy_file(runtime_binary, payload / "nvdla_runtime")
+        _copy_file(runtime_library, payload / "libnvdla_runtime.so")
+        _copy_file(RUNTIME_CLIENT, payload / "nvdla_flatbuf_client.py")
+        _copy_file(workload["loadable"], payload / "loadable.fbuf")
+        _copy_file(workload["golden"], payload / "golden" / "o_000000.dimg")
+
+        script = payload / "run-modern-smoke.sh"
+        script.write_text(
+            f"""#!/bin/sh
+set +e
+
+repeat={max(1, repeat)}
+runtime_timeout="${{NVDLA_RUNTIME_TIMEOUT:-120}}"
+server_start_timeout="${{NVDLA_SERVER_START_TIMEOUT:-45}}"
+
+cat_section() {{
+    name="$1"
+    file="$2"
+    echo "__NVDLA_SECTION_${{name}}_BEGIN__"
+    if [ -f "$file" ]; then
+        cat "$file"
+    fi
+    echo "__NVDLA_SECTION_${{name}}_END__"
+}}
+
+echo "__NVDLA_RUNTIME_BEGIN__"
+echo "__NVDLA_SECTION_uname_BEGIN__"
+uname -a
+echo "__NVDLA_SECTION_uname_END__"
+
+mkdir -p /mnt/w
+mount -t 9p -o trans=virtio,version=9p2000.L w /mnt/w || mount -t 9p -o trans=virtio w /mnt/w
+WRITE_STATUS=$?
+echo "__NVDLA_STATUS_writable_mount=$WRITE_STATUS"
+if [ "$WRITE_STATUS" -eq 0 ]; then
+    mkdir -p /mnt/w/runtime-output
+fi
+
+if command -v modinfo >/dev/null 2>&1; then
+    modinfo -F vermagic /mnt/r/opendla.ko >/tmp/module-vermagic.txt 2>&1
+else
+    strings /mnt/r/opendla.ko | sed -n 's/^vermagic=//p' | head -n 1 >/tmp/module-vermagic.txt 2>&1
+fi
+VERMAGIC_STATUS=$?
+cat_section module_vermagic /tmp/module-vermagic.txt
+echo "__NVDLA_STATUS_module_vermagic=$VERMAGIC_STATUS"
+
+insmod /mnt/r/opendla.ko >/tmp/module-load.log 2>&1
+MODULE_STATUS=$?
+cat_section module_load /tmp/module-load.log
+echo "__NVDLA_STATUS_module_load=$MODULE_STATUS"
+
+sleep 1
+ls -l /dev/dri >/tmp/dev-dri.txt 2>&1
+DRI_STATUS=$?
+cat_section dev_dri /tmp/dev-dri.txt
+echo "__NVDLA_STATUS_dev_dri=$DRI_STATUS"
+
+NODE="${{NVDLA_DEVICE_NODE:-}}"
+if [ -z "$NODE" ]; then
+    NODE="$(ls /dev/dri/renderD* 2>/dev/null | head -n 1)"
+fi
+echo "__NVDLA_RENDER_NODE__=$NODE"
+
+RUNTIME_STATUS=97
+CLIENT_STATUS=97
+COMPARE_STATUS=97
+SERVER_READY=1
+i=1
+while [ "$i" -le "$repeat" ]; do
+    rm -rf /tmp/nvdla-runtime
+    mkdir -p /tmp/nvdla-runtime/outputs
+    : >/tmp/runtime-server.log
+    : >/tmp/runtime-client.log
+    : >/tmp/runtime-compare.log
+
+    if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ -n "$NODE" ]; then
+        NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/mnt/r /mnt/r/nvdla_runtime -s \
+            >/tmp/runtime-server.log 2>&1 &
+        SERVER_PID=$!
+        elapsed=0
+        SERVER_READY=1
+        while [ "$elapsed" -lt "$server_start_timeout" ]; do
+            if grep -q "Ready for Client Connection" /tmp/runtime-server.log; then
+                SERVER_READY=0
+                break
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        echo "__NVDLA_STATUS_runtime_server_ready_$i=$SERVER_READY"
+
+        if [ "$SERVER_READY" -eq 0 ]; then
+            LD_LIBRARY_PATH=/mnt/r python3 /mnt/r/nvdla_flatbuf_client.py \
+                --flatbuf /mnt/r/loadable.fbuf \
+                --out-dir /tmp/nvdla-runtime/outputs \
+                --timeout "$runtime_timeout" \
+                >/tmp/runtime-client.log 2>&1
+            CLIENT_STATUS=$?
+        else
+            echo "runtime server did not become ready" >>/tmp/runtime-client.log
+            CLIENT_STATUS=125
+        fi
+
+        elapsed=0
+        while kill -0 "$SERVER_PID" 2>/dev/null && [ "$elapsed" -lt 10 ]; do
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill "$SERVER_PID" 2>/dev/null
+        fi
+        wait "$SERVER_PID" 2>/dev/null
+
+        if [ "$CLIENT_STATUS" -eq 0 ]; then
+            cmp -s /mnt/r/golden/o_000000.dimg /tmp/nvdla-runtime/outputs/o_000000.dimg
+            COMPARE_STATUS=$?
+            if [ "$COMPARE_STATUS" -ne 0 ]; then
+                cmp -l /mnt/r/golden/o_000000.dimg /tmp/nvdla-runtime/outputs/o_000000.dimg \
+                    | head -n 20 >/tmp/runtime-compare.log 2>&1
+            else
+                echo "exact match" >/tmp/runtime-compare.log
+            fi
+        else
+            COMPARE_STATUS=126
+            echo "client failed with status $CLIENT_STATUS" >/tmp/runtime-compare.log
+        fi
+    else
+        echo "module_status=$MODULE_STATUS dri_status=$DRI_STATUS node=$NODE" >/tmp/runtime-client.log
+        CLIENT_STATUS=98
+        COMPARE_STATUS=98
+    fi
+
+    if [ "$WRITE_STATUS" -eq 0 ]; then
+        cp /tmp/runtime-server.log /mnt/w/runtime-output/runtime-server.log 2>/dev/null
+        cp /tmp/runtime-client.log /mnt/w/runtime-output/runtime-client.log 2>/dev/null
+        cp /tmp/runtime-compare.log /mnt/w/runtime-output/runtime-compare.log 2>/dev/null
+        cp /tmp/nvdla-runtime/outputs/o_000000.dimg /mnt/w/runtime-output/o_000000.dimg 2>/dev/null
+    fi
+
+    echo "__NVDLA_STATUS_runtime_client_$i=$CLIENT_STATUS"
+    echo "__NVDLA_STATUS_runtime_compare_$i=$COMPARE_STATUS"
+    if [ "$CLIENT_STATUS" -eq 0 ] && [ "$COMPARE_STATUS" -eq 0 ]; then
+        RUNTIME_STATUS=0
+    else
+        RUNTIME_STATUS=1
+        break
+    fi
+    i=$((i + 1))
+done
+
+cat_section runtime_server /tmp/runtime-server.log
+cat_section runtime_client /tmp/runtime-client.log
+cat_section runtime_compare /tmp/runtime-compare.log
+echo "__NVDLA_STATUS_runtime_server_ready=$SERVER_READY"
+echo "__NVDLA_STATUS_runtime_client=$CLIENT_STATUS"
+echo "__NVDLA_STATUS_runtime_compare=$COMPARE_STATUS"
+echo "__NVDLA_STATUS_runtime=$RUNTIME_STATUS"
+
+dmesg 2>&1 | tail -n 200 >/tmp/dmesg.log
+cat_section dmesg /tmp/dmesg.log
+
+echo "__NVDLA_RESULT__ module=$MODULE_STATUS dri=$DRI_STATUS runtime=$RUNTIME_STATUS repeat=$repeat"
+echo "__NVDLA_RUNTIME_END__"
+
+if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ "$RUNTIME_STATUS" -eq 0 ]; then
+    exit 0
+fi
+exit 1
+""",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        return {
+            "path": str(payload),
+            "mode": mode,
+            "module": str(payload / "opendla.ko"),
+            "runtime_binary": str(payload / "nvdla_runtime"),
+            "runtime_library": str(payload / "libnvdla_runtime.so"),
+            "client": str(payload / "nvdla_flatbuf_client.py"),
+            "loadable": str(payload / "loadable.fbuf"),
+            "golden": str(payload / "golden" / "o_000000.dimg"),
+            "script": str(script),
+        }
 
     script = payload / "run-modern-smoke.sh"
     script.write_text(
@@ -308,7 +549,11 @@ echo "__NVDLA_SECTION_uname_BEGIN__"
 uname -a
 echo "__NVDLA_SECTION_uname_END__"
 
-modinfo -F vermagic /mnt/r/opendla.ko >/tmp/module-vermagic.txt 2>&1
+if command -v modinfo >/dev/null 2>&1; then
+    modinfo -F vermagic /mnt/r/opendla.ko >/tmp/module-vermagic.txt 2>&1
+else
+    strings /mnt/r/opendla.ko | sed -n 's/^vermagic=//p' | head -n 1 >/tmp/module-vermagic.txt 2>&1
+fi
 VERMAGIC_STATUS=$?
 cat_section module_vermagic /tmp/module-vermagic.txt
 echo "__NVDLA_STATUS_module_vermagic=$VERMAGIC_STATUS"
@@ -388,6 +633,7 @@ exit 1
 
     return {
         "path": str(payload),
+        "mode": mode,
         "module": str(payload / "opendla.ko"),
         "script": str(script),
     }
@@ -412,6 +658,8 @@ def _write_modern_lua(paths: dict[str, Path | None], out_dir: Path) -> Path:
         "-device virtio-blk-device,drive=hd0 "
         "-fsdev local,id=r,path=/payload,security_model=none "
         "-device virtio-9p-device,fsdev=r,mount_tag=r "
+        "-fsdev local,id=w,path=/vp-run,security_model=none "
+        "-device virtio-9p-device,fsdev=w,mount_tag=w "
         "-netdev user,id=user0,hostfwd=tcp::6666-:6666,hostfwd=tcp::6667-:22 "
         "-device virtio-net-device,netdev=user0"
     )
@@ -425,8 +673,8 @@ def _write_modern_lua(paths: dict[str, Path | None], out_dir: Path) -> Path:
 ram = {{
     size = 1048576,
     target_port = {{
-        base_addr = 0xc0000000,
-        high_addr = 0xffffffff
+        base_addr = 0x40000000,
+        high_addr = 0x7fffffff
     }}
 }}
 
@@ -577,6 +825,9 @@ def _write_modern_logs(out_dir: Path) -> dict[str, str]:
         "dev_dri": ("dev-dri.txt", "dev_dri"),
         "runtime_stdout": ("runtime.stdout.log", "smoke_stdout"),
         "runtime_stderr": ("runtime.stderr.log", "smoke_stderr"),
+        "runtime_server": ("runtime-server.log", "runtime_server"),
+        "runtime_client": ("runtime-client.log", "runtime_client"),
+        "runtime_compare": ("runtime-compare.log", "runtime_compare"),
         "dmesg": ("dmesg.log", "dmesg"),
     }
     written = {}
@@ -595,15 +846,26 @@ def _run_modern_vp(
     sources_dir: Path | None,
     docker_image: str | None,
     repeat: int,
+    mode: str,
+    workload_name: str,
 ) -> dict[str, Any]:
     paths = _modern_paths(work_dir, sources_dir)
     required_missing = _check_required_paths(paths, ["kernel", "rootfs", "module"])
     smoke_build: dict[str, Any] | None = None
+    workload: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
     lua: Path | None = None
 
-    if not SMOKE_SOURCE.exists():
+    if mode == "smoke" and not SMOKE_SOURCE.exists():
         required_missing.append(f"smoke_source: {SMOKE_SOURCE}")
+    if mode == "runtime":
+        required_missing.extend(_check_required_paths(paths, ["runtime_binary", "runtime_library"]))
+        if not RUNTIME_CLIENT.is_file():
+            required_missing.append(f"runtime_client: {RUNTIME_CLIENT}")
+        try:
+            workload = _resolve_workload(paths, workload_name)
+        except FileNotFoundError as exc:
+            required_missing.append(str(exc))
 
     if required_missing:
         _write_text(
@@ -615,18 +877,21 @@ def _run_modern_vp(
             "reason": "missing required modern VP artifacts",
             "missing": required_missing,
             "paths": {name: str(path) if path else None for name, path in paths.items()},
+            "mode": mode,
         }
 
-    smoke_build = _build_smoke_binary(paths, out_dir)
-    if smoke_build["status"] != "pass":
-        return {
-            "status": smoke_build["status"],
-            "reason": smoke_build["reason"],
-            "paths": {name: str(path) if path else None for name, path in paths.items()},
-            "smoke_build": smoke_build,
-        }
+    if mode == "smoke":
+        smoke_build = _build_smoke_binary(paths, out_dir)
+        if smoke_build["status"] != "pass":
+            return {
+                "status": smoke_build["status"],
+                "reason": smoke_build["reason"],
+                "paths": {name: str(path) if path else None for name, path in paths.items()},
+                "smoke_build": smoke_build,
+                "mode": mode,
+            }
 
-    payload = _write_payload(paths, out_dir, repeat)
+    payload = _write_payload(paths, out_dir, repeat, mode, workload)
     lua = _write_modern_lua(paths, out_dir)
 
     kernel = paths["kernel"]
@@ -641,6 +906,8 @@ def _run_modern_vp(
         "run",
         "--rm",
         "-i",
+        "-e",
+        "SC_SIGNAL_WRITE_CHECK=DISABLE",
         "-v",
         _docker_mount(out_dir, "/vp-run"),
         "-v",
@@ -673,6 +940,7 @@ def _run_modern_vp(
             "smoke_build": smoke_build,
             "payload": payload,
             "lua": str(lua),
+            "mode": mode,
         }
 
     logs = _write_modern_logs(out_dir)
@@ -684,33 +952,89 @@ def _run_modern_vp(
         "module_load": _extract_status(serial, "module_load"),
         "dev_dri": _extract_status(serial, "dev_dri"),
         "smoke": _extract_status(serial, "smoke"),
+        "runtime_server_ready": _extract_status(serial, "runtime_server_ready"),
+        "runtime_client": _extract_status(serial, "runtime_client"),
+        "runtime_compare": _extract_status(serial, "runtime_compare"),
+        "runtime": _extract_status(serial, "runtime"),
+        "writable_mount": _extract_status(serial, "writable_mount"),
         "script_exit": _extract_script_exit(serial),
     }
     render_node = _extract_render_node(serial)
-    pass_conditions = [
-        run["userspace_seen"],
-        run["script_completed"],
-        statuses["module_load"] == 0,
-        statuses["dev_dri"] == 0,
-        statuses["smoke"] == 0,
-        statuses["script_exit"] == 0,
-        not bad,
-    ]
+    runtime_output = out_dir / "runtime-output" / "o_000000.dimg"
+    host_compare: dict[str, Any] | None = None
+    workload_records: list[dict[str, Any]] = []
+    if mode == "runtime" and workload is not None:
+        host_compare = compare_exact_files(workload["golden"], runtime_output)
+        write_json(out_dir / "runtime-output-compare.json", host_compare)
+        workload_records.append(
+            {
+                "name": workload["name"],
+                "manifest": str(workload["manifest_path"]),
+                "loadable_sha256": sha256_file(workload["loadable"]),
+                "golden_sha256": sha256_file(workload["golden"]),
+                "output_path": str(runtime_output),
+                "output_sha256": _path_hash(runtime_output),
+                "tolerance": workload["manifest"].get("tolerance", {"type": "exact"}),
+                "repeat": max(1, repeat),
+                "compare": host_compare,
+                "status": host_compare["status"],
+            }
+        )
+
+    if mode == "runtime":
+        pass_conditions = [
+            run["userspace_seen"],
+            run["script_completed"],
+            statuses["module_load"] == 0,
+            statuses["dev_dri"] == 0,
+            statuses["runtime_server_ready"] == 0,
+            statuses["runtime_client"] == 0,
+            statuses["runtime_compare"] == 0,
+            statuses["runtime"] == 0,
+            statuses["script_exit"] == 0,
+            host_compare is not None and host_compare["status"] == "pass",
+            not bad,
+        ]
+    else:
+        pass_conditions = [
+            run["userspace_seen"],
+            run["script_completed"],
+            statuses["module_load"] == 0,
+            statuses["dev_dri"] == 0,
+            statuses["smoke"] == 0,
+            statuses["script_exit"] == 0,
+            not bad,
+        ]
     status = "pass" if all(pass_conditions) else "fail"
     reason = None
     if status != "pass":
-        reason = "modern VP smoke did not satisfy all pass criteria"
+        reason = f"modern VP {mode} did not satisfy all pass criteria"
 
     return {
         "status": status,
         "reason": reason,
+        "mode": mode,
         "paths": {name: str(path) if path else None for name, path in paths.items()},
         "artifact_hashes": {
             "kernel": _path_hash(kernel),
             "rootfs": _path_hash(rootfs),
             "module": _path_hash(paths["module"]),
             "dtb": _path_hash(dtb if isinstance(dtb, Path) else None),
-            "smoke": smoke_build.get("sha256"),
+            "smoke": smoke_build.get("sha256") if smoke_build else None,
+            "runtime_binary": _path_hash(paths["runtime_binary"]),
+            "runtime_library": _path_hash(paths["runtime_library"]),
+            "runtime_client": _path_hash(RUNTIME_CLIENT),
+            "loadable": _path_hash(workload["loadable"]) if workload else None,
+            "golden": _path_hash(workload["golden"]) if workload else None,
+            "output": _path_hash(runtime_output),
+        },
+        "runtime": {
+            "binary_sha256": _path_hash(paths["runtime_binary"]),
+            "library_sha256": _path_hash(paths["runtime_library"]),
+            "server_log": "runtime-server.log",
+            "client_log": "runtime-client.log",
+            "compare_log": "runtime-compare.log",
+            "host_compare": "runtime-output-compare.json" if host_compare else None,
         },
         "docker": {
             "image": image,
@@ -726,6 +1050,7 @@ def _run_modern_vp(
         "payload": payload,
         "lua": str(lua),
         "repeat": max(1, repeat),
+        "workloads": workload_records,
     }
 
 
@@ -738,9 +1063,11 @@ def run_vp_test(
     sources_dir: Path | None = None,
     docker_image: str | None = None,
     repeat: int = 1,
+    mode: str = "smoke",
+    workload: str = "sdp_regression_small",
 ) -> int:
     lock = read_json(lock_path)
-    run_id = utc_run_id(f"vp-{lane}")
+    run_id = utc_run_id(f"vp-{lane}" if lane == "reference" else f"vp-{lane}-{mode}")
     out = out_dir or Path("artifacts") / run_id
     out.mkdir(parents=True, exist_ok=True)
 
@@ -761,7 +1088,7 @@ def run_vp_test(
             "workloads": [],
         }
     else:
-        modern = _run_modern_vp(lock, timeout, out, work_dir, sources_dir, docker_image, repeat)
+        modern = _run_modern_vp(lock, timeout, out, work_dir, sources_dir, docker_image, repeat, mode, workload)
         paths = modern.get("paths", {})
         patched = Path(paths["patched_nvdla_sw"]) if paths.get("patched_nvdla_sw") else None
         linux = Path(paths["linux"]) if paths.get("linux") else None
@@ -780,7 +1107,7 @@ def run_vp_test(
                 "buildroot": _git_sha(buildroot) if buildroot else lock["sources"]["buildroot"]["commit"],
             },
             "patch_series": patch_series_fingerprint(),
-            "workloads": [],
+            "workloads": modern.get("workloads", []),
         }
 
     write_json(out / "manifest.json", manifest)

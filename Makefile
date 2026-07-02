@@ -103,7 +103,7 @@ vp-runtime:
 	@scripts/vp_build.sh runtime
 
 vp-test:
-	@$(PYTHON) -m nvdla_test_framework vp-test --lane "$${LANE:-reference}" --lock repro.lock.json --timeout "$${VP_TIMEOUT:-120}" --repeat "$${REPEAT:-1}"
+	@$(PYTHON) -m nvdla_test_framework vp-test --lane "$${LANE:-reference}" --lock repro.lock.json --timeout "$${VP_TIMEOUT:-120}" --repeat "$${REPEAT:-1}" --mode "$${MODE:-smoke}" --workload "$${WORKLOAD:-sdp_regression_small}"
 
 petalinux-smoke:
 	@scripts/petalinux_smoke.sh
