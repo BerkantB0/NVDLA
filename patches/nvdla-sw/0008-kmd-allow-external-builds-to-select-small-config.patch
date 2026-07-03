@@ -1,0 +1,45 @@
+From ceecfab9ba665a185bc4866811c9757ffa988430 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Fri, 3 Jul 2026 02:15:15 +0300
+Subject: [PATCH 8/8] kmd: allow external builds to select small config
+
+opendla.h selects opendla_small.h only when DLA_2_CONFIG is defined.
+
+External module builds had no documented way to set that define.
+
+That can make nv_small builds use the initial register map by accident.
+
+Add NVDLA_HW_CONFIG=small as an explicit external-module make option.
+
+Keep initial as the default.
+
+Tested with Linux 6.6.80+ module builds using initial and small.
+---
+ kmd/port/linux/Makefile | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/kmd/port/linux/Makefile b/kmd/port/linux/Makefile
+index b4d231a..1a5320f 100644
+--- a/kmd/port/linux/Makefile
++++ b/kmd/port/linux/Makefile
+@@ -32,10 +32,18 @@
+ 
+ obj-m += opendla.o
+ 
++NVDLA_HW_CONFIG ?= initial
++
+ ccflags-y += -I$(src)/include
+ ccflags-y += -I$(src)/../../include
+ ccflags-y += -Werror
+ 
++ifeq ($(NVDLA_HW_CONFIG),small)
++ccflags-y += -DDLA_2_CONFIG
++else ifneq ($(NVDLA_HW_CONFIG),initial)
++$(error unsupported NVDLA_HW_CONFIG '$(NVDLA_HW_CONFIG)' (expected initial or small))
++endif
++
+ include $(src)/../../firmware/Makefile
+ 
+ opendla-y += nvdla_core_callbacks.o
+-- 
+2.43.0

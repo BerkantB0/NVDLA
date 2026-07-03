@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 9775bdb90b5b91b77f1a7e68e7207b1e5ad07c15 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Thu, 25 Jun 2026 17:00:00 +0300
-Subject: [PATCH 5/7] kmd: use modern IRQ and GEM mmap paths
+Subject: [PATCH 5/8] kmd: use modern IRQ and GEM mmap paths
 
 Linux 6.x no longer reliably exposes OF interrupts through the legacy
 IORESOURCE_IRQ lookup used by the original KMD. The VP device tree contains
@@ -25,8 +25,8 @@ map-offset, mmap, read/write, and destroy smoke path completes.
 Signed-off-by: Codex <codex@local>
 ---
  kmd/port/linux/nvdla_core_callbacks.c | 15 ++++++++++-----
- kmd/port/linux/nvdla_gem.c            | 12 ++++++++++--
- 2 files changed, 20 insertions(+), 7 deletions(-)
+ kmd/port/linux/nvdla_gem.c            |  8 +++++++-
+ 2 files changed, 17 insertions(+), 6 deletions(-)
 
 diff --git a/kmd/port/linux/nvdla_core_callbacks.c b/kmd/port/linux/nvdla_core_callbacks.c
 index 5937cec..3a88b8c 100644
@@ -97,4 +97,4 @@ index 5ffbf0b..0df6d75 100644
  	.read = drm_read,
  #ifdef CONFIG_COMPAT
 -- 
-2.45.0
+2.43.0

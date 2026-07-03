@@ -1,7 +1,7 @@
-From 6c8d03b748a3d28974e06ac7aa08e762e26e747a Mon Sep 17 00:00:00 2001
+From 703e5d8a49fbd01d433fee9616da45fd0cc2873d Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Tue, 23 Jun 2026 00:00:00 +0000
-Subject: [PATCH 1/7] umd: allow render node override from environment
+Subject: [PATCH 1/8] umd: allow render node override from environment
 
 The Linux UMD always opens /dev/dri/renderD128. That is convenient for the
 original virtual platform, but it makes bring-up on systems with multiple DRM
@@ -17,7 +17,7 @@ Signed-off-by: Codex <codex@local>
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/umd/port/linux/nvdla.c b/umd/port/linux/nvdla.c
-index 6f827d0..9d8d712 100644
+index 6f827d0..7384d7d 100644
 --- a/umd/port/linux/nvdla.c
 +++ b/umd/port/linux/nvdla.c
 @@ -51,6 +51,7 @@

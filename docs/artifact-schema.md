@@ -53,7 +53,12 @@ Recommended files:
 }
 ```
 
-Modern VP build manifests additionally include `phase`, `toolchain`, `sources.nvdla_patch_series_sha256`, `artifacts`, and `logs`. A failed `vp-kmod` compile is valid evidence when the manifest status is `fail` and `kmod.log` contains the actionable Linux 6.6 compiler diagnostics.
+Modern VP build manifests additionally include `phase`, `toolchain`,
+`sources.nvdla_patch_series_sha256`, `artifacts`, and `logs`. The
+`driver.kmd_config` field records the KMD register-header build selection
+(`initial` or `small`). A failed `vp-kmod` compile is valid evidence when the
+manifest status is `fail` and `kmod.log` contains the actionable Linux 6.6
+compiler diagnostics.
 
 Modern VP smoke manifests use `lane: "vp-modern"` and include a `modern` object
 with discovered artifact paths, kernel/rootfs/module/smoke hashes, Docker
