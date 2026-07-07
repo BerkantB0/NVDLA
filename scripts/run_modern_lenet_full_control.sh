@@ -14,6 +14,8 @@ ROOTFS_IMAGE="${VP_MODERN_ROOTFS:-$WORK_DIR/buildroot/images/rootfs-smoke.ext4}"
 KMOD="${VP_MODERN_KO:-$WORK_DIR/modules/opendla.ko}"
 RUNTIME_BIN="${VP_RUNTIME_BIN:-$WORK_DIR/runtime/nvdla_runtime}"
 RUNTIME_LIB="${VP_RUNTIME_LIB:-$WORK_DIR/runtime/libnvdla_runtime.so}"
+DTB_IMAGE="${VP_MODERN_DTB:-}"
+RCU_CPU_STALL_TIMEOUT="${VP_RCU_CPU_STALL_TIMEOUT:-}"
 
 LOADABLE="$LENET_DIR/lenet_mnist.nv_full.nvdla"
 IMAGE="$LENET_DIR/seven.pgm"
@@ -34,6 +36,9 @@ require_file "$RUNTIME_BIN"
 require_file "$RUNTIME_LIB"
 require_file "$LOADABLE"
 require_file "$IMAGE"
+if [[ -n "$DTB_IMAGE" ]]; then
+    require_file "$DTB_IMAGE"
+fi
 
 resolve_docker_bin() {
     if [[ -n "${DOCKER_BIN:-}" ]]; then
@@ -77,6 +82,14 @@ RUNTIME_BIN_SHA="$(hash_file "$RUNTIME_BIN")"
 RUNTIME_LIB_SHA="$(hash_file "$RUNTIME_LIB")"
 LOADABLE_SHA="$(hash_file "$LOADABLE")"
 IMAGE_SHA="$(hash_file "$IMAGE")"
+DTB_SHA=""
+DTB_ARG=""
+DOCKER_DTB_MOUNT=()
+if [[ -n "$DTB_IMAGE" ]]; then
+    DTB_SHA="$(hash_file "$DTB_IMAGE")"
+    DTB_ARG=" -dtb /vp-dtb/$(basename "$DTB_IMAGE")"
+    DOCKER_DTB_MOUNT=(-v "$(dirname "$DTB_IMAGE"):/vp-dtb:ro")
+fi
 PATCH_SERIES_SHA="$(hash_patch_series)"
 KMOD_VERMAGIC="$(modinfo -F vermagic "$KMOD" 2>/dev/null || true)"
 DOCKER_BIN_RESOLVED="$(resolve_docker_bin)"
@@ -92,11 +105,14 @@ cp "$RUNTIME_BIN" "$PAYLOAD/nvdla_runtime"
 cp "$RUNTIME_LIB" "$PAYLOAD/libnvdla_runtime.so"
 cp "$LOADABLE" "$PAYLOAD/lenet_mnist.nv_full.nvdla"
 cp "$IMAGE" "$PAYLOAD/seven.pgm"
+if [[ -n "$RCU_CPU_STALL_TIMEOUT" ]]; then
+    printf '%s\n' "$RCU_CPU_STALL_TIMEOUT" >"$PAYLOAD/rcu-cpu-stall-timeout"
+fi
 
 cat >"$OUT/modern-vp.lua" <<EOF
 CPU = {
     library = "libqbox-nvdla.so",
-    extra_arguments = '-machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 1024 -kernel /vp-kernel/$(basename "$KERNEL_IMAGE") --append "root=/dev/vda" -drive file=/vp-rootfs/$(basename "$ROOTFS_IMAGE"),if=none,format=raw,id=hd0,snapshot=on -device virtio-blk-device,drive=hd0 -fsdev local,id=r,path=/payload,security_model=none -device virtio-9p-device,fsdev=r,mount_tag=r -fsdev local,id=w,path=/vp-run,security_model=none -device virtio-9p-device,fsdev=w,mount_tag=w -netdev user,id=user0,hostfwd=tcp::6666-:6666,hostfwd=tcp::6667-:22 -device virtio-net-device,netdev=user0'
+    extra_arguments = '-machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 1024 -kernel /vp-kernel/$(basename "$KERNEL_IMAGE")$DTB_ARG --append "root=/dev/vda" -drive file=/vp-rootfs/$(basename "$ROOTFS_IMAGE"),if=none,format=raw,id=hd0,snapshot=on -device virtio-blk-device,drive=hd0 -fsdev local,id=r,path=/payload,security_model=none -device virtio-9p-device,fsdev=r,mount_tag=r -fsdev local,id=w,path=/vp-run,security_model=none -device virtio-9p-device,fsdev=w,mount_tag=w -netdev user,id=user0,hostfwd=tcp::6666-:6666,hostfwd=tcp::6667-:22 -device virtio-net-device,netdev=user0'
 }
 
 ram = {
@@ -130,7 +146,36 @@ cat_section() {
     echo "__NVDLA_SECTION_${name}_END__"
 }
 
+dump_dt_summary() {
+    {
+        echo "root.compatible:"
+        if [ -e /proc/device-tree/compatible ]; then
+            tr '\000' ' ' </proc/device-tree/compatible
+            echo
+        fi
+        for node in \
+            /proc/device-tree/memory \
+            /proc/device-tree/nvdla@10200000 \
+            /proc/device-tree/extmem@c0000000 \
+            /proc/device-tree/reserved-memory \
+            /proc/device-tree/reserved-memory/*; do
+            [ -d "$node" ] || continue
+            echo "node: $node"
+            for prop in compatible reg interrupts memory-region reusable no-map linux,cma-default linux,dma-default; do
+                [ -e "$node/$prop" ] || continue
+                printf "  %s:" "$prop"
+                od -An -tx1 -v "$node/$prop"
+            done
+        done
+    } >/tmp/device-tree-summary.txt
+}
+
 echo "__NVDLA_RUNTIME_BEGIN__"
+
+if [ -r /mnt/r/rcu-cpu-stall-timeout ] && [ -w /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout ]; then
+    cat /mnt/r/rcu-cpu-stall-timeout >/sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
+fi
+cat /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout >/tmp/rcu-cpu-stall-timeout.txt 2>/dev/null
 
 mkdir -p /mnt/w
 mount -t 9p -o trans=virtio,version=9p2000.L w /mnt/w || mount -t 9p -o trans=virtio w /mnt/w
@@ -179,6 +224,10 @@ cat_section runtime /tmp/runtime.log
 echo "__NVDLA_STATUS_runtime=$RUNTIME_STATUS"
 cat_section output /tmp/output-lenet.txt
 
+cat /proc/iomem >/tmp/iomem.txt 2>&1
+cat /proc/meminfo >/tmp/meminfo.txt 2>&1
+cat /proc/cmdline >/tmp/cmdline.txt 2>&1
+dump_dt_summary
 dmesg 2>&1 >/tmp/dmesg.log
 tail -n 240 /tmp/dmesg.log >/tmp/dmesg-tail.log
 cat_section dmesg /tmp/dmesg-tail.log
@@ -189,6 +238,11 @@ if [ "$WRITE_STATUS" -eq 0 ]; then
     cp /tmp/output-lenet.txt /mnt/w/runtime-output/output.txt 2>/dev/null
     cp /tmp/dmesg.log /mnt/w/dmesg.log 2>/dev/null
     cp /tmp/dmesg-tail.log /mnt/w/dmesg-tail.log 2>/dev/null
+    cp /tmp/iomem.txt /mnt/w/iomem.txt 2>/dev/null
+    cp /tmp/meminfo.txt /mnt/w/meminfo.txt 2>/dev/null
+    cp /tmp/cmdline.txt /mnt/w/cmdline.txt 2>/dev/null
+    cp /tmp/device-tree-summary.txt /mnt/w/device-tree-summary.txt 2>/dev/null
+    cp /tmp/rcu-cpu-stall-timeout.txt /mnt/w/rcu-cpu-stall-timeout.txt 2>/dev/null
     cp /tmp/dev-dri.txt /mnt/w/dev-dri.txt 2>/dev/null
     cp /tmp/module-load.log /mnt/w/module-load.log 2>/dev/null
 fi
@@ -211,6 +265,7 @@ timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
     -v "$OUT:/vp-run" \
     -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
     -v "$(dirname "$ROOTFS_IMAGE"):/vp-rootfs:ro" \
+    "${DOCKER_DTB_MOUNT[@]}" \
     -v "$PAYLOAD:/payload:ro" \
     -w /vp-run \
     "$DOCKER_IMAGE" \
@@ -252,6 +307,7 @@ cat >"$OUT/manifest.json" <<EOF
     "base": "$VP_RAM_BASE",
     "high": "$VP_RAM_HIGH"
   },
+  "rcu_cpu_stall_timeout": "$RCU_CPU_STALL_TIMEOUT",
   "docker": {
     "binary": "$DOCKER_BIN_RESOLVED",
     "image": "$DOCKER_IMAGE",
@@ -266,6 +322,10 @@ cat >"$OUT/manifest.json" <<EOF
     "rootfs": {
       "path": "$ROOTFS_IMAGE",
       "sha256": "$ROOTFS_SHA"
+    },
+    "dtb": {
+      "path": "$DTB_IMAGE",
+      "sha256": "$DTB_SHA"
     },
     "module": {
       "path": "$KMOD",
@@ -295,6 +355,11 @@ cat >"$OUT/manifest.json" <<EOF
     "dmesg": "dmesg.log",
     "runtime": "runtime-output/runtime.log",
     "output": "runtime-output/output.txt",
+    "iomem": "iomem.txt",
+    "meminfo": "meminfo.txt",
+    "cmdline": "cmdline.txt",
+    "device_tree_summary": "device-tree-summary.txt",
+    "rcu_cpu_stall_timeout": "rcu-cpu-stall-timeout.txt",
     "bad_patterns": "bad-patterns.log"
   }
 }

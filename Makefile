@@ -10,6 +10,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-debug vp-runtime vp-test vp-lenet-full lenet-compare \
+        vp-extmem-dtb \
         petalinux-smoke petalinux-kmod test report clean
 
 help:
@@ -37,6 +38,7 @@ help:
 	  '  make vp-rootfs       Build the modern VP rootfs (requires heavy sources)' \
 	  '  make vp-kmod         Build opendla.ko against the VP kernel' \
 	  '  make vp-kmod-debug   Build opendla.ko with local-only KMD tracing enabled' \
+	  '  make vp-extmem-dtb   Build VP DTB with extmem-backed NVDLA DMA pool' \
 	  '  make vp-runtime      Build ARM64 nvdla_runtime and libnvdla_runtime.so' \
 	  '  make vp-lenet-full   Run the modern VP nv_full LeNet stock-runtime control' \
 	  '  make lenet-compare   Compare stock and modern LeNet artifacts' \
@@ -105,6 +107,9 @@ vp-kmod:
 vp-kmod-debug:
 	@PATCHED_NVDLA_SW="$(CURDIR)/.work/nvdla-sw-debug" NVDLA_EXTRA_PATCH_DIR="$(CURDIR)/patches/debug/nvdla-sw" scripts/nvdla_patch_queue.sh apply
 	@PATCHED_NVDLA_SW="$(CURDIR)/.work/nvdla-sw-debug" NVDLA_KMD_TRACE=1 scripts/vp_build.sh kmod
+
+vp-extmem-dtb:
+	@scripts/vp_extmem_dtb.sh
 
 vp-runtime:
 	@scripts/vp_build.sh runtime
