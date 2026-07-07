@@ -11,7 +11,8 @@ WORK="${PATCHED_NVDLA_SW:-$ROOT/.work/nvdla-sw-patched}"
 PATCH_DIR="${NVDLA_PATCH_DIR:-$ROOT/patches/nvdla-sw}"
 EXTRA_PATCH_DIR="${NVDLA_EXTRA_PATCH_DIR:-}"
 LINUX="${LINUX_SOURCE:-$SOURCES/linux-xlnx}"
-BASE="$(python3 - <<'PY'
+PYTHON_BIN="${PYTHON:-python3}"
+BASE="$("$PYTHON_BIN" - <<'PY'
 import json
 with open("repro.lock.json", "r", encoding="utf-8") as f:
     print(json.load(f)["sources"]["nvdla_sw"]["commit"])
@@ -65,6 +66,8 @@ prepare_worktree() {
   git -C "$WORK" config user.name "${GIT_AUTHOR_NAME:-Codex}"
   git -C "$WORK" config user.email "${GIT_AUTHOR_EMAIL:-codex@local}"
   git -C "$WORK" am --abort >/dev/null 2>&1 || true
+  git -C "$WORK" reset --hard >/dev/null
+  git -C "$WORK" clean -fdx >/dev/null
   git -C "$WORK" fetch "$SOURCE" "$BASE"
   git -C "$WORK" checkout -B "$BRANCH" "$BASE"
   git -C "$WORK" reset --hard "$BASE"
