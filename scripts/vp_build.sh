@@ -18,6 +18,7 @@ USER_CROSS_COMPILE="${CROSS_COMPILE:-}"
 RUNTIME_LDFLAGS="${NVDLA_RUNTIME_LDFLAGS--no-pie}"
 VP_BUILD_PATH="${VP_BUILD_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 NVDLA_KMD_CONFIG="${NVDLA_KMD_CONFIG:-initial}"
+NVDLA_KMD_TRACE="${NVDLA_KMD_TRACE:-0}"
 
 CURRENT_RUN_ID=""
 CURRENT_RUN_DIR=""
@@ -210,6 +211,7 @@ write_environment() {
     echo "toolchain_cxx_version=$TOOLCHAIN_CXX_VERSION"
     echo "runtime_ldflags=$RUNTIME_LDFLAGS"
     echo "nvdla_kmd_config=$NVDLA_KMD_CONFIG"
+    echo "nvdla_kmd_trace=$NVDLA_KMD_TRACE"
   } >"$CURRENT_RUN_DIR/environment.txt"
 }
 
@@ -223,7 +225,7 @@ write_manifest() {
   export PHASE="$phase"
   export STATUS="$status"
   export REASON="$reason"
-  export ROOT WORK LINUX BUILDROOT NVDLA_SW ARCH RUNTIME_LDFLAGS NVDLA_KMD_CONFIG
+  export ROOT WORK LINUX BUILDROOT NVDLA_SW ARCH RUNTIME_LDFLAGS NVDLA_KMD_CONFIG NVDLA_KMD_TRACE
   export TOOLCHAIN_SOURCE RESOLVED_CROSS_COMPILE TOOLCHAIN_GCC TOOLCHAIN_GXX TOOLCHAIN_MACHINE TOOLCHAIN_VERSION TOOLCHAIN_CXX_VERSION
   python3 - <<'PY'
 import hashlib
@@ -326,6 +328,7 @@ manifest = {
     "driver": {
         "module_sha256": sha256(known_artifacts["module"]),
         "kmd_config": os.environ.get("NVDLA_KMD_CONFIG") or None,
+        "kmd_trace": os.environ.get("NVDLA_KMD_TRACE") or None,
     },
     "runtime": {
         "binary_sha256": sha256(known_artifacts["runtime_binary"]),
@@ -560,7 +563,8 @@ build_kmod() {
   echo "Building opendla.ko against $WORK/kernel"
   echo "Using CROSS_COMPILE=$RESOLVED_CROSS_COMPILE ($TOOLCHAIN_SOURCE)"
   echo "Using NVDLA_KMD_CONFIG=$NVDLA_KMD_CONFIG"
-  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" M="$kmd" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" NVDLA_HW_CONFIG="$NVDLA_KMD_CONFIG" modules \
+  echo "Using NVDLA_KMD_TRACE=$NVDLA_KMD_TRACE"
+  run_logged "$log" make -C "$LINUX" O="$WORK/kernel" M="$kmd" ARCH="$ARCH" CROSS_COMPILE="$RESOLVED_CROSS_COMPILE" NVDLA_HW_CONFIG="$NVDLA_KMD_CONFIG" NVDLA_KMD_TRACE="$NVDLA_KMD_TRACE" modules \
     || finish_fail "kmod" "opendla.ko build failed; see kmod.log"
   mkdir -p "$WORK/modules"
   cp "$kmd/opendla.ko" "$WORK/modules/opendla.ko"

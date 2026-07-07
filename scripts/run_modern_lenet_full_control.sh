@@ -6,6 +6,8 @@ WORK_DIR="${WORK_DIR:-$HOME/build/nvdla-peta/vp-modern}"
 LENET_DIR="${LENET_DIR:-$ROOT/artifacts/20260703T115149Z-vp-stock-lenet}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvdla/vp:latest}"
 VP_TIMEOUT="${VP_TIMEOUT:-900}"
+VP_RAM_BASE="${VP_RAM_BASE:-0x40000000}"
+VP_RAM_HIGH="${VP_RAM_HIGH:-0x7fffffff}"
 
 KERNEL_IMAGE="${VP_MODERN_KERNEL:-$WORK_DIR/kernel/arch/arm64/boot/Image.vp2m}"
 ROOTFS_IMAGE="${VP_MODERN_ROOTFS:-$WORK_DIR/buildroot/images/rootfs-smoke.ext4}"
@@ -33,6 +35,29 @@ require_file "$RUNTIME_LIB"
 require_file "$LOADABLE"
 require_file "$IMAGE"
 
+resolve_docker_bin() {
+    if [[ -n "${DOCKER_BIN:-}" ]]; then
+        if ! "$DOCKER_BIN" version >/dev/null 2>&1; then
+            echo "configured DOCKER_BIN is not usable: $DOCKER_BIN" >&2
+            exit 2
+        fi
+        echo "$DOCKER_BIN"
+        return
+    fi
+    local candidate
+    for candidate in \
+        "$(command -v docker 2>/dev/null || true)" \
+        "$(command -v docker.exe 2>/dev/null || true)" \
+        "/mnt/c/Program Files/Docker/Docker/resources/bin/docker.exe"; do
+        if [[ -n "$candidate" && -x "$candidate" ]] && "$candidate" version >/dev/null 2>&1; then
+            echo "$candidate"
+            return
+        fi
+    done
+    echo "missing docker command; set DOCKER_BIN=/path/to/docker or enable Docker Desktop WSL integration" >&2
+    exit 2
+}
+
 hash_file() {
     sha256sum "$1" | awk '{print $1}'
 }
@@ -54,7 +79,8 @@ LOADABLE_SHA="$(hash_file "$LOADABLE")"
 IMAGE_SHA="$(hash_file "$IMAGE")"
 PATCH_SERIES_SHA="$(hash_patch_series)"
 KMOD_VERMAGIC="$(modinfo -F vermagic "$KMOD" 2>/dev/null || true)"
-DOCKER_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
+DOCKER_BIN_RESOLVED="$(resolve_docker_bin)"
+DOCKER_IMAGE_ID="$("$DOCKER_BIN_RESOLVED" image inspect --format '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-vp-modern-lenet-full"
 OUT="$ROOT/artifacts/$RUN_ID"
@@ -76,8 +102,8 @@ CPU = {
 ram = {
     size = 1048576,
     target_port = {
-        base_addr = 0x40000000,
-        high_addr = 0x7fffffff
+        base_addr = $VP_RAM_BASE,
+        high_addr = $VP_RAM_HIGH
     }
 }
 
@@ -180,7 +206,7 @@ chmod +x "$PAYLOAD/run-modern-smoke.sh"
 sha256sum "$PAYLOAD"/* >"$OUT/input-sha256.txt"
 
 set +e
-timeout "$VP_TIMEOUT" docker run --rm -i \
+timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
     -e SC_SIGNAL_WRITE_CHECK=DISABLE \
     -v "$OUT:/vp-run" \
     -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
@@ -222,7 +248,12 @@ cat >"$OUT/manifest.json" <<EOF
   "docker_status": $RUN_STATUS,
   "expected_output": "$EXPECTED_OUTPUT",
   "actual_output": "$OUTPUT_NORMALIZED",
+  "vp_ram": {
+    "base": "$VP_RAM_BASE",
+    "high": "$VP_RAM_HIGH"
+  },
   "docker": {
+    "binary": "$DOCKER_BIN_RESOLVED",
     "image": "$DOCKER_IMAGE",
     "image_id": "$DOCKER_IMAGE_ID"
   },

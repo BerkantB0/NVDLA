@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from .abi import run_abi_check
+from .lenet import DEFAULT_STOCK_DIR, compare_lenet_control
 from .lockcheck import run_lock_check
 from .report import write_report
 from .vp import run_vp_test
@@ -48,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--artifacts", required=True, type=Path)
     report.add_argument("--out", required=True, type=Path)
 
+    lenet = sub.add_parser("lenet-compare", help="Compare stock and modern nv_full LeNet artifacts")
+    lenet.add_argument("--stock-dir", type=Path, default=DEFAULT_STOCK_DIR)
+    lenet.add_argument("--modern-dir", type=Path)
+    lenet.add_argument("--out", type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -72,5 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_abi_check(args.source, args.out)
     if args.command == "report":
         return write_report(args.artifacts, args.out)
+    if args.command == "lenet-compare":
+        return compare_lenet_control(args.stock_dir, args.modern_dir, args.out)
     parser.error(f"unknown command {args.command}")
     return 2

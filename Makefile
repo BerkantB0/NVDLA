@@ -9,7 +9,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 .PHONY: help doctor lock-check xsa-audit unit sources sources-heavy \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-runtime vp-test \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-debug vp-runtime vp-test vp-lenet-full lenet-compare \
         petalinux-smoke petalinux-kmod test report clean
 
 help:
@@ -36,7 +36,10 @@ help:
 	  '  make vp-kernel       Build the modern VP kernel (requires heavy sources)' \
 	  '  make vp-rootfs       Build the modern VP rootfs (requires heavy sources)' \
 	  '  make vp-kmod         Build opendla.ko against the VP kernel' \
+	  '  make vp-kmod-debug   Build opendla.ko with local-only KMD tracing enabled' \
 	  '  make vp-runtime      Build ARM64 nvdla_runtime and libnvdla_runtime.so' \
+	  '  make vp-lenet-full   Run the modern VP nv_full LeNet stock-runtime control' \
+	  '  make lenet-compare   Compare stock and modern LeNet artifacts' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
 	  '' \
 	  'Reports:' \
@@ -99,11 +102,21 @@ vp-rootfs:
 vp-kmod:
 	@scripts/vp_build.sh kmod
 
+vp-kmod-debug:
+	@PATCHED_NVDLA_SW="$(CURDIR)/.work/nvdla-sw-debug" NVDLA_EXTRA_PATCH_DIR="$(CURDIR)/patches/debug/nvdla-sw" scripts/nvdla_patch_queue.sh apply
+	@PATCHED_NVDLA_SW="$(CURDIR)/.work/nvdla-sw-debug" NVDLA_KMD_TRACE=1 scripts/vp_build.sh kmod
+
 vp-runtime:
 	@scripts/vp_build.sh runtime
 
 vp-test:
 	@$(PYTHON) -m nvdla_test_framework vp-test --lane "$${LANE:-reference}" --lock repro.lock.json --timeout "$${VP_TIMEOUT:-120}" --repeat "$${REPEAT:-1}" --mode "$${MODE:-smoke}" --workload "$${WORKLOAD:-sdp_regression_small}"
+
+vp-lenet-full:
+	@scripts/run_modern_lenet_full_control.sh
+
+lenet-compare:
+	@$(PYTHON) -m nvdla_test_framework lenet-compare --stock-dir "$${STOCK_ARTIFACT:-artifacts/20260703T115149Z-vp-stock-lenet}" $${MODERN_ARTIFACT:+--modern-dir "$${MODERN_ARTIFACT}"} $${COMPARE_OUT:+--out "$${COMPARE_OUT}"}
 
 petalinux-smoke:
 	@scripts/petalinux_smoke.sh

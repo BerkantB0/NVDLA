@@ -9,6 +9,7 @@ SOURCES="${SOURCES_DIR:-$ROOT/.external/sources}"
 SOURCE="${NVDLA_SW_SOURCE:-$SOURCES/nvdla-sw}"
 WORK="${PATCHED_NVDLA_SW:-$ROOT/.work/nvdla-sw-patched}"
 PATCH_DIR="${NVDLA_PATCH_DIR:-$ROOT/patches/nvdla-sw}"
+EXTRA_PATCH_DIR="${NVDLA_EXTRA_PATCH_DIR:-}"
 LINUX="${LINUX_SOURCE:-$SOURCES/linux-xlnx}"
 BASE="$(python3 - <<'PY'
 import json
@@ -25,6 +26,7 @@ Usage: $0 {prepare|apply|status|format|check}
 
 prepare  Create/reset $WORK at the pinned upstream base without patches.
 apply    Reset $WORK and apply patches from $PATCH_DIR with git am.
+         If NVDLA_EXTRA_PATCH_DIR is set, apply that queue afterwards.
 status   Print base, worktree, branch, and patch queue status.
 format   Regenerate $PATCH_DIR/*.patch from commits after the base.
 check    Verify patches apply and run linux-xlnx scripts/checkpatch.pl when present.
@@ -74,6 +76,9 @@ apply_queue() {
   if compgen -G "$PATCH_DIR/*.patch" >/dev/null; then
     git -C "$WORK" am --3way "$PATCH_DIR"/*.patch
   fi
+  if [[ -n "$EXTRA_PATCH_DIR" ]] && compgen -G "$EXTRA_PATCH_DIR/*.patch" >/dev/null; then
+    git -C "$WORK" am --3way "$EXTRA_PATCH_DIR"/*.patch
+  fi
 }
 
 format_queue() {
@@ -96,6 +101,9 @@ status_queue() {
   echo "Pristine: $SOURCE"
   echo "Patched: $WORK"
   echo "Patch dir: $PATCH_DIR"
+  if [[ -n "$EXTRA_PATCH_DIR" ]]; then
+    echo "Extra patch dir: $EXTRA_PATCH_DIR"
+  fi
   if [[ -d "$WORK/.git" ]]; then
     echo "Patched HEAD: $(git -C "$WORK" rev-parse --short HEAD)"
     echo "Commits after base: $(git -C "$WORK" rev-list --count "$BASE"..HEAD 2>/dev/null || echo unknown)"
@@ -110,6 +118,12 @@ status_queue() {
     done
   else
     echo "Patch queue: empty"
+  fi
+  if [[ -n "$EXTRA_PATCH_DIR" ]] && compgen -G "$EXTRA_PATCH_DIR/*.patch" >/dev/null; then
+    echo "Extra patch queue:"
+    for patch in "$EXTRA_PATCH_DIR"/*.patch; do
+      echo "  $(basename "$patch")"
+    done
   fi
 }
 
