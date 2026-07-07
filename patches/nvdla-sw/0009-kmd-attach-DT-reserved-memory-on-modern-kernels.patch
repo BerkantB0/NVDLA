@@ -1,0 +1,71 @@
+From 4953fcb9e1eb7fe49b311aaecac9b737759e5ed3 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Tue, 7 Jul 2026 16:21:59 +0100
+Subject: [PATCH 9/9] kmd: attach DT reserved memory on modern kernels
+
+Linux 6.x builds no longer use the legacy dma_declare_coherent_memory
+path from the NVDLA KMD, so a device tree memory-region on the NVDLA
+device is ignored unless the driver explicitly attaches it.
+
+Use of_reserved_mem_device_init() on modern kernels when the device has a
+memory-region property, and release the assignment when the DRM device is
+removed. Device trees without memory-region keep the existing behaviour.
+Also unregister the DRM device if DMA memory setup fails after
+registration.
+
+Tested with make vp-kmod against linux-xlnx 6.6.80-ge29e392a4512.
+In vp-modern with a no-map shared-dma-pool DTB, probe logs assigned
+reserved memory to the NVDLA device. With the pool placed in the VP
+external-memory aperture, the nv_full LeNet control produces the same
+output vector as the stock VP.
+
+Signed-off-by: Codex <codex@local>
+---
+ kmd/port/linux/nvdla_gem.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/kmd/port/linux/nvdla_gem.c b/kmd/port/linux/nvdla_gem.c
+index 0df6d75..6d2acfa 100644
+--- a/kmd/port/linux/nvdla_gem.c
++++ b/kmd/port/linux/nvdla_gem.c
+@@ -44,6 +44,7 @@
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+ #include <drm/drm_gem_dma_helper.h>
+ #include <linux/iosys-map.h>
++#include <linux/of_reserved_mem.h>
+ #define nvdla_drm_gem_vm_ops drm_gem_dma_vm_ops
+ #else
+ #include <drm/drm_gem_cma_helper.h>
+@@ -68,11 +69,15 @@ static const struct drm_gem_object_funcs nvdla_gem_object_funcs;
+ 
+ static int nvdla_declare_coherent_memory(struct device *dev)
+ {
+-	return 0;
++	if (!dev->of_node || !of_property_read_bool(dev->of_node, "memory-region"))
++		return 0;
++
++	return of_reserved_mem_device_init(dev);
+ }
+ 
+ static void nvdla_release_coherent_memory(struct device *dev)
+ {
++	of_reserved_mem_device_release(dev);
+ }
+ 
+ #define nvdla_drm_dev_put(drm) drm_dev_put(drm)
+@@ -542,10 +547,12 @@ int32_t nvdla_drm_probe(struct nvdla_device *nvdla_dev)
+ 	 */
+ 	err = nvdla_declare_coherent_memory(drm->dev);
+ 	if (err)
+-		goto unref;
++		goto unregister;
+ 
+ 	return 0;
+ 
++unregister:
++	drm_dev_unregister(drm);
+ unref:
+ 	nvdla_drm_dev_put(drm);
+ 	return err;
+-- 
+2.43.0
