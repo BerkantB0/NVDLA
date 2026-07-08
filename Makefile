@@ -6,13 +6,13 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet \
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small lenet-compare \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
-        petalinux-smoke petalinux-kmod test report clean
+        vp-small-config-audit vp-sdp-small-diagnostic petalinux-smoke petalinux-kmod test report clean
 
 help:
 	@printf '%s\n' \
@@ -32,6 +32,7 @@ help:
 	  '  make sources         Fetch pinned nvdla/sw sources only' \
 	  '  make sources-heavy   Also fetch pinned linux-xlnx and Buildroot' \
 	  '  make sources-vp      Fetch pinned nvdla/vp and nvdla/hw sources' \
+	  '  make sources-lenet   Fetch pinned LeNet/MNIST source files' \
 	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
 	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
 	  '  make patch-format    Regenerate patches from the patched worktree commits' \
@@ -50,8 +51,13 @@ help:
 	  '  make vp-runtime      Build ARM64 nvdla_runtime and libnvdla_runtime.so' \
 	  '  make vp-lenet-full   Run the modern VP nv_full LeNet stock-runtime control' \
 	  '  make vp-lenet-small  Run the modern VP nv_small LeNet control' \
+	  '  make vp-lenet-small-workload Generate pinned nv_small LeNet workload' \
+	  '  make vp-lenet-small-gate Run the primary nv_small LeNet correctness gate' \
+	  '  make vp-lenet-small-stability Run 100-repeat nv_small LeNet stability gate' \
 	  '  VP_HW_CONFIG=small VP_RUNNER=source-docker LANE=modern make vp-test' \
 	  '  make lenet-compare   Compare stock and modern LeNet artifacts' \
+	  '  make vp-small-config-audit Record nv_small VP/KMD configuration evidence' \
+	  '  make vp-sdp-small-diagnostic Classify current SDP small diagnostic result' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
 	  '' \
 	  'Reports:' \
@@ -78,6 +84,9 @@ sources-heavy:
 
 sources-vp:
 	@scripts/fetch_sources.sh vp
+
+sources-lenet:
+	@$(PYTHON) -m nvdla_test_framework lenet-sources --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}"
 
 patch-prepare:
 	@scripts/nvdla_patch_queue.sh prepare
@@ -154,8 +163,32 @@ vp-lenet-full:
 vp-lenet-small:
 	@VP_HW_CONFIG=small scripts/run_modern_lenet_full_control.sh
 
+vp-lenet-small-workload: sources-lenet
+	@$(PYTHON) -m nvdla_test_framework lenet-workload --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}" --out artifacts/workloads/lenet_small
+
+vp-lenet-small-gate: vp-lenet-small-workload
+	@work="$${WORK_DIR:-$$HOME/build/nvdla-peta/vp-modern}"; \
+	VP_HW_CONFIG=small \
+	VP_RUNNER=source-docker \
+	VP_MODERN_DTB="$${VP_MODERN_DTB:-$$work/dtb/nvdla-vp-modern-small-extmem-pool.dtb}" \
+	LENET_DIR="$(CURDIR)/artifacts/workloads/lenet_small" \
+	LENET_LOADABLE="$(CURDIR)/artifacts/workloads/lenet_small/lenet_mnist.nv_small.nvdla" \
+	EXPECTED_OUTPUT_FILE="$(CURDIR)/artifacts/workloads/lenet_small/expected-output.txt" \
+	scripts/run_modern_lenet_full_control.sh
+
+vp-lenet-small-stability:
+	@REPEAT=100 VP_TIMEOUT=7200 $(MAKE) vp-lenet-small-gate
+
 lenet-compare:
 	@$(PYTHON) -m nvdla_test_framework lenet-compare --stock-dir "$${STOCK_ARTIFACT:-artifacts/20260703T115149Z-vp-stock-lenet}" $${MODERN_ARTIFACT:+--modern-dir "$${MODERN_ARTIFACT}"} $${COMPARE_OUT:+--out "$${COMPARE_OUT}"}
+
+vp-small-config-audit:
+	@$(PYTHON) -m nvdla_test_framework vp-small-config-audit --lock repro.lock.json --work-dir "$${WORK_DIR:-$$HOME/build/nvdla-peta/vp-modern}" --artifacts artifacts
+
+vp-sdp-small-diagnostic:
+	@set +e; \
+	VP_HW_CONFIG=small VP_RUNNER=source-docker VP_TIMEOUT="$${VP_TIMEOUT:-600}" LANE=modern MODE=runtime WORKLOAD=sdp_regression_small $(MAKE) vp-test; \
+	$(PYTHON) -m nvdla_test_framework sdp-small-diagnostic --artifacts artifacts
 
 petalinux-smoke:
 	@scripts/petalinux_smoke.sh

@@ -60,6 +60,48 @@
       "image_id": "sha256:3c6e810dcc0ebf3321c01c47828a8bbf51cf12c515618d9176130f8f93d5d874"
     }
   },
+  "workloads": {
+    "lenet_mnist": {
+      "source_dir": "lenet-mnist",
+      "files": [
+        {
+          "name": "lenet_mnist.prototxt",
+          "url": "https://www.esp.cs.columbia.edu/docs/thirdparty_acc/lenet_mnist.prototxt",
+          "sha256": "C5335B82F509FFB6D5F1EB85FBAB487F1B695892B5E79ED3998E3A30A9363FB1"
+        },
+        {
+          "name": "lenet_mnist.caffemodel",
+          "url": "https://www.esp.cs.columbia.edu/docs/thirdparty_acc/lenet_mnist.caffemodel",
+          "sha256": "D02FD197F5DBA83793B61D19C011406C4309CAF4BFCDBB4E60BD520593068358"
+        },
+        {
+          "name": "lenet_mnist.json",
+          "url": "https://www.esp.cs.columbia.edu/docs/thirdparty_acc/lenet_mnist.json",
+          "sha256": "AC105C59B2762809F09CF1BAFA33C8D59D4C6C827B22B6C1DA75F38F4BCAA890"
+        },
+        {
+          "name": "seven.pgm",
+          "url": "https://www.esp.cs.columbia.edu/docs/thirdparty_acc/seven.pgm",
+          "sha256": "07398106A4A5E51F95C2B514CB4CF84663C54CFC8E2CB411CF1DD002F952E909"
+        }
+      ],
+      "compiler": {
+        "profile": "fast-math",
+        "cprecision": "int8",
+        "configtarget": "nv_small",
+        "quantizationMode": "per-filter",
+        "informat": "nchw"
+      },
+      "expected_output": "0 2 0 0 0 0 0 124 0 0",
+      "expected_loadable_sha256": "4B6AA87846329E46E9468A37FFDC0A111884FA63390CDFBEA26A95A455EDB29D",
+      "target": {
+        "config": "nv_small",
+        "compatible": [
+          "nvidia,nv_small"
+        ]
+      }
+    }
+  },
   "petalinux": {
     "install_dir": "/opt/pkg/petalinux/2024.1",
     "base_version": "2024.1",

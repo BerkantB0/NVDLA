@@ -4,11 +4,57 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nvdla_test_framework.lenet import compare_lenet_control
+from nvdla_test_framework.lenet import analyze_lenet_artifact, compare_lenet_control
 from nvdla_test_framework.common import read_json
 
 
 class LenetCompareTests(unittest.TestCase):
+    def test_analyze_lenet_artifact_records_repeat_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            artifact = root / "artifact"
+            output_root = artifact / "runtime-output"
+            (output_root / "repeat-1").mkdir(parents=True)
+            (output_root / "repeat-2").mkdir(parents=True)
+            expected = "0 2 0 0 0 0 0 124 0 0"
+            (artifact / "manifest.json").write_text(
+                """{
+  "status": "pass",
+  "mode": "lenet_small_control",
+  "vp_hw_config": "small",
+  "vp_runner": "source-docker",
+  "repeat_count": 2,
+  "inputs": {
+    "loadable": {
+      "config": "nv_small"
+    }
+  }
+}
+""",
+                encoding="utf-8",
+            )
+            (artifact / "serial.log").write_text(
+                "Probe NVDLA config nvidia,nv_small\n"
+                "__NVDLA_RENDER_NODE__=/dev/dri/renderD128\n"
+                "10 HWLs done, totally 10 layers\n"
+                "10 HWLs done, totally 10 layers\n",
+                encoding="utf-8",
+            )
+            (artifact / "dmesg.log").write_text("", encoding="utf-8")
+            (artifact / "bad-patterns.log").write_text("", encoding="utf-8")
+            (output_root / "repeat-1" / "output.txt").write_text(expected + "\n", encoding="utf-8")
+            (output_root / "repeat-2" / "output.txt").write_text(expected + "\n", encoding="utf-8")
+
+            rc = analyze_lenet_artifact(artifact, expected)
+            result = read_json(artifact / "lenet-analysis.json")
+            manifest = read_json(artifact / "manifest.json")
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["pass_count"], 2)
+            self.assertEqual(manifest["probe_config"], "nvidia,nv_small")
+            self.assertEqual(len(manifest["repeat_results"]), 2)
+
     def test_classifies_clean_output_mismatch_after_all_layers(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

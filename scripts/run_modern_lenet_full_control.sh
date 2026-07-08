@@ -7,6 +7,7 @@ LENET_DIR="${LENET_DIR:-$ROOT/artifacts/20260703T115149Z-vp-stock-lenet}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvdla/vp:latest}"
 VP_TIMEOUT="${VP_TIMEOUT:-900}"
 VP_HW_CONFIG="${VP_HW_CONFIG:-full}"
+REPEAT="${REPEAT:-1}"
 
 case "$VP_HW_CONFIG" in
     full)
@@ -78,6 +79,10 @@ require_dir() {
 if [[ -n "${EXPECTED_OUTPUT_FILE:-}" ]]; then
     require_file "$EXPECTED_OUTPUT_FILE"
     EXPECTED_OUTPUT="$(tr -s '[:space:]' ' ' <"$EXPECTED_OUTPUT_FILE" | sed 's/^ //; s/ $//')"
+fi
+if ! [[ "$REPEAT" =~ ^[0-9]+$ ]] || [[ "$REPEAT" -lt 1 ]]; then
+    echo "REPEAT must be a positive integer, got $REPEAT" >&2
+    exit 2
 fi
 
 case "$VP_RUNNER" in
@@ -174,6 +179,7 @@ cp "$RUNTIME_BIN" "$PAYLOAD/nvdla_runtime"
 cp "$RUNTIME_LIB" "$PAYLOAD/libnvdla_runtime.so"
 cp "$LOADABLE" "$PAYLOAD/loadable.nvdla"
 cp "$IMAGE" "$PAYLOAD/seven.pgm"
+printf '%s\n' "$REPEAT" >"$PAYLOAD/repeat-count"
 if [[ -n "$RCU_CPU_STALL_TIMEOUT" ]]; then
     printf '%s\n' "$RCU_CPU_STALL_TIMEOUT" >"$PAYLOAD/rcu-cpu-stall-timeout"
 fi
@@ -257,6 +263,10 @@ dump_dt_summary() {
 }
 
 echo "__NVDLA_RUNTIME_BEGIN__"
+repeat=1
+if [ -r /mnt/r/repeat-count ]; then
+    repeat="$(cat /mnt/r/repeat-count)"
+fi
 
 if [ -r /mnt/r/rcu-cpu-stall-timeout ] && [ -w /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout ]; then
     cat /mnt/r/rcu-cpu-stall-timeout >/sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
@@ -288,24 +298,51 @@ if [ -z "$NODE" ]; then
 fi
 echo "__NVDLA_RENDER_NODE__=$NODE"
 
-RUNTIME_STATUS=97
-if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ -n "$NODE" ]; then
-    cd /tmp
-    rm -f output.dimg output-lenet.dimg output-lenet.txt
-    NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/mnt/r /mnt/r/nvdla_runtime \
-        --loadable /mnt/r/loadable.nvdla \
-        --image /mnt/r/seven.pgm \
-        --rawdump >/tmp/runtime.log 2>&1
-    RUNTIME_STATUS=$?
-    if [ -f /tmp/output.dimg ]; then
-        cp /tmp/output.dimg /tmp/output-lenet.dimg
-        cat /tmp/output.dimg >/tmp/output-lenet.txt
+RUNTIME_STATUS=0
+i=1
+while [ "$i" -le "$repeat" ]; do
+    if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ -n "$NODE" ]; then
+        cd /tmp
+        rm -f output.dimg output-lenet.dimg output-lenet.txt
+        NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/mnt/r /mnt/r/nvdla_runtime \
+            --loadable /mnt/r/loadable.nvdla \
+            --image /mnt/r/seven.pgm \
+            --rawdump >/tmp/runtime.$i.log 2>&1
+        RUN_STATUS=$?
+        if [ -f /tmp/output.dimg ]; then
+            cp /tmp/output.dimg /tmp/output-lenet.$i.dimg
+            cat /tmp/output.dimg >/tmp/output-lenet.$i.txt
+            cp /tmp/output-lenet.$i.dimg /tmp/output-lenet.dimg
+            cp /tmp/output-lenet.$i.txt /tmp/output-lenet.txt
+        fi
+    else
+        echo "module_status=$MODULE_STATUS dri_status=$DRI_STATUS node=$NODE" >/tmp/runtime.$i.log
+        RUN_STATUS=98
     fi
-else
-    echo "module_status=$MODULE_STATUS dri_status=$DRI_STATUS node=$NODE" >/tmp/runtime.log
+
+    if [ "$WRITE_STATUS" -eq 0 ]; then
+        mkdir -p /mnt/w/runtime-output/repeat-$i
+        cp /tmp/runtime.$i.log /mnt/w/runtime-output/repeat-$i/runtime.log 2>/dev/null
+        cp /tmp/output-lenet.$i.dimg /mnt/w/runtime-output/repeat-$i/output.dimg 2>/dev/null
+        cp /tmp/output-lenet.$i.txt /mnt/w/runtime-output/repeat-$i/output.txt 2>/dev/null
+    fi
+
+    echo "__NVDLA_STATUS_runtime_$i=$RUN_STATUS"
+    if [ "$RUN_STATUS" -ne 0 ]; then
+        RUNTIME_STATUS=1
+        break
+    fi
+    i=$((i + 1))
+done
+if [ "$RUNTIME_STATUS" -eq 0 ] && { [ "$MODULE_STATUS" -ne 0 ] || [ "$DRI_STATUS" -ne 0 ] || [ -z "$NODE" ]; }; then
     RUNTIME_STATUS=98
 fi
 
+last_repeat="$i"
+if [ "$last_repeat" -gt "$repeat" ]; then
+    last_repeat="$repeat"
+fi
+cp "/tmp/runtime.$last_repeat.log" /tmp/runtime.log 2>/dev/null || : >/tmp/runtime.log
 cat_section runtime /tmp/runtime.log
 echo "__NVDLA_STATUS_runtime=$RUNTIME_STATUS"
 cat_section output /tmp/output-lenet.txt
@@ -333,7 +370,7 @@ if [ "$WRITE_STATUS" -eq 0 ]; then
     cp /tmp/module-load.log /mnt/w/module-load.log 2>/dev/null
 fi
 
-echo "__NVDLA_RESULT__ module=$MODULE_STATUS dri=$DRI_STATUS runtime=$RUNTIME_STATUS"
+echo "__NVDLA_RESULT__ module=$MODULE_STATUS dri=$DRI_STATUS runtime=$RUNTIME_STATUS repeat=$repeat"
 echo "__NVDLA_RUNTIME_END__"
 
 if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ "$RUNTIME_STATUS" -eq 0 ]; then
@@ -410,6 +447,7 @@ cat >"$OUT/manifest.json" <<EOF
   "vp_hw_config": "$VP_HW_CONFIG",
   "vp_runner": "$VP_RUNNER",
   "docker_status": $RUN_STATUS,
+  "repeat_count": $REPEAT,
   "expected_output": "$EXPECTED_OUTPUT",
   "actual_output": "$OUTPUT_NORMALIZED",
   "vp_ram": {
@@ -478,6 +516,19 @@ cat >"$OUT/manifest.json" <<EOF
   }
 }
 EOF
+
+PYTHON_BIN="${PYTHON:-python3}"
+set +e
+PYTHONPATH="$ROOT/tools:${PYTHONPATH:-}" "$PYTHON_BIN" -m nvdla_test_framework lenet-analyze \
+    --artifact "$OUT" \
+    --expected-output "$EXPECTED_OUTPUT"
+ANALYSIS_STATUS=$?
+set -e
+if [[ "$ANALYSIS_STATUS" -ne 0 ]]; then
+    STATUS="fail"
+else
+    STATUS="pass"
+fi
 
 echo "VP modern LeNet $VP_HW_CONFIG status: $STATUS"
 echo "Artifacts: $OUT"

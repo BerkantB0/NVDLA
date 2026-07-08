@@ -4,9 +4,17 @@ import argparse
 from pathlib import Path
 
 from .abi import run_abi_check
-from .lenet import DEFAULT_STOCK_DIR, compare_lenet_control
+from .diagnostics import classify_sdp_small_diagnostic
+from .lenet import (
+    DEFAULT_STOCK_DIR,
+    analyze_lenet_artifact,
+    build_lenet_small_workload,
+    compare_lenet_control,
+    fetch_lenet_sources,
+)
 from .lockcheck import run_lock_check
 from .report import write_report
+from .vp_audit import run_vp_small_config_audit
 from .vp import run_vp_test
 from .workloads import generate_workloads
 from .xsa_audit import run_xsa_audit
@@ -54,6 +62,28 @@ def main(argv: list[str] | None = None) -> int:
     lenet.add_argument("--modern-dir", type=Path)
     lenet.add_argument("--out", type=Path)
 
+    lenet_analyze = sub.add_parser("lenet-analyze", help="Analyze a LeNet correctness artifact")
+    lenet_analyze.add_argument("--artifact", required=True, type=Path)
+    lenet_analyze.add_argument("--expected-output")
+    lenet_analyze.add_argument("--out", type=Path)
+
+    lenet_sources = sub.add_parser("lenet-sources", help="Fetch pinned LeNet/MNIST source files")
+    lenet_sources.add_argument("--lock", required=True, type=Path)
+    lenet_sources.add_argument("--sources-dir", required=True, type=Path)
+
+    lenet_workload = sub.add_parser("lenet-workload", help="Build pinned nv_small LeNet workload")
+    lenet_workload.add_argument("--lock", required=True, type=Path)
+    lenet_workload.add_argument("--sources-dir", required=True, type=Path)
+    lenet_workload.add_argument("--out", required=True, type=Path)
+
+    audit = sub.add_parser("vp-small-config-audit", help="Record nv_small VP/KMD configuration evidence")
+    audit.add_argument("--lock", required=True, type=Path)
+    audit.add_argument("--work-dir", required=True, type=Path)
+    audit.add_argument("--artifacts", required=True, type=Path)
+
+    sdp_diag = sub.add_parser("sdp-small-diagnostic", help="Classify the current nv_small SDP diagnostic run")
+    sdp_diag.add_argument("--artifacts", required=True, type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -80,5 +110,15 @@ def main(argv: list[str] | None = None) -> int:
         return write_report(args.artifacts, args.out)
     if args.command == "lenet-compare":
         return compare_lenet_control(args.stock_dir, args.modern_dir, args.out)
+    if args.command == "lenet-analyze":
+        return analyze_lenet_artifact(args.artifact, args.expected_output, args.out)
+    if args.command == "lenet-sources":
+        return fetch_lenet_sources(args.lock, args.sources_dir)
+    if args.command == "lenet-workload":
+        return build_lenet_small_workload(args.lock, args.sources_dir, args.out)
+    if args.command == "vp-small-config-audit":
+        return run_vp_small_config_audit(args.lock, args.work_dir, args.artifacts)
+    if args.command == "sdp-small-diagnostic":
+        return classify_sdp_small_diagnostic(args.artifacts)
     parser.error(f"unknown command {args.command}")
     return 2

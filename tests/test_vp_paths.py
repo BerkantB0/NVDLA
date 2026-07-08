@@ -130,11 +130,14 @@ class ModernVpPathTests(unittest.TestCase):
                 lua = _write_modern_lua({"kernel": kernel, "rootfs": rootfs, "dtb": dtb}, root)
             text = lua.read_text(encoding="utf-8")
 
+            def lua_path(path: Path) -> str:
+                return str(path).replace("\\", "\\\\")
+
             self.assertIn("base_addr = 0xc0000000", text)
             self.assertIn("high_addr = 0xffffffff", text)
-            self.assertIn(str(kernel), text)
-            self.assertIn(str(rootfs), text)
-            self.assertIn(str(dtb), text)
+            self.assertIn(lua_path(kernel), text)
+            self.assertIn(lua_path(rootfs), text)
+            self.assertIn(lua_path(dtb), text)
             self.assertNotIn("/vp-kernel", text)
 
     def test_small_paths_prefer_small_extmem_dtb_and_vp_binary(self) -> None:
