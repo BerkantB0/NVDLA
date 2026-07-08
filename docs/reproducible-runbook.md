@@ -177,6 +177,52 @@ FPGA bitstream. Stock regression flatbuffers should also be treated carefully;
 NVIDIA issue https://github.com/nvdla/sw/issues/140 records similar reports of
 stock flatbuffer tests failing on stock VP/module combinations.
 
+The source-built `nv_small` VP lane is pinned in `repro.lock.json`:
+
+- `nvdla/vp` at `f7ce663b95adf4f381de186b665becae28df26ed`
+- `nvdla/hw` `nv_small` branch at `771f20cc9e69759d7277978eb41e8d47f1547374`
+
+Fetch and build the `nv_small` VP/CMOD lane with:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources make sources-vp
+
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+SYSTEMC_PREFIX=/path/to/systemc-2.3.0 \
+make vp-small-cmod vp-small-bin vp-small-dtb
+```
+
+`vp-small-cmod` and `vp-small-bin` keep the pinned checkouts pristine by cloning
+them into `$WORK_DIR/vp-small/`. If `SYSTEMC_PREFIX` does not contain
+`include/systemc.h` and a SystemC library, the targets write a `blocked`
+manifest under `artifacts/` with the missing prerequisite rather than
+pretending the lane was tested.
+
+Build and test the modern small-config driver with:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+NVDLA_KMD_CONFIG=small \
+make vp-kmod
+
+VP_HW_CONFIG=small \
+VP_RUNNER=host \
+VP_MODERN_DTB=$HOME/build/nvdla-peta/vp-modern/dtb/nvdla-vp-modern-small-extmem-pool.dtb \
+MODE=runtime \
+WORKLOAD=sdp_regression_small \
+LANE=modern \
+VP_TIMEOUT=900 \
+make vp-test
+```
+
+A valid `nv_small` correctness artifact must show all three layers agreeing:
+the source-built VP/CMOD was configured as `nv_small`, the KMD probe log reports
+`nvidia,nv_small`, and the workload manifest targets `nv_small`. The stock
+`nvdla/vp:latest` Docker image remains a negative/control lane for `nv_small`;
+it must not be used as the dissertation `nv_small` oracle.
+
 Use the direct LeNet control below to compare patched modern-kernel behavior
 against the passing stock `nv_full` VP result:
 
@@ -254,6 +300,21 @@ VP_RAM_HIGH=0xffffffff \
 VP_RCU_CPU_STALL_TIMEOUT=300 \
 VP_TIMEOUT=900 \
 make vp-lenet-full
+```
+
+For the `nv_small` LeNet control, first provide a loadable compiled with
+`--configtarget nv_small --cprecision int8`; then run:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+VP_HW_CONFIG=small \
+VP_RUNNER=host \
+VP_MODERN_DTB=$HOME/build/nvdla-peta/vp-modern/dtb/nvdla-vp-modern-small-extmem-pool.dtb \
+LENET_LOADABLE=$PWD/artifacts/workloads/lenet_small/lenet_mnist.nv_small.nvdla \
+EXPECTED_OUTPUT_FILE=$PWD/artifacts/workloads/lenet_small/expected-output.txt \
+VP_TIMEOUT=900 \
+make vp-lenet-small
 ```
 
 `VP_RCU_CPU_STALL_TIMEOUT=300` is a VP simulation timing control. Without it,
