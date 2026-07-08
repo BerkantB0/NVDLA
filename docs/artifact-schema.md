@@ -21,6 +21,10 @@ Runtime test runs also include, when available:
 - `runtime-compare.log`: target-side golden comparison summary.
 - `runtime-output-compare.json`: host-side exact comparison summary.
 - `runtime-output/o_000000.dimg`: output tensor returned by the runtime server.
+- `lenet-analysis.json`: LeNet/MNIST correctness classification, repeat
+  results, layer/HWL summary, config proof, and bad-pattern summary.
+- `sdp-small-diagnostic.json`: classification for the currently non-blocking
+  `sdp_regression_small` diagnostic timeout.
 
 Build-phase runs include one phase log, such as `toolchain.log`, `kernel.log`, `rootfs.log`, or `kmod.log`.
 
@@ -76,6 +80,19 @@ target. Runtime mode passes only when the VP boots, the KMD loads, a render node
 exists, the runtime server is ready, the flatbuffer client exits cleanly, the
 workload target matches the probed config, the output `.dimg` exactly matches
 the pinned golden, and serial plus `dmesg` contain no bad kernel or VP patterns.
+
+LeNet gate manifests use `mode: "lenet_small_control"` for the primary
+`nv_small` correctness gate. They include `repeat_count`, `pass_count`,
+`repeat_results[]`, `probe_config`, `render_node`, `layer_summary`,
+`first_failure`, and an `analysis` pointer to `lenet-analysis.json`. The gate
+passes only when every repeat produces the expected digit-7 vector, the KMD
+probes `nvidia,nv_small`, the loadable is tagged `nv_small`, layer/HWL progress
+reaches the expected count, and bad-pattern logs are empty.
+
+`vp-small-config-audit` manifests use `mode: "config_audit"` and record the
+source-built VP binary, CMOD, DTB, and KMD hashes, the VP CMake
+`NVDLA_HW_PROJECT`, the Docker `ldd` CMOD resolution, and the latest
+`nvidia,nv_small` probe artifact.
 
 PetaLinux KMD build manifests use `lane: "petalinux-kmod"` and include the
 PetaLinux install path, project path when configured, patch-series hash, module

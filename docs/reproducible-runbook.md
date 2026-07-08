@@ -347,6 +347,10 @@ For the `nv_small` LeNet control, first provide a loadable compiled with
 ```sh
 SOURCES_DIR=$HOME/src/nvdla-peta-sources \
 WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+make sources-lenet vp-lenet-small-workload
+
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
 VP_HW_CONFIG=small \
 VP_RUNNER=source-docker \
 VP_MODERN_DTB=$HOME/build/nvdla-peta/vp-modern/dtb/nvdla-vp-modern-small-extmem-pool.dtb \
@@ -355,6 +359,64 @@ EXPECTED_OUTPUT_FILE=$PWD/artifacts/workloads/lenet_small/expected-output.txt \
 VP_TIMEOUT=900 \
 make vp-lenet-small
 ```
+
+The formal primary `nv_small` correctness gate wraps those steps:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+VP_TIMEOUT=900 \
+make vp-lenet-small-gate
+```
+
+It uses the locked Columbia LeNet/MNIST files from `repro.lock.json`, compiles
+the `nv_small` loadable with the pinned stock VP Docker compiler, runs the
+source-built `nv_small` VP through `VP_RUNNER=source-docker`, and writes
+`lenet-analysis.json` beside the VP artifact. A valid pass requires the KMD to
+probe `nvidia,nv_small`, the loadable to be tagged `nv_small`, all 10 HWLs to
+complete, the output to match `0 2 0 0 0 0 0 124 0 0`, and bad-pattern logs to
+be empty.
+
+For repeat stability, run:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+make vp-lenet-small-stability
+```
+
+This expands to `REPEAT=100 VP_TIMEOUT=7200 make vp-lenet-small-gate`. The
+manifest records `repeat_results`, `pass_count`, `first_failure`, the probed
+compatible string, render node, and layer/HWL summary.
+
+Record the matching VP/KMD configuration proof with:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+make vp-small-config-audit
+```
+
+The audit captures `CMakeCache.txt`'s `NVDLA_HW_PROJECT`, the `ldd` CMOD
+resolution inside the VP Docker image, VP binary/CMOD/DTB/KMD hashes, and the
+latest `nvidia,nv_small` probe artifact.
+
+`sdp_regression_small` is still useful, but only as a diagnostic until its
+source-built `nv_small` VP timeout is explained:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+make vp-sdp-small-diagnostic
+```
+
+That target accepts either a real SDP pass or the currently known timeout
+shape: module and render node are healthy, the KMD probes `nvidia,nv_small`, SDP
+is programmed/enabled, no SDP completion or output file appears, and no bad
+kernel/VP pattern is present. Any different SDP failure remains a hard failure.
+For example, if SDP completion is visible but the runtime client times out
+waiting for the server response, keep the result classified as unresolved rather
+than folding it into the known no-completion timeout.
 
 `VP_RCU_CPU_STALL_TIMEOUT=300` is a VP simulation timing control. Without it,
 the slow SystemC/VP run can trigger Linux RCU stall diagnostics even though the
