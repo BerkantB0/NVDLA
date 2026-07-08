@@ -91,7 +91,7 @@ class ModernVpPathTests(unittest.TestCase):
             self.assertIn("high_addr = 0x7fffffff", text)
             self.assertIn("-kernel /vp-kernel/Image.vp2m", text)
 
-    def test_small_lua_uses_host_paths_and_extmem_by_default(self) -> None:
+    def test_small_lua_uses_source_docker_paths_and_extmem_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             kernel = root / "Image.vp2m"
@@ -111,7 +111,30 @@ class ModernVpPathTests(unittest.TestCase):
             self.assertIn("Image.vp2m", text)
             self.assertIn("-dtb", text)
             self.assertIn("small.dtb", text)
-            self.assertIn("payload", text)
+            self.assertIn("/vp-kernel/Image.vp2m", text)
+            self.assertIn("/vp-rootfs/rootfs-smoke.ext4", text)
+            self.assertIn("/vp-dtb/small.dtb", text)
+            self.assertIn("/payload", text)
+
+    def test_small_lua_can_use_host_paths_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            kernel = root / "Image.vp2m"
+            rootfs = root / "rootfs-smoke.ext4"
+            dtb = root / "small.dtb"
+            kernel.write_bytes(b"kernel")
+            rootfs.write_bytes(b"rootfs")
+            dtb.write_bytes(b"dtb")
+
+            with patch.dict(os.environ, {"VP_HW_CONFIG": "small", "VP_RUNNER": "host"}, clear=False):
+                lua = _write_modern_lua({"kernel": kernel, "rootfs": rootfs, "dtb": dtb}, root)
+            text = lua.read_text(encoding="utf-8")
+
+            self.assertIn("base_addr = 0xc0000000", text)
+            self.assertIn("high_addr = 0xffffffff", text)
+            self.assertIn(str(kernel), text)
+            self.assertIn(str(rootfs), text)
+            self.assertIn(str(dtb), text)
             self.assertNotIn("/vp-kernel", text)
 
     def test_small_paths_prefer_small_extmem_dtb_and_vp_binary(self) -> None:

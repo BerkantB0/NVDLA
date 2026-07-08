@@ -193,9 +193,24 @@ SYSTEMC_PREFIX=/path/to/systemc-2.3.0 \
 make vp-small-cmod vp-small-bin vp-small-dtb
 ```
 
+If WSL does not have a host SystemC install, use the official VP image as the
+build container. It contains `/usr/local/systemc-2.3.0` and the old native tool
+versions expected by upstream VP/HW:
+
+```sh
+SOURCES_DIR=$HOME/src/nvdla-peta-sources \
+WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
+make vp-small-cmod-docker vp-small-bin-docker vp-small-dtb
+```
+
+`sources-vp` fetches the pinned VP/HW repos and the top-level VP submodules.
+It intentionally avoids recursive qbox ROM submodules, because the upstream
+qbox tree still points several nested submodules at legacy `git://` URLs that
+are not needed for this VP build and may refuse connections.
+
 `vp-small-cmod` and `vp-small-bin` keep the pinned checkouts pristine by cloning
 them into `$WORK_DIR/vp-small/`. If `SYSTEMC_PREFIX` does not contain
-`include/systemc.h` and a SystemC library, the targets write a `blocked`
+`include/systemc.h` and a SystemC library, the host targets write a `blocked`
 manifest under `artifacts/` with the missing prerequisite rather than
 pretending the lane was tested.
 
@@ -208,7 +223,7 @@ NVDLA_KMD_CONFIG=small \
 make vp-kmod
 
 VP_HW_CONFIG=small \
-VP_RUNNER=host \
+VP_RUNNER=source-docker \
 VP_MODERN_DTB=$HOME/build/nvdla-peta/vp-modern/dtb/nvdla-vp-modern-small-extmem-pool.dtb \
 MODE=runtime \
 WORKLOAD=sdp_regression_small \
@@ -217,11 +232,35 @@ VP_TIMEOUT=900 \
 make vp-test
 ```
 
+`VP_RUNNER=source-docker` runs the pinned source-built `aarch64_toplevel`
+from `$WORK_DIR/vp-small/install/bin` inside the stock VP Docker image. This
+keeps the `nv_small` hardware model under test while reusing the image's
+SystemC installation. If WSL has a compatible host SystemC install, set
+`VP_RUNNER=host` to run the same binary directly.
+
 A valid `nv_small` correctness artifact must show all three layers agreeing:
 the source-built VP/CMOD was configured as `nv_small`, the KMD probe log reports
 `nvidia,nv_small`, and the workload manifest targets `nv_small`. The stock
 `nvdla/vp:latest` Docker image remains a negative/control lane for `nv_small`;
 it must not be used as the dissertation `nv_small` oracle.
+
+The first source-built `nv_small` smoke gate passed on 2026-07-08 under
+`artifacts/20260708T144613Z-vp-modern-smoke/`: it booted the pinned
+`aarch64_toplevel`, loaded the small-config KMD, probed `nvidia,nv_small`,
+created `/dev/dri/renderD128`, and passed the GEM mmap smoke utility with no
+bad kernel patterns. The same lane then ran LeNet/MNIST successfully under
+`artifacts/20260708T150245Z-vp-modern-lenet-small/`, using the locally compiled
+`nv_small` loadable from `artifacts/20260703T115149Z-vp-stock-lenet/`; the
+output matched the stock digit-7 vector exactly:
+`0 2 0 0 0 0 0 124 0 0`.
+
+The upstream `sdp_regression_small` flatbuffer is not yet the `nv_small`
+correctness gate. The run under
+`artifacts/20260708T144704Z-vp-modern-runtime/` matched the `nv_small` probe
+and inserted the KMD cleanly, but the VP timed out after programming and
+enabling the SDP operation, before an SDP completion event or output file was
+produced. Treat that artifact as the next workload-specific debug input, not as
+evidence that the source-built `nv_small` VP or KMD is generally broken.
 
 Use the direct LeNet control below to compare patched modern-kernel behavior
 against the passing stock `nv_full` VP result:
@@ -309,7 +348,7 @@ For the `nv_small` LeNet control, first provide a loadable compiled with
 SOURCES_DIR=$HOME/src/nvdla-peta-sources \
 WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
 VP_HW_CONFIG=small \
-VP_RUNNER=host \
+VP_RUNNER=source-docker \
 VP_MODERN_DTB=$HOME/build/nvdla-peta/vp-modern/dtb/nvdla-vp-modern-small-extmem-pool.dtb \
 LENET_LOADABLE=$PWD/artifacts/workloads/lenet_small/lenet_mnist.nv_small.nvdla \
 EXPECTED_OUTPUT_FILE=$PWD/artifacts/workloads/lenet_small/expected-output.txt \

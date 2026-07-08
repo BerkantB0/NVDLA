@@ -32,7 +32,7 @@ case "$VP_HW_CONFIG" in
                 DEFAULT_LOADABLE="$LENET_DIR/lenet_mnist.prebuilt.nvdla"
             fi
         fi
-        VP_RUNNER="${VP_RUNNER:-host}"
+        VP_RUNNER="${VP_RUNNER:-source-docker}"
         ;;
     *)
         echo "unsupported VP_HW_CONFIG=$VP_HW_CONFIG; expected full or small" >&2
@@ -49,7 +49,11 @@ DTB_IMAGE="${VP_MODERN_DTB:-}"
 RCU_CPU_STALL_TIMEOUT="${VP_RCU_CPU_STALL_TIMEOUT:-}"
 VP_BINARY="${VP_BINARY:-$WORK_DIR/vp-small/install/bin/aarch64_toplevel}"
 SYSTEMC_PREFIX="${SYSTEMC_PREFIX:-${VP_SYSTEMC_PREFIX:-/usr/local/systemc-2.3.0}}"
-VP_LD_LIBRARY_PATH="${VP_LD_LIBRARY_PATH:-$WORK_DIR/vp-small/install/lib:$WORK_DIR/vp-small/hw/outdir/nv_small/cmod/release/lib:$SYSTEMC_PREFIX/lib-linux64:$SYSTEMC_PREFIX/lib}"
+VP_BINARY_DIR="$(dirname "$VP_BINARY")"
+VP_BINARY_BASENAME="$(basename "$VP_BINARY")"
+VP_LIBRARY_DIR="${VP_LIBRARY_DIR:-$WORK_DIR/vp-small/install/lib}"
+VP_CMOD_LIBRARY_DIR="${VP_CMOD_LIBRARY_DIR:-$WORK_DIR/vp-small/hw/outdir/nv_small/cmod/release/lib}"
+VP_LD_LIBRARY_PATH="${VP_LD_LIBRARY_PATH:-$VP_LIBRARY_DIR:$VP_CMOD_LIBRARY_DIR:$SYSTEMC_PREFIX/lib-linux64:$SYSTEMC_PREFIX/lib}"
 
 LOADABLE="${LENET_LOADABLE:-$DEFAULT_LOADABLE}"
 IMAGE="$LENET_DIR/seven.pgm"
@@ -63,10 +67,27 @@ require_file() {
     fi
 }
 
+require_dir() {
+    local path="$1"
+    if [[ ! -d "$path" ]]; then
+        echo "missing required directory: $path" >&2
+        exit 2
+    fi
+}
+
 if [[ -n "${EXPECTED_OUTPUT_FILE:-}" ]]; then
     require_file "$EXPECTED_OUTPUT_FILE"
     EXPECTED_OUTPUT="$(tr -s '[:space:]' ' ' <"$EXPECTED_OUTPUT_FILE" | sed 's/^ //; s/ $//')"
 fi
+
+case "$VP_RUNNER" in
+    docker|source-docker|host)
+        ;;
+    *)
+        echo "unsupported VP_RUNNER=$VP_RUNNER; expected docker, source-docker, or host" >&2
+        exit 2
+        ;;
+esac
 
 require_file "$KERNEL_IMAGE"
 require_file "$ROOTFS_IMAGE"
@@ -78,8 +99,10 @@ require_file "$IMAGE"
 if [[ -n "$DTB_IMAGE" ]]; then
     require_file "$DTB_IMAGE"
 fi
-if [[ "$VP_RUNNER" == "host" ]]; then
+if [[ "$VP_RUNNER" == "host" || "$VP_RUNNER" == "source-docker" ]]; then
     require_file "$VP_BINARY"
+    require_dir "$VP_LIBRARY_DIR"
+    require_dir "$VP_CMOD_LIBRARY_DIR"
 fi
 
 resolve_docker_bin() {
@@ -136,7 +159,7 @@ PATCH_SERIES_SHA="$(hash_patch_series)"
 KMOD_VERMAGIC="$(modinfo -F vermagic "$KMOD" 2>/dev/null || true)"
 DOCKER_BIN_RESOLVED=""
 DOCKER_IMAGE_ID=""
-if [[ "$VP_RUNNER" == "docker" ]]; then
+if [[ "$VP_RUNNER" == "docker" || "$VP_RUNNER" == "source-docker" ]]; then
     DOCKER_BIN_RESOLVED="$(resolve_docker_bin)"
     DOCKER_IMAGE_ID="$("$DOCKER_BIN_RESOLVED" image inspect --format '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
 fi
@@ -155,7 +178,7 @@ if [[ -n "$RCU_CPU_STALL_TIMEOUT" ]]; then
     printf '%s\n' "$RCU_CPU_STALL_TIMEOUT" >"$PAYLOAD/rcu-cpu-stall-timeout"
 fi
 
-if [[ "$VP_RUNNER" == "docker" ]]; then
+if [[ "$VP_RUNNER" == "docker" || "$VP_RUNNER" == "source-docker" ]]; then
     KERNEL_ARG="/vp-kernel/$(basename "$KERNEL_IMAGE")"
     ROOTFS_ARG="/vp-rootfs/$(basename "$ROOTFS_IMAGE")"
     PAYLOAD_ARG="/payload"
@@ -334,6 +357,21 @@ if [[ "$VP_RUNNER" == "docker" ]]; then
         -w /vp-run \
         "$DOCKER_IMAGE" \
         bash -lc "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua" \
+        | tee "$OUT/serial.log"
+elif [[ "$VP_RUNNER" == "source-docker" ]]; then
+    timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
+        -e SC_SIGNAL_WRITE_CHECK=DISABLE \
+        -v "$OUT:/vp-run" \
+        -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
+        -v "$(dirname "$ROOTFS_IMAGE"):/vp-rootfs:ro" \
+        "${DOCKER_DTB_MOUNT[@]}" \
+        -v "$PAYLOAD:/payload:ro" \
+        -v "$VP_BINARY_DIR:/vp-small-bin:ro" \
+        -v "$VP_LIBRARY_DIR:/vp-small-lib:ro" \
+        -v "$VP_CMOD_LIBRARY_DIR:/vp-small-cmod:ro" \
+        -w /vp-run \
+        "$DOCKER_IMAGE" \
+        bash -lc "export LD_LIBRARY_PATH=/vp-small-lib:/vp-small-cmod:/usr/local/systemc-2.3.0/lib-linux64:\${LD_LIBRARY_PATH:-}; cd /vp-run && /vp-small-bin/$VP_BINARY_BASENAME -c /vp-run/modern-vp.lua" \
         | tee "$OUT/serial.log"
 else
     timeout "$VP_TIMEOUT" env SC_SIGNAL_WRITE_CHECK=DISABLE LD_LIBRARY_PATH="$VP_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}" \

@@ -6,6 +6,7 @@ cd "$ROOT"
 
 WHAT="${1:-nvdla-sw}"
 SOURCE_ROOT="${SOURCES_DIR:-}"
+FETCHED_PATH=""
 
 json_value() {
   local expr="$1"
@@ -53,6 +54,32 @@ fetch_repo() {
   git -C "$path" fetch --depth 1 origin "$commit"
   git -C "$path" checkout --detach "$commit"
   git -C "$path" rev-parse HEAD
+  FETCHED_PATH="$path"
+}
+
+fetch_submodules() {
+  local path="$1"
+  if [[ ! -f "$path/.gitmodules" ]]; then
+    return 0
+  fi
+  echo "Fetching submodules for $path"
+  git -C "$path" submodule sync
+  git -C "$path" submodule update --init --depth 1
+  git -C "$path" submodule status
+}
+
+fetch_qbox_dtc() {
+  local path="$1"
+  local qbox="$path/libs/qbox"
+  local commit
+  if [[ ! -e "$qbox/.git" ]]; then
+    return 0
+  fi
+  commit="$(git -C "$qbox" rev-parse HEAD:dtc)"
+  echo "Fetching qbox dtc submodule commit $commit"
+  git -C "$qbox" config submodule.dtc.url https://github.com/qemu/dtc.git
+  git -C "$qbox" submodule update --init --depth 1 dtc
+  git -C "$qbox" submodule status dtc
 }
 
 case "$WHAT" in
@@ -67,12 +94,16 @@ case "$WHAT" in
     ;;
   nvdla-vp)
     fetch_repo "nvdla/vp" nvdla_vp
+    fetch_submodules "$FETCHED_PATH"
+    fetch_qbox_dtc "$FETCHED_PATH"
     ;;
   nvdla-hw)
     fetch_repo "nvdla/hw" nvdla_hw
     ;;
   vp)
     fetch_repo "nvdla/vp" nvdla_vp
+    fetch_submodules "$FETCHED_PATH"
+    fetch_qbox_dtc "$FETCHED_PATH"
     fetch_repo "nvdla/hw" nvdla_hw
     ;;
   all)
@@ -85,6 +116,8 @@ case "$WHAT" in
     fetch_repo "linux-xlnx" linux_xlnx
     fetch_repo "Buildroot" buildroot
     fetch_repo "nvdla/vp" nvdla_vp
+    fetch_submodules "$FETCHED_PATH"
+    fetch_qbox_dtc "$FETCHED_PATH"
     fetch_repo "nvdla/hw" nvdla_hw
     ;;
   *)

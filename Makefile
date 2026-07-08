@@ -11,7 +11,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small lenet-compare \
-        vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-dtb \
+        vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         petalinux-smoke petalinux-kmod test report clean
 
 help:
@@ -44,10 +44,13 @@ help:
 	  '  make vp-extmem-dtb   Build VP DTB with extmem-backed NVDLA DMA pool' \
 	  '  make vp-small-cmod   Build/verify nv_small CMOD from pinned nvdla/hw' \
 	  '  make vp-small-bin    Build/verify nv_small aarch64_toplevel from pinned nvdla/vp' \
+	  '  make vp-small-cmod-docker Build nv_small CMOD inside nvdla/vp Docker image' \
+	  '  make vp-small-bin-docker  Build nv_small aarch64_toplevel inside nvdla/vp Docker image' \
 	  '  make vp-small-dtb    Build VP DTB with nv_small compatible string' \
 	  '  make vp-runtime      Build ARM64 nvdla_runtime and libnvdla_runtime.so' \
 	  '  make vp-lenet-full   Run the modern VP nv_full LeNet stock-runtime control' \
 	  '  make vp-lenet-small  Run the modern VP nv_small LeNet control' \
+	  '  VP_HW_CONFIG=small VP_RUNNER=source-docker LANE=modern make vp-test' \
 	  '  make lenet-compare   Compare stock and modern LeNet artifacts' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
 	  '' \
@@ -129,6 +132,12 @@ vp-small-cmod:
 
 vp-small-bin:
 	@scripts/vp_small_build.sh bin
+
+vp-small-cmod-docker:
+	@bash scripts/vp_small_docker.sh cmod
+
+vp-small-bin-docker:
+	@bash scripts/vp_small_docker.sh bin
 
 vp-small-dtb:
 	@VP_HW_CONFIG=small scripts/vp_extmem_dtb.sh

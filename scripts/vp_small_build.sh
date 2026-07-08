@@ -59,6 +59,13 @@ run_logged() {
   return "$status"
 }
 
+run_logged_in() {
+  local cwd="$1"
+  local log="$2"
+  shift 2
+  (cd "$cwd" && run_logged "$log" "$@")
+}
+
 sha_file() {
   local path="$1"
   if [[ -f "$path" ]] && command -v sha256sum >/dev/null 2>&1; then
@@ -73,13 +80,23 @@ git_sha() {
   fi
 }
 
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '"%s"' "$value"
+}
+
 write_manifest() {
   local status="$1"
   local phase="$2"
   local reason="${3:-}"
   local reason_json="null"
   if [[ -n "$reason" ]]; then
-    reason_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$reason")"
+    reason_json="$(json_string "$reason")"
   fi
   cat >"$CURRENT_RUN_DIR/manifest.json" <<EOF
 {
@@ -191,25 +208,59 @@ prepare_worktree() {
   git -C "$dst" checkout --detach FETCH_HEAD >/dev/null
   git -C "$dst" reset --hard FETCH_HEAD >/dev/null
   git -C "$dst" clean -fdx >/dev/null
+  if [[ -f "$dst/.gitmodules" ]]; then
+    local key sub_path sub_name local_submodule
+    while read -r key sub_path; do
+      sub_name="${key#submodule.}"
+      sub_name="${sub_name%.path}"
+      local_submodule="$source/$sub_path"
+      if [[ -e "$local_submodule/.git" ]]; then
+        git -C "$dst" config "submodule.$sub_name.url" "$local_submodule"
+      fi
+    done < <(git -C "$dst" config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)
+    git -C "$dst" submodule update --init >/dev/null
+    if [[ -e "$dst/libs/qbox/.git" && -e "$source/libs/qbox/dtc/.git" ]]; then
+      git -C "$dst/libs/qbox" config submodule.dtc.url "$source/libs/qbox/dtc"
+      git -C "$dst/libs/qbox" submodule update --init dtc >/dev/null
+    fi
+  fi
 }
 
 build_cmod() {
   local phase="cmod"
   start_run "$phase"
   local log="$CURRENT_RUN_DIR/cmod.log"
+  local cpp_bin gcc_bin gxx_bin perl_bin java_bin python_bin
   require_cmd "$phase" git
   require_cmd "$phase" make
   require_cmd "$phase" gcc
   require_cmd "$phase" g++
   require_cmd "$phase" perl
+  require_cmd "$phase" java
+  cpp_bin="$(command -v cpp || true)"
+  gcc_bin="$(command -v gcc || true)"
+  gxx_bin="$(command -v g++ || true)"
+  perl_bin="$(command -v perl || true)"
+  java_bin="$(command -v java || true)"
+  python_bin="${PYTHON_BIN:-$(command -v python || command -v python3 || true)}"
+  if [[ -z "$cpp_bin" || -z "$gcc_bin" || -z "$gxx_bin" || -z "$perl_bin" || -z "$java_bin" || -z "$python_bin" ]]; then
+    finish_blocked "$phase" "missing one or more HW generation tools: cpp=$cpp_bin gcc=$gcc_bin g++=$gxx_bin perl=$perl_bin java=$java_bin python=$python_bin"
+  fi
   resolve_systemc "$phase"
   prepare_worktree "$NVDLA_HW_SOURCE" "$HW_WORK" "$phase"
 
   echo "Building $VP_HW_PROJECT CMOD from $HW_WORK"
   echo "Using SYSTEMC_PREFIX=$SYSTEMC_PREFIX"
-  run_logged "$log" make -C "$HW_WORK" USE_VM_ENV=1 VM_PROJ="$VP_HW_PROJECT" VM_SYSTEMC="$SYSTEMC_PREFIX" tree.make \
+  run_logged "$log" make -C "$HW_WORK" USE_VM_ENV=1 VM_PROJ="$VP_HW_PROJECT" VM_SYSTEMC="$SYSTEMC_PREFIX" VM_CPP="$cpp_bin" VM_GCC="$gcc_bin" VM_CXX="$gxx_bin" VM_PERL="$perl_bin" VM_JAVA="$java_bin" VM_PYTHON="$python_bin" tree.make \
     || finish_fail "$phase" "failed to generate tree.make"
-  run_logged "$log" make -C "$HW_WORK/cmod" PROJECT="$VP_HW_PROJECT" OUTDIR=outdir SYSTEMC="$SYSTEMC_PREFIX" CXX="$(command -v g++)" CC="$(command -v g++)" CPP="$(command -v cpp || echo cpp)" PERL="$(command -v perl)" CXXFLAGS="$NVDLA_CMOD_CXXFLAGS" \
+  run_logged "$log" make -C "$HW_WORK/spec/defs" PROJECT="$VP_HW_PROJECT" OUTDIR=outdir CPP="$cpp_bin" PYTHON="$python_bin" \
+    || finish_fail "$phase" "failed to generate nv_small project definitions"
+  run_logged "$log" make -C "$HW_WORK/spec/manual" PROJECT="$VP_HW_PROJECT" OUTDIR=outdir CPP="$cpp_bin" PERL="$perl_bin" JAVA="$java_bin" PYTHON="$python_bin" \
+    || finish_fail "$phase" "failed to generate nv_small manual register headers"
+  if [[ ! -f "$HW_WORK/outdir/$VP_HW_PROJECT/spec/manual/opendla.uh" || ! -f "$HW_WORK/outdir/$VP_HW_PROJECT/spec/manual/opendla.h" ]]; then
+    finish_fail "$phase" "manual spec generation completed but opendla headers were missing"
+  fi
+  run_logged "$log" make -C "$HW_WORK/cmod" PROJECT="$VP_HW_PROJECT" OUTDIR=outdir SYSTEMC="$SYSTEMC_PREFIX" CXX="$gxx_bin" CC="$gxx_bin" CPP="$cpp_bin" PERL="$perl_bin" CXXFLAGS="$NVDLA_CMOD_CXXFLAGS" \
     || finish_fail "$phase" "failed to build nv_small CMOD"
 
   if [[ ! -f "$CMOD_LIB" || ! -f "$CMOD_INCLUDE" ]]; then
@@ -237,18 +288,25 @@ build_bin() {
   if [[ "$VP_DISABLE_WERROR" == "1" ]]; then
     perl -0pi -e 's/[ \t]-Werror\b//g' "$VP_WORK/CMakeLists.txt" "$VP_WORK/models/nvdla/CMakeLists.txt"
   fi
+  sed -i 's#${CMAKE_SOURCE_DIR}/libs/tlm2c.build#${CMAKE_BINARY_DIR}/libs/tlm2c.build#g' "$VP_WORK/CMakeLists.txt"
 
   echo "Building $VP_HW_PROJECT VP binary from $VP_WORK"
   echo "Using NVDLA_HW_PREFIX=$HW_WORK"
   echo "Using SYSTEMC_PREFIX=$SYSTEMC_PREFIX"
   mkdir -p "$VP_BUILD" "$VP_INSTALL"
-  run_logged "$log" cmake -S "$VP_WORK" -B "$VP_BUILD" \
+  run_logged_in "$VP_BUILD" "$log" cmake \
     -DCMAKE_INSTALL_PREFIX="$VP_INSTALL" \
     -DSYSTEMC_PREFIX="$SYSTEMC_PREFIX" \
     -DNVDLA_HW_PREFIX="$HW_WORK" \
     -DNVDLA_HW_PROJECT="$VP_HW_PROJECT" \
     -DCMAKE_BUILD_TYPE="$VP_CMAKE_BUILD_TYPE" \
+    "$VP_WORK" \
     || finish_fail "$phase" "VP CMake configure failed"
+  if [[ -f "$VP_WORK/libs/greenlib/greenscript/gsp_sc.i" ]]; then
+    mkdir -p "$VP_BUILD/libs/greenlib/greenscript"
+    ln -sf "$VP_WORK/libs/greenlib/greenscript/gsp_sc.i" "$VP_BUILD/libs/greenlib/greenscript/gsp_sc.i"
+    ln -sfn "$VP_WORK/libs/greenlib/greenscript/include" "$VP_BUILD/libs/greenlib/greenscript/include"
+  fi
   run_logged "$log" make -C "$VP_BUILD" -j"$(nproc)" \
     || finish_fail "$phase" "VP build failed"
   run_logged "$log" make -C "$VP_BUILD" install \

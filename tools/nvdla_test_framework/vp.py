@@ -29,6 +29,9 @@ KERNEL_BAD_PATTERNS = [
 
 SMOKE_SOURCE = repo_root() / "tools" / "smoke" / "nvdla-kmd-smoke.c"
 RUNTIME_CLIENT = repo_root() / "tools" / "runtime" / "nvdla_flatbuf_client.py"
+DOCKER_PATH_RUNNERS = {"docker", "source-docker"}
+SOURCE_VP_RUNNERS = {"host", "source-docker"}
+SUPPORTED_MODERN_RUNNERS = {"docker", "host", "source-docker"}
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -677,17 +680,18 @@ def _write_modern_lua(paths: dict[str, Path | None], out_dir: Path) -> Path:
     assert isinstance(rootfs, Path)
 
     hw_config = os.environ.get("VP_HW_CONFIG", "full")
-    runner = os.environ.get("VP_RUNNER") or ("host" if hw_config == "small" else "docker")
+    runner = os.environ.get("VP_RUNNER") or ("source-docker" if hw_config == "small" else "docker")
+    use_docker_paths = runner in DOCKER_PATH_RUNNERS
     ram_base = os.environ.get("VP_RAM_BASE") or ("0xc0000000" if hw_config == "small" else "0x40000000")
     ram_high = os.environ.get("VP_RAM_HIGH") or ("0xffffffff" if hw_config == "small" else "0x7fffffff")
 
     dtb_arg = ""
-    if isinstance(dtb, Path) and runner == "docker":
+    if isinstance(dtb, Path) and use_docker_paths:
         dtb_arg = f" -dtb /vp-dtb/{dtb.name}"
     elif isinstance(dtb, Path):
         dtb_arg = f" -dtb {dtb}"
 
-    if runner == "docker":
+    if use_docker_paths:
         kernel_arg = f"/vp-kernel/{kernel.name}"
         rootfs_arg = f"/vp-rootfs/{rootfs.name}"
         payload_arg = "/payload"
@@ -932,15 +936,17 @@ def _run_modern_vp(
 ) -> dict[str, Any]:
     paths = _modern_paths(work_dir, sources_dir)
     hw_config = os.environ.get("VP_HW_CONFIG", "full")
-    runner = os.environ.get("VP_RUNNER") or ("host" if hw_config == "small" else "docker")
+    runner = os.environ.get("VP_RUNNER") or ("source-docker" if hw_config == "small" else "docker")
     required_missing = _check_required_paths(paths, ["kernel", "rootfs", "module"])
+    if runner not in SUPPORTED_MODERN_RUNNERS:
+        required_missing.append(f"runner: unsupported VP_RUNNER={runner}; expected docker, host, or source-docker")
     if hw_config == "small" and not paths.get("dtb"):
         required_missing.append("dtb: build with VP_HW_CONFIG=small make vp-small-dtb or set VP_MODERN_DTB")
     smoke_build: dict[str, Any] | None = None
     workload: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
     lua: Path | None = None
-    if runner == "host":
+    if runner in SOURCE_VP_RUNNERS:
         required_missing.extend(_check_required_paths(paths, ["vp_binary", "vp_library_dir", "vp_cmod_library_dir"]))
 
     if mode == "smoke" and not SMOKE_SOURCE.exists():
@@ -1015,6 +1021,52 @@ def _run_modern_vp(
                 "bash",
                 "-lc",
                 "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua",
+            ]
+        )
+    elif runner == "source-docker":
+        vp_binary = paths["vp_binary"]
+        vp_library_dir = paths["vp_library_dir"]
+        vp_cmod_library_dir = paths["vp_cmod_library_dir"]
+        assert isinstance(vp_binary, Path)
+        assert isinstance(vp_library_dir, Path)
+        assert isinstance(vp_cmod_library_dir, Path)
+        command = [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "-e",
+            "SC_SIGNAL_WRITE_CHECK=DISABLE",
+            "-v",
+            _docker_mount(out_dir, "/vp-run"),
+            "-v",
+            _docker_mount(kernel.parent, "/vp-kernel", readonly=True),
+            "-v",
+            _docker_mount(rootfs.parent, "/vp-rootfs", readonly=True),
+            "-v",
+            _docker_mount(out_dir / "payload", "/payload", readonly=True),
+            "-v",
+            _docker_mount(vp_binary.parent, "/vp-small-bin", readonly=True),
+            "-v",
+            _docker_mount(vp_library_dir, "/vp-small-lib", readonly=True),
+            "-v",
+            _docker_mount(vp_cmod_library_dir, "/vp-small-cmod", readonly=True),
+        ]
+        if isinstance(dtb, Path):
+            command.extend(["-v", _docker_mount(dtb.parent, "/vp-dtb", readonly=True)])
+        command.extend(
+            [
+                "-w",
+                "/vp-run",
+                image,
+                "bash",
+                "-lc",
+                (
+                    "export LD_LIBRARY_PATH="
+                    "/vp-small-lib:/vp-small-cmod:/usr/local/systemc-2.3.0/lib-linux64:"
+                    "${LD_LIBRARY_PATH:-}; "
+                    f"cd /vp-run && /vp-small-bin/{vp_binary.name} -c /vp-run/modern-vp.lua"
+                ),
             ]
         )
     else:
