@@ -36,6 +36,18 @@
       "commit": "1297c6d3dc26bd8f28724928e846106596ba7a71",
       "tag": "2024.02.11",
       "local_path": ".external/sources/buildroot"
+    },
+    "nvdla_vp": {
+      "url": "https://github.com/nvdla/vp.git",
+      "commit": "f7ce663b95adf4f381de186b665becae28df26ed",
+      "branch": "master",
+      "local_path": ".external/sources/nvdla-vp"
+    },
+    "nvdla_hw": {
+      "url": "https://github.com/nvdla/hw.git",
+      "commit": "771f20cc9e69759d7277978eb41e8d47f1547374",
+      "branch": "nv_small",
+      "local_path": ".external/sources/nvdla-hw"
     }
   },
   "docker": {
@@ -64,4 +76,3 @@
     }
   }
 }
-

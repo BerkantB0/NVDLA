@@ -65,13 +65,30 @@ case "$WHAT" in
   buildroot)
     fetch_repo "Buildroot" buildroot
     ;;
+  nvdla-vp)
+    fetch_repo "nvdla/vp" nvdla_vp
+    ;;
+  nvdla-hw)
+    fetch_repo "nvdla/hw" nvdla_hw
+    ;;
+  vp)
+    fetch_repo "nvdla/vp" nvdla_vp
+    fetch_repo "nvdla/hw" nvdla_hw
+    ;;
   all)
     fetch_repo "nvdla/sw" nvdla_sw
     fetch_repo "linux-xlnx" linux_xlnx
     fetch_repo "Buildroot" buildroot
     ;;
+  all-with-vp)
+    fetch_repo "nvdla/sw" nvdla_sw
+    fetch_repo "linux-xlnx" linux_xlnx
+    fetch_repo "Buildroot" buildroot
+    fetch_repo "nvdla/vp" nvdla_vp
+    fetch_repo "nvdla/hw" nvdla_hw
+    ;;
   *)
-    echo "Usage: $0 [nvdla-sw|linux-xlnx|buildroot|all]" >&2
+    echo "Usage: $0 [nvdla-sw|linux-xlnx|buildroot|nvdla-vp|nvdla-hw|vp|all|all-with-vp]" >&2
     exit 2
     ;;
 esac
