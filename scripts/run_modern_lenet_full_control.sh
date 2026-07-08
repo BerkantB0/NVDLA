@@ -6,8 +6,39 @@ WORK_DIR="${WORK_DIR:-$HOME/build/nvdla-peta/vp-modern}"
 LENET_DIR="${LENET_DIR:-$ROOT/artifacts/20260703T115149Z-vp-stock-lenet}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvdla/vp:latest}"
 VP_TIMEOUT="${VP_TIMEOUT:-900}"
-VP_RAM_BASE="${VP_RAM_BASE:-0x40000000}"
-VP_RAM_HIGH="${VP_RAM_HIGH:-0x7fffffff}"
+VP_HW_CONFIG="${VP_HW_CONFIG:-full}"
+
+case "$VP_HW_CONFIG" in
+    full)
+        VP_RAM_BASE="${VP_RAM_BASE:-0x40000000}"
+        VP_RAM_HIGH="${VP_RAM_HIGH:-0x7fffffff}"
+        RUN_SUFFIX="vp-modern-lenet-full"
+        MODE_NAME="lenet_full_control"
+        LOADABLE_CONFIG="nv_full"
+        DEFAULT_LOADABLE="$LENET_DIR/lenet_mnist.nv_full.nvdla"
+        VP_RUNNER="${VP_RUNNER:-docker}"
+        ;;
+    small)
+        VP_RAM_BASE="${VP_RAM_BASE:-0xc0000000}"
+        VP_RAM_HIGH="${VP_RAM_HIGH:-0xffffffff}"
+        RUN_SUFFIX="vp-modern-lenet-small"
+        MODE_NAME="lenet_small_control"
+        LOADABLE_CONFIG="nv_small"
+        DEFAULT_LOADABLE="$LENET_DIR/lenet_mnist.nv_small.nvdla"
+        if [[ -z "${LENET_LOADABLE:-}" && ! -f "$DEFAULT_LOADABLE" ]]; then
+            if [[ -f "$LENET_DIR/lenet_mnist.local.nvdla" ]]; then
+                DEFAULT_LOADABLE="$LENET_DIR/lenet_mnist.local.nvdla"
+            elif [[ -f "$LENET_DIR/lenet_mnist.prebuilt.nvdla" ]]; then
+                DEFAULT_LOADABLE="$LENET_DIR/lenet_mnist.prebuilt.nvdla"
+            fi
+        fi
+        VP_RUNNER="${VP_RUNNER:-host}"
+        ;;
+    *)
+        echo "unsupported VP_HW_CONFIG=$VP_HW_CONFIG; expected full or small" >&2
+        exit 2
+        ;;
+esac
 
 KERNEL_IMAGE="${VP_MODERN_KERNEL:-$WORK_DIR/kernel/arch/arm64/boot/Image.vp2m}"
 ROOTFS_IMAGE="${VP_MODERN_ROOTFS:-$WORK_DIR/buildroot/images/rootfs-smoke.ext4}"
@@ -16,8 +47,11 @@ RUNTIME_BIN="${VP_RUNTIME_BIN:-$WORK_DIR/runtime/nvdla_runtime}"
 RUNTIME_LIB="${VP_RUNTIME_LIB:-$WORK_DIR/runtime/libnvdla_runtime.so}"
 DTB_IMAGE="${VP_MODERN_DTB:-}"
 RCU_CPU_STALL_TIMEOUT="${VP_RCU_CPU_STALL_TIMEOUT:-}"
+VP_BINARY="${VP_BINARY:-$WORK_DIR/vp-small/install/bin/aarch64_toplevel}"
+SYSTEMC_PREFIX="${SYSTEMC_PREFIX:-${VP_SYSTEMC_PREFIX:-/usr/local/systemc-2.3.0}}"
+VP_LD_LIBRARY_PATH="${VP_LD_LIBRARY_PATH:-$WORK_DIR/vp-small/install/lib:$WORK_DIR/vp-small/hw/outdir/nv_small/cmod/release/lib:$SYSTEMC_PREFIX/lib-linux64:$SYSTEMC_PREFIX/lib}"
 
-LOADABLE="$LENET_DIR/lenet_mnist.nv_full.nvdla"
+LOADABLE="${LENET_LOADABLE:-$DEFAULT_LOADABLE}"
 IMAGE="$LENET_DIR/seven.pgm"
 EXPECTED_OUTPUT="${EXPECTED_OUTPUT:-0 2 0 0 0 0 0 124 0 0}"
 
@@ -29,6 +63,11 @@ require_file() {
     fi
 }
 
+if [[ -n "${EXPECTED_OUTPUT_FILE:-}" ]]; then
+    require_file "$EXPECTED_OUTPUT_FILE"
+    EXPECTED_OUTPUT="$(tr -s '[:space:]' ' ' <"$EXPECTED_OUTPUT_FILE" | sed 's/^ //; s/ $//')"
+fi
+
 require_file "$KERNEL_IMAGE"
 require_file "$ROOTFS_IMAGE"
 require_file "$KMOD"
@@ -38,6 +77,9 @@ require_file "$LOADABLE"
 require_file "$IMAGE"
 if [[ -n "$DTB_IMAGE" ]]; then
     require_file "$DTB_IMAGE"
+fi
+if [[ "$VP_RUNNER" == "host" ]]; then
+    require_file "$VP_BINARY"
 fi
 
 resolve_docker_bin() {
@@ -92,10 +134,14 @@ if [[ -n "$DTB_IMAGE" ]]; then
 fi
 PATCH_SERIES_SHA="$(hash_patch_series)"
 KMOD_VERMAGIC="$(modinfo -F vermagic "$KMOD" 2>/dev/null || true)"
-DOCKER_BIN_RESOLVED="$(resolve_docker_bin)"
-DOCKER_IMAGE_ID="$("$DOCKER_BIN_RESOLVED" image inspect --format '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
+DOCKER_BIN_RESOLVED=""
+DOCKER_IMAGE_ID=""
+if [[ "$VP_RUNNER" == "docker" ]]; then
+    DOCKER_BIN_RESOLVED="$(resolve_docker_bin)"
+    DOCKER_IMAGE_ID="$("$DOCKER_BIN_RESOLVED" image inspect --format '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
+fi
 
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-vp-modern-lenet-full"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$RUN_SUFFIX"
 OUT="$ROOT/artifacts/$RUN_ID"
 PAYLOAD="$OUT/payload"
 mkdir -p "$PAYLOAD"
@@ -103,16 +149,33 @@ mkdir -p "$PAYLOAD"
 cp "$KMOD" "$PAYLOAD/opendla.ko"
 cp "$RUNTIME_BIN" "$PAYLOAD/nvdla_runtime"
 cp "$RUNTIME_LIB" "$PAYLOAD/libnvdla_runtime.so"
-cp "$LOADABLE" "$PAYLOAD/lenet_mnist.nv_full.nvdla"
+cp "$LOADABLE" "$PAYLOAD/loadable.nvdla"
 cp "$IMAGE" "$PAYLOAD/seven.pgm"
 if [[ -n "$RCU_CPU_STALL_TIMEOUT" ]]; then
     printf '%s\n' "$RCU_CPU_STALL_TIMEOUT" >"$PAYLOAD/rcu-cpu-stall-timeout"
 fi
 
+if [[ "$VP_RUNNER" == "docker" ]]; then
+    KERNEL_ARG="/vp-kernel/$(basename "$KERNEL_IMAGE")"
+    ROOTFS_ARG="/vp-rootfs/$(basename "$ROOTFS_IMAGE")"
+    PAYLOAD_ARG="/payload"
+    OUT_ARG="/vp-run"
+    DTB_RUNTIME_ARG="$DTB_ARG"
+else
+    KERNEL_ARG="$KERNEL_IMAGE"
+    ROOTFS_ARG="$ROOTFS_IMAGE"
+    PAYLOAD_ARG="$PAYLOAD"
+    OUT_ARG="$OUT"
+    DTB_RUNTIME_ARG=""
+    if [[ -n "$DTB_IMAGE" ]]; then
+        DTB_RUNTIME_ARG=" -dtb $DTB_IMAGE"
+    fi
+fi
+
 cat >"$OUT/modern-vp.lua" <<EOF
 CPU = {
     library = "libqbox-nvdla.so",
-    extra_arguments = '-machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 1024 -kernel /vp-kernel/$(basename "$KERNEL_IMAGE")$DTB_ARG --append "root=/dev/vda" -drive file=/vp-rootfs/$(basename "$ROOTFS_IMAGE"),if=none,format=raw,id=hd0,snapshot=on -device virtio-blk-device,drive=hd0 -fsdev local,id=r,path=/payload,security_model=none -device virtio-9p-device,fsdev=r,mount_tag=r -fsdev local,id=w,path=/vp-run,security_model=none -device virtio-9p-device,fsdev=w,mount_tag=w -netdev user,id=user0,hostfwd=tcp::6666-:6666,hostfwd=tcp::6667-:22 -device virtio-net-device,netdev=user0'
+    extra_arguments = '-machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 1024 -kernel $KERNEL_ARG$DTB_RUNTIME_ARG --append "root=/dev/vda" -drive file=$ROOTFS_ARG,if=none,format=raw,id=hd0,snapshot=on -device virtio-blk-device,drive=hd0 -fsdev local,id=r,path=$PAYLOAD_ARG,security_model=none -device virtio-9p-device,fsdev=r,mount_tag=r -fsdev local,id=w,path=$OUT_ARG,security_model=none -device virtio-9p-device,fsdev=w,mount_tag=w -netdev user,id=user0,hostfwd=tcp::6666-:6666,hostfwd=tcp::6667-:22 -device virtio-net-device,netdev=user0'
 }
 
 ram = {
@@ -207,7 +270,7 @@ if [ "$MODULE_STATUS" -eq 0 ] && [ "$DRI_STATUS" -eq 0 ] && [ -n "$NODE" ]; then
     cd /tmp
     rm -f output.dimg output-lenet.dimg output-lenet.txt
     NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/mnt/r /mnt/r/nvdla_runtime \
-        --loadable /mnt/r/lenet_mnist.nv_full.nvdla \
+        --loadable /mnt/r/loadable.nvdla \
         --image /mnt/r/seven.pgm \
         --rawdump >/tmp/runtime.log 2>&1
     RUNTIME_STATUS=$?
@@ -260,17 +323,23 @@ chmod +x "$PAYLOAD/run-modern-smoke.sh"
 sha256sum "$PAYLOAD"/* >"$OUT/input-sha256.txt"
 
 set +e
-timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
-    -e SC_SIGNAL_WRITE_CHECK=DISABLE \
-    -v "$OUT:/vp-run" \
-    -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
-    -v "$(dirname "$ROOTFS_IMAGE"):/vp-rootfs:ro" \
-    "${DOCKER_DTB_MOUNT[@]}" \
-    -v "$PAYLOAD:/payload:ro" \
-    -w /vp-run \
-    "$DOCKER_IMAGE" \
-    bash -lc "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua" \
-    | tee "$OUT/serial.log"
+if [[ "$VP_RUNNER" == "docker" ]]; then
+    timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
+        -e SC_SIGNAL_WRITE_CHECK=DISABLE \
+        -v "$OUT:/vp-run" \
+        -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
+        -v "$(dirname "$ROOTFS_IMAGE"):/vp-rootfs:ro" \
+        "${DOCKER_DTB_MOUNT[@]}" \
+        -v "$PAYLOAD:/payload:ro" \
+        -w /vp-run \
+        "$DOCKER_IMAGE" \
+        bash -lc "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua" \
+        | tee "$OUT/serial.log"
+else
+    timeout "$VP_TIMEOUT" env SC_SIGNAL_WRITE_CHECK=DISABLE LD_LIBRARY_PATH="$VP_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}" \
+        "$VP_BINARY" -c "$OUT/modern-vp.lua" \
+        | tee "$OUT/serial.log"
+fi
 RUN_STATUS=${PIPESTATUS[0]}
 set -e
 
@@ -298,8 +367,10 @@ cat >"$OUT/manifest.json" <<EOF
   "schema_version": 1,
   "run_id": "$RUN_ID",
   "lane": "vp-modern",
-  "mode": "lenet_full_control",
+  "mode": "$MODE_NAME",
   "status": "$STATUS",
+  "vp_hw_config": "$VP_HW_CONFIG",
+  "vp_runner": "$VP_RUNNER",
   "docker_status": $RUN_STATUS,
   "expected_output": "$EXPECTED_OUTPUT",
   "actual_output": "$OUTPUT_NORMALIZED",
@@ -312,6 +383,11 @@ cat >"$OUT/manifest.json" <<EOF
     "binary": "$DOCKER_BIN_RESOLVED",
     "image": "$DOCKER_IMAGE",
     "image_id": "$DOCKER_IMAGE_ID"
+  },
+  "vp_binary": {
+    "path": "$VP_BINARY",
+    "sha256": "$(if [[ -f "$VP_BINARY" ]]; then hash_file "$VP_BINARY"; fi)",
+    "ld_library_path": "$VP_LD_LIBRARY_PATH"
   },
   "patch_series_sha256": "$PATCH_SERIES_SHA",
   "inputs": {
@@ -343,7 +419,7 @@ cat >"$OUT/manifest.json" <<EOF
     "loadable": {
       "path": "$LOADABLE",
       "sha256": "$LOADABLE_SHA",
-      "config": "nv_full"
+      "config": "$LOADABLE_CONFIG"
     },
     "image": {
       "path": "$IMAGE",
@@ -365,7 +441,7 @@ cat >"$OUT/manifest.json" <<EOF
 }
 EOF
 
-echo "VP modern LeNet full status: $STATUS"
+echo "VP modern LeNet $VP_HW_CONFIG status: $STATUS"
 echo "Artifacts: $OUT"
 if [[ "$STATUS" == "pass" ]]; then
     exit 0

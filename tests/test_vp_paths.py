@@ -91,6 +91,49 @@ class ModernVpPathTests(unittest.TestCase):
             self.assertIn("high_addr = 0x7fffffff", text)
             self.assertIn("-kernel /vp-kernel/Image.vp2m", text)
 
+    def test_small_lua_uses_host_paths_and_extmem_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            kernel = root / "Image.vp2m"
+            rootfs = root / "rootfs-smoke.ext4"
+            dtb = root / "small.dtb"
+            kernel.write_bytes(b"kernel")
+            rootfs.write_bytes(b"rootfs")
+            dtb.write_bytes(b"dtb")
+
+            with patch.dict(os.environ, {"VP_HW_CONFIG": "small"}, clear=False):
+                lua = _write_modern_lua({"kernel": kernel, "rootfs": rootfs, "dtb": dtb}, root)
+            text = lua.read_text(encoding="utf-8")
+
+            self.assertIn("base_addr = 0xc0000000", text)
+            self.assertIn("high_addr = 0xffffffff", text)
+            self.assertIn("-kernel", text)
+            self.assertIn("Image.vp2m", text)
+            self.assertIn("-dtb", text)
+            self.assertIn("small.dtb", text)
+            self.assertIn("payload", text)
+            self.assertNotIn("/vp-kernel", text)
+
+    def test_small_paths_prefer_small_extmem_dtb_and_vp_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            work = root / "work"
+            sources = root / "sources"
+            dtb = work / "dtb" / "nvdla-vp-modern-small-extmem-pool.dtb"
+            vp_binary = work / "vp-small" / "install" / "bin" / "aarch64_toplevel"
+            dtb.parent.mkdir(parents=True)
+            vp_binary.parent.mkdir(parents=True)
+            dtb.write_bytes(b"dtb")
+            vp_binary.write_bytes(b"vp")
+
+            with patch.dict(os.environ, {"VP_HW_CONFIG": "small"}, clear=False):
+                paths = _modern_paths(work, sources)
+
+            self.assertEqual(paths["dtb"], dtb)
+            self.assertEqual(paths["vp_binary"], vp_binary)
+            self.assertEqual(paths["nvdla_vp"], sources / "nvdla-vp")
+            self.assertEqual(paths["nvdla_hw"], sources / "nvdla-hw")
+
     def test_bad_patterns_cover_vp_and_systemc_failures(self) -> None:
         log = """
         GP: TLM_ADDRESS_ERROR_RESPONSE

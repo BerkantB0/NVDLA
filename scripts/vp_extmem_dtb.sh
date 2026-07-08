@@ -3,8 +3,25 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${WORK_DIR:-$ROOT/.work/vp-modern}"
-DTS="${VP_EXTMEM_DTS:-$ROOT/configs/vp/nvdla-vp-modern-extmem-pool.dts}"
-OUT="${VP_EXTMEM_DTB:-$WORK/dtb/nvdla-vp-modern-extmem-pool.dtb}"
+VP_HW_CONFIG="${VP_HW_CONFIG:-full}"
+
+case "$VP_HW_CONFIG" in
+    full)
+        DEFAULT_DTS="$ROOT/configs/vp/nvdla-vp-modern-extmem-pool.dts"
+        DEFAULT_OUT="$WORK/dtb/nvdla-vp-modern-extmem-pool.dtb"
+        ;;
+    small)
+        DEFAULT_DTS="$ROOT/configs/vp/nvdla-vp-modern-small-extmem-pool.dts"
+        DEFAULT_OUT="$WORK/dtb/nvdla-vp-modern-small-extmem-pool.dtb"
+        ;;
+    *)
+        echo "ERROR: unsupported VP_HW_CONFIG=$VP_HW_CONFIG; expected full or small" >&2
+        exit 2
+        ;;
+esac
+
+DTS="${VP_EXTMEM_DTS:-$DEFAULT_DTS}"
+OUT="${VP_EXTMEM_DTB:-$DEFAULT_OUT}"
 
 if [[ ! -f "$DTS" ]]; then
     echo "ERROR: DTS not found: $DTS" >&2

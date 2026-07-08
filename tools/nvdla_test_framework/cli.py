@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--artifacts", required=True, type=Path)
     report.add_argument("--out", required=True, type=Path)
 
-    lenet = sub.add_parser("lenet-compare", help="Compare stock and modern nv_full LeNet artifacts")
+    lenet = sub.add_parser("lenet-compare", help="Compare stock and modern LeNet artifacts")
     lenet.add_argument("--stock-dir", type=Path, default=DEFAULT_STOCK_DIR)
     lenet.add_argument("--modern-dir", type=Path)
     lenet.add_argument("--out", type=Path)

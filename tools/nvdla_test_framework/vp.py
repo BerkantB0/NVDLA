@@ -183,19 +183,28 @@ def _modern_paths(
     work = work_dir or _path_from_env("WORK_DIR", root / ".work" / "vp-modern")
     sources = sources_dir or _path_from_env("SOURCES_DIR", root / ".external" / "sources")
     patched = _path_from_env("PATCHED_NVDLA_SW", root / ".work" / "nvdla-sw-patched")
+    hw_config = os.environ.get("VP_HW_CONFIG", "full")
+    vp_small = work / "vp-small"
 
+    if hw_config == "small":
+        default_dtb = work / "dtb" / "nvdla-vp-modern-small-extmem-pool.dtb"
+    else:
+        default_dtb = work / "kernel" / "arch" / "arm64" / "boot" / "dts" / "nvdla-vp-modern.dtb"
     dtb_candidates = [
-        _path_from_env("VP_MODERN_DTB", work / "kernel" / "arch" / "arm64" / "boot" / "dts" / "nvdla-vp-modern.dtb"),
+        _path_from_env("VP_MODERN_DTB", default_dtb),
         work / "kernel" / "arch" / "arm64" / "boot" / "dts" / "qemu" / "nvdla-vp-modern.dtb",
         work / "kernel" / "arch" / "arm64" / "boot" / "dts" / "xilinx" / "nvdla-vp-modern.dtb",
     ]
     dtb = next((path for path in dtb_candidates if path and path.exists()), None)
+    systemc_prefix = _expand_path(os.environ.get("SYSTEMC_PREFIX", "/usr/local/systemc-2.3.0"))
 
     return {
         "work_dir": work,
         "sources_dir": sources,
         "linux": sources / "linux-xlnx",
         "buildroot": sources / "buildroot",
+        "nvdla_vp": sources / "nvdla-vp",
+        "nvdla_hw": sources / "nvdla-hw",
         "patched_nvdla_sw": patched,
         "kernel": _path_from_env_or_first(
             "VP_MODERN_KERNEL",
@@ -216,6 +225,13 @@ def _modern_paths(
         "runtime_library": _path_from_env("VP_RUNTIME_LIB", work / "runtime" / "libnvdla_runtime.so"),
         "workloads_dir": _path_from_env("WORKLOADS_DIR", root / "artifacts" / "workloads"),
         "dtb": dtb,
+        "vp_binary": _path_from_env("VP_BINARY", vp_small / "install" / "bin" / "aarch64_toplevel"),
+        "vp_library_dir": _path_from_env("VP_LIB_DIR", vp_small / "install" / "lib"),
+        "vp_cmod_library_dir": _path_from_env(
+            "VP_CMOD_LIB_DIR",
+            vp_small / "hw" / "outdir" / "nv_small" / "cmod" / "release" / "lib",
+        ),
+        "systemc_lib_dir": _path_from_env("SYSTEMC_LIB_DIR", systemc_prefix / "lib-linux64"),
     }
 
 
@@ -660,19 +676,37 @@ def _write_modern_lua(paths: dict[str, Path | None], out_dir: Path) -> Path:
     assert isinstance(kernel, Path)
     assert isinstance(rootfs, Path)
 
+    hw_config = os.environ.get("VP_HW_CONFIG", "full")
+    runner = os.environ.get("VP_RUNNER") or ("host" if hw_config == "small" else "docker")
+    ram_base = os.environ.get("VP_RAM_BASE") or ("0xc0000000" if hw_config == "small" else "0x40000000")
+    ram_high = os.environ.get("VP_RAM_HIGH") or ("0xffffffff" if hw_config == "small" else "0x7fffffff")
+
     dtb_arg = ""
-    if isinstance(dtb, Path):
+    if isinstance(dtb, Path) and runner == "docker":
         dtb_arg = f" -dtb /vp-dtb/{dtb.name}"
+    elif isinstance(dtb, Path):
+        dtb_arg = f" -dtb {dtb}"
+
+    if runner == "docker":
+        kernel_arg = f"/vp-kernel/{kernel.name}"
+        rootfs_arg = f"/vp-rootfs/{rootfs.name}"
+        payload_arg = "/payload"
+        run_arg = "/vp-run"
+    else:
+        kernel_arg = str(kernel)
+        rootfs_arg = str(rootfs)
+        payload_arg = str(out_dir / "payload")
+        run_arg = str(out_dir)
 
     extra_arguments = (
         f"-machine virt -cpu cortex-a57 -machine type=virt -nographic -smp 1 -m 1024 "
-        f"-kernel /vp-kernel/{kernel.name}{dtb_arg} "
+        f"-kernel {kernel_arg}{dtb_arg} "
         "--append \"root=/dev/vda\" "
-        f"-drive file=/vp-rootfs/{rootfs.name},if=none,format=raw,id=hd0,snapshot=on "
+        f"-drive file={rootfs_arg},if=none,format=raw,id=hd0,snapshot=on "
         "-device virtio-blk-device,drive=hd0 "
-        "-fsdev local,id=r,path=/payload,security_model=none "
+        f"-fsdev local,id=r,path={payload_arg},security_model=none "
         "-device virtio-9p-device,fsdev=r,mount_tag=r "
-        "-fsdev local,id=w,path=/vp-run,security_model=none "
+        f"-fsdev local,id=w,path={run_arg},security_model=none "
         "-device virtio-9p-device,fsdev=w,mount_tag=w "
         "-netdev user,id=user0,hostfwd=tcp::6666-:6666,hostfwd=tcp::6667-:22 "
         "-device virtio-net-device,netdev=user0"
@@ -687,8 +721,8 @@ def _write_modern_lua(paths: dict[str, Path | None], out_dir: Path) -> Path:
 ram = {{
     size = 1048576,
     target_port = {{
-        base_addr = 0x40000000,
-        high_addr = 0x7fffffff
+        base_addr = {ram_base},
+        high_addr = {ram_high}
     }}
 }}
 
@@ -897,11 +931,17 @@ def _run_modern_vp(
     workload_name: str,
 ) -> dict[str, Any]:
     paths = _modern_paths(work_dir, sources_dir)
+    hw_config = os.environ.get("VP_HW_CONFIG", "full")
+    runner = os.environ.get("VP_RUNNER") or ("host" if hw_config == "small" else "docker")
     required_missing = _check_required_paths(paths, ["kernel", "rootfs", "module"])
+    if hw_config == "small" and not paths.get("dtb"):
+        required_missing.append("dtb: build with VP_HW_CONFIG=small make vp-small-dtb or set VP_MODERN_DTB")
     smoke_build: dict[str, Any] | None = None
     workload: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
     lua: Path | None = None
+    if runner == "host":
+        required_missing.extend(_check_required_paths(paths, ["vp_binary", "vp_library_dir", "vp_cmod_library_dir"]))
 
     if mode == "smoke" and not SMOKE_SOURCE.exists():
         required_missing.append(f"smoke_source: {SMOKE_SOURCE}")
@@ -948,41 +988,65 @@ def _run_modern_vp(
     assert isinstance(rootfs, Path)
     image = docker_image or lock["docker"]["vp_latest"]["image"]
 
-    command = [
-        "docker",
-        "run",
-        "--rm",
-        "-i",
-        "-e",
-        "SC_SIGNAL_WRITE_CHECK=DISABLE",
-        "-v",
-        _docker_mount(out_dir, "/vp-run"),
-        "-v",
-        _docker_mount(kernel.parent, "/vp-kernel", readonly=True),
-        "-v",
-        _docker_mount(rootfs.parent, "/vp-rootfs", readonly=True),
-        "-v",
-        _docker_mount(out_dir / "payload", "/payload", readonly=True),
-    ]
-    if isinstance(dtb, Path):
-        command.extend(["-v", _docker_mount(dtb.parent, "/vp-dtb", readonly=True)])
-    command.extend(
-        [
-            "-w",
-            "/vp-run",
-            image,
-            "bash",
-            "-lc",
-            "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua",
+    if runner == "docker":
+        command = [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "-e",
+            "SC_SIGNAL_WRITE_CHECK=DISABLE",
+            "-v",
+            _docker_mount(out_dir, "/vp-run"),
+            "-v",
+            _docker_mount(kernel.parent, "/vp-kernel", readonly=True),
+            "-v",
+            _docker_mount(rootfs.parent, "/vp-rootfs", readonly=True),
+            "-v",
+            _docker_mount(out_dir / "payload", "/payload", readonly=True),
         ]
-    )
+        if isinstance(dtb, Path):
+            command.extend(["-v", _docker_mount(dtb.parent, "/vp-dtb", readonly=True)])
+        command.extend(
+            [
+                "-w",
+                "/vp-run",
+                image,
+                "bash",
+                "-lc",
+                "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua",
+            ]
+        )
+    else:
+        vp_binary = paths["vp_binary"]
+        vp_library_dir = paths["vp_library_dir"]
+        vp_cmod_library_dir = paths["vp_cmod_library_dir"]
+        systemc_lib_dir = paths["systemc_lib_dir"]
+        assert isinstance(vp_binary, Path)
+        assert isinstance(vp_library_dir, Path)
+        assert isinstance(vp_cmod_library_dir, Path)
+        ld_parts = [vp_library_dir, vp_cmod_library_dir]
+        if isinstance(systemc_lib_dir, Path):
+            ld_parts.append(systemc_lib_dir)
+        existing_ld = os.environ.get("LD_LIBRARY_PATH")
+        ld_library_path = ":".join(str(path) for path in ld_parts)
+        if existing_ld:
+            ld_library_path = f"{ld_library_path}:{existing_ld}"
+        command = [
+            "env",
+            "SC_SIGNAL_WRITE_CHECK=DISABLE",
+            f"LD_LIBRARY_PATH={ld_library_path}",
+            str(vp_binary),
+            "-c",
+            str(lua),
+        ]
 
     try:
         run = _run_modern_serial(command, timeout, out_dir)
     except FileNotFoundError as exc:
         return {
             "status": "blocked",
-            "reason": f"docker command not available: {exc}",
+            "reason": f"VP runner command not available: {exc}",
             "paths": {name: str(path) if path else None for name, path in paths.items()},
             "smoke_build": smoke_build,
             "payload": payload,
@@ -1073,12 +1137,16 @@ def _run_modern_vp(
         "status": status,
         "reason": reason,
         "mode": mode,
+        "vp_hw_config": hw_config,
+        "vp_runner": runner,
         "paths": {name: str(path) if path else None for name, path in paths.items()},
         "artifact_hashes": {
             "kernel": _path_hash(kernel),
             "rootfs": _path_hash(rootfs),
             "module": _path_hash(paths["module"]),
             "dtb": _path_hash(dtb if isinstance(dtb, Path) else None),
+            "vp_binary": _path_hash(paths["vp_binary"]),
+            "vp_cmod": _path_hash((paths["vp_cmod_library_dir"] / "libnvdla_cmod.so") if isinstance(paths["vp_cmod_library_dir"], Path) else None),
             "smoke": smoke_build.get("sha256") if smoke_build else None,
             "runtime_binary": _path_hash(paths["runtime_binary"]),
             "runtime_library": _path_hash(paths["runtime_library"]),
@@ -1154,6 +1222,8 @@ def run_vp_test(
         patched = Path(paths["patched_nvdla_sw"]) if paths.get("patched_nvdla_sw") else None
         linux = Path(paths["linux"]) if paths.get("linux") else None
         buildroot = Path(paths["buildroot"]) if paths.get("buildroot") else None
+        nvdla_vp = Path(paths["nvdla_vp"]) if paths.get("nvdla_vp") else None
+        nvdla_hw = Path(paths["nvdla_hw"]) if paths.get("nvdla_hw") else None
         manifest = {
             "schema_version": 1,
             "run_id": run_id,
@@ -1166,6 +1236,8 @@ def run_vp_test(
                 "nvdla_sw_patched": _git_sha(patched) if patched else None,
                 "linux_xlnx": _git_sha(linux) if linux else lock["sources"]["linux_xlnx"]["commit"],
                 "buildroot": _git_sha(buildroot) if buildroot else lock["sources"]["buildroot"]["commit"],
+                "nvdla_vp": _git_sha(nvdla_vp) if nvdla_vp else lock["sources"].get("nvdla_vp", {}).get("commit"),
+                "nvdla_hw": _git_sha(nvdla_hw) if nvdla_hw else lock["sources"].get("nvdla_hw", {}).get("commit"),
             },
             "patch_series": patch_series_fingerprint(),
             "workloads": modern.get("workloads", []),
