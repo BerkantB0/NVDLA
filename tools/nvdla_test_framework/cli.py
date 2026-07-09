@@ -13,6 +13,7 @@ from .lenet import (
     fetch_lenet_sources,
 )
 from .lockcheck import run_lock_check
+from .petalinux import run_petalinux_dts
 from .report import write_report
 from .stock import run_stock_sdp_control
 from .vp_audit import run_vp_small_config_audit
@@ -93,6 +94,12 @@ def main(argv: list[str] | None = None) -> int:
     stock_sdp.add_argument("--host-port", type=int, default=6666)
     stock_sdp.add_argument("--workload", default="sdp_regression_full")
 
+    pl_dts = sub.add_parser("petalinux-dts", help="Generate board-local NVDLA PetaLinux DTS fragment")
+    pl_dts.add_argument("--lock", required=True, type=Path)
+    pl_dts.add_argument("--xsa", required=True, type=Path)
+    pl_dts.add_argument("--out", required=True, type=Path)
+    pl_dts.add_argument("--audit-out", type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -138,5 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             args.host_port,
             args.workload,
         )
+    if args.command == "petalinux-dts":
+        return run_petalinux_dts(args.lock, args.xsa, args.out, args.audit_out)
     parser.error(f"unknown command {args.command}")
     return 2
