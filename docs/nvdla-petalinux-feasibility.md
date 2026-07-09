@@ -265,16 +265,18 @@ Template for `project-spec/meta-user/recipes-bsp/device-tree/files/system-user.d
 ```dts
 / {
     nvdla_0: nvdla@a0000000 {
-        compatible = "nvidia,nv_small", "nvidia,nvdla-1";
-        reg = <0x0 0xa0000000 0x0 0x100000>;
-        interrupts = <0 0 4>; /* Replace with XSA-derived GIC SPI and flags. */
+        compatible = "nvidia,nv_small";
+        reg = <0x0 0xa0000000 0x0 0x00010000>;
+        interrupts = <0 89 4>; /* XSA pl_ps_irq0 on ZynqMP. */
         status = "okay";
     };
 };
 ```
 
-The `reg` length and interrupt specifier above are placeholders. They must be
-replaced with values generated from the real hardware handoff.
+The initial PetaLinux lane generates this fragment from the checked-in XSA. It
+uses the audited `0xA0000000..0xA000FFFF` CSB aperture and keeps the
+coherent-DMA property absent because the DBB path is through `S_AXI_HP0_FPD`
+with coherency disabled.
 
 ### Kernel Configuration
 

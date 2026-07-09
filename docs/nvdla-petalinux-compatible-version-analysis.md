@@ -192,13 +192,13 @@ nvdla@a0000000 {
     compatible = "nvidia,nv_small";
     reg = <0x0 0xa0000000 0x0 0x10000>;
     interrupts = <0 89 4>;
-    dma-coherent;
 };
 ```
 
-The address, size, interrupt, and `dma-coherent` property above are placeholders.
-They must be replaced with values from the selected HDF/XSA, Vivado address map,
-and ZynqMP coherency route. The KMD's current match table supports
+The address, size, and interrupt above must be checked against the selected
+HDF/XSA and Vivado address map. Do not add a coherent-DMA property for the
+current XSA: the audited DBB path reaches DDR through `S_AXI_HP0_FPD` and the
+coherency flags are off. The KMD's current match table supports
 `nvidia,nv_small`; the binding file's `nvidia,nvdla-1` string should either be
 added to the driver or avoided in the initial device tree.
 

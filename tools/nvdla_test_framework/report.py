@@ -84,6 +84,22 @@ def _small_highlights(manifests: list[dict], artifacts: Path) -> list[str]:
     return lines
 
 
+def _petalinux_highlights(manifests: list[dict]) -> list[str]:
+    lines = ["## PetaLinux Highlights", ""]
+    phases = ["project", "dts", "kmod", "image", "package"]
+    found = False
+    for phase in phases:
+        item = _latest_matching(manifests, lambda m, p=phase: m.get("lane") == f"petalinux-{p}")
+        if item is None:
+            lines.append(f"- {phase}: not found")
+            continue
+        found = True
+        reason = f", reason={item.get('reason')}" if item.get("reason") else ""
+        lines.append(f"- {phase}: {item.get('status', 'unknown')}{reason} (`{item.get('_path', '')}`)")
+    lines.append("")
+    return lines if found else []
+
+
 def write_report(artifacts: Path, out_path: Path) -> int:
     manifests = _load_manifests(artifacts)
     lines = ["# NVDLA Test Artifact Report", ""]
@@ -91,6 +107,7 @@ def write_report(artifacts: Path, out_path: Path) -> int:
         lines.append("No artifact manifests found.")
     else:
         lines.extend(_small_highlights(manifests, artifacts))
+        lines.extend(_petalinux_highlights(manifests))
         lines.append("| Run ID | Lane | Status | Manifest |")
         lines.append("| --- | --- | --- | --- |")
         for item in manifests:

@@ -10,12 +10,15 @@ cd /mnt/c/Users/berkant/Dev/NVLDA-Peta
 
 The current known environment is:
 
-- Ubuntu 24.04 WSL2
+- Ubuntu 24.04 WSL2 for VP work
+- Ubuntu 22.04 WSL2 for PetaLinux 2024.1 work
 - Docker Desktop available inside WSL
 - PetaLinux installed at `/opt/pkg/petalinux/2024.1`
+- PetaLinux project default at `$HOME/build/nvdla-peta/petalinux/zcu102-nvdla`
 - PetaLinux metadata revision `b31575b49f230b006aa3193cb564368e357777ed`
 
-PetaLinux 2024.1 warns that Ubuntu 24.04 is not a supported OS. The framework records this as an environment fact; it does not hide the warning.
+PetaLinux 2024.1 may warn that the WSL host is not a supported OS. The
+framework records this as an environment fact; it does not hide the warning.
 
 ## Fast Regression Gate
 
@@ -24,6 +27,36 @@ make test
 ```
 
 This checks the host tools, validates `repro.lock.json`, audits the XSA, boots the stock NVDLA VP to the Buildroot login prompt, and verifies the PetaLinux command environment.
+
+## PetaLinux Project Lane
+
+Run PetaLinux commands from the Ubuntu-22.04 WSL distro:
+
+```sh
+cd /mnt/c/Users/berkant/Dev/NVLDA-Peta
+export PETALINUX_DIR=/opt/pkg/petalinux/2024.1
+export PETALINUX_PROJECT=${PETALINUX_PROJECT:-$HOME/build/nvdla-peta/petalinux/zcu102-nvdla}
+make petalinux-project
+make petalinux-dts
+NVDLA_KMD_CONFIG=small make petalinux-kmod
+```
+
+`make petalinux-project` creates a ZynqMP project when needed and imports the
+checked-in `NVDLA_FPGA_wrapper.xsa`. `make petalinux-dts` installs a local
+`nvdla-user.dtsi` fragment included from `system-user.dtsi`; it uses
+`compatible = "nvidia,nv_small"`, CSB `0xA0000000` size `0x10000`, interrupt
+`<0 89 4>`, and leaves coherent-DMA absent for the audited HP0 path.
+
+After the module recipe and DTS are installed, build boot artifacts:
+
+```sh
+make petalinux-image
+make petalinux-package
+```
+
+These targets write manifests under `artifacts/<run-id>/` with the project path,
+XSA hash, PetaLinux settings log, DT fragment hash, module hash/vermagic when
+available, image hashes, and pass/fail/block reason.
 
 ## Fetching Sources
 
