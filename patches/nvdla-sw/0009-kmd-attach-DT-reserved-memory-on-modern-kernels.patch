@@ -1,7 +1,7 @@
-From 4953fcb9e1eb7fe49b311aaecac9b737759e5ed3 Mon Sep 17 00:00:00 2001
+From 83b198731eea6a6668b9bca78ddd3e57694916bd Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Tue, 7 Jul 2026 16:21:59 +0100
-Subject: [PATCH 9/9] kmd: attach DT reserved memory on modern kernels
+Subject: [PATCH 09/10] kmd: attach DT reserved memory on modern kernels
 
 Linux 6.x builds no longer use the legacy dma_declare_coherent_memory
 path from the NVDLA KMD, so a device tree memory-region on the NVDLA
@@ -68,4 +68,4 @@ index 0df6d75..6d2acfa 100644
  	nvdla_drm_dev_put(drm);
  	return err;
 -- 
-2.43.0
+2.34.1

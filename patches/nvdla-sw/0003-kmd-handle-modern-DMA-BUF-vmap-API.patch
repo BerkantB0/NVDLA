@@ -1,7 +1,7 @@
-From 02e1396f258880ec7717a030f2f0860f7aa4bdf2 Mon Sep 17 00:00:00 2001
+From 92f649034a77a75d564b31b2e62dce38f76d772d Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Wed, 24 Jun 2026 21:22:31 +0300
-Subject: [PATCH 3/8] kmd: handle modern DMA-BUF vmap API
+Subject: [PATCH 03/10] kmd: handle modern DMA-BUF vmap API
 
 Linux 6.6 changed dma_buf_vmap and dma_buf_vunmap to use struct iosys_map instead of returning a raw pointer. The old NVDLA callbacks still call the raw pointer API and fail to compile after the stdarg header fix.
 
@@ -163,4 +163,4 @@ index 47b7076..5937cec 100644
  MODULE_AUTHOR("NVIDIA");
  MODULE_DESCRIPTION("Nvidia Deep Learning Accelerator driver");
 -- 
-2.43.0
+2.34.1

@@ -1,0 +1,75 @@
+From 1108ea181eef268d1f09193462bdd1b7e6c2ee3f Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Thu, 9 Jul 2026 21:29:51 +0100
+Subject: [PATCH 10/10] kmd: avoid removed DRM PRIME fd helpers
+
+Linux 6.6 keeps PRIME fd and handle ioctls in DRM core, but drm_gem_prime_fd_to_handle and drm_gem_prime_handle_to_fd are no longer exported driver helpers. Referencing them from the NVDLA driver breaks out-of-tree module builds on PetaLinux 2024.1.
+
+Use dma_buf_get with drm_gem_prime_import for the internal submit-time fd to GEM lookup on modern kernels, and keep the legacy callback assignments only for older kernels where the helpers are still public. This preserves the userspace ABI because UMD still exports GEM handles to PRIME fds and submits those fds unchanged.
+
+Tested by building the NVDLA KMD against the PetaLinux 2024.1 Linux 6.6 kernel headers.
+---
+ kmd/port/linux/nvdla_gem.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/kmd/port/linux/nvdla_gem.c b/kmd/port/linux/nvdla_gem.c
+index 6d2acfa..f4ac497 100644
+--- a/kmd/port/linux/nvdla_gem.c
++++ b/kmd/port/linux/nvdla_gem.c
+@@ -43,6 +43,7 @@
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+ #include <drm/drm_gem_dma_helper.h>
++#include <linux/dma-buf.h>
+ #include <linux/iosys-map.h>
+ #include <linux/of_reserved_mem.h>
+ #define nvdla_drm_gem_vm_ops drm_gem_dma_vm_ops
+@@ -397,11 +398,26 @@ static void nvdla_drm_gem_prime_vunmap(struct drm_gem_object *obj, void *vaddr)
+ int32_t nvdla_gem_dma_addr(struct drm_device *dev, struct drm_file *file,
+ 			uint32_t fd, dma_addr_t *addr)
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++	struct dma_buf *dma_buf;
++	struct drm_gem_object *dobj;
++#else
+ 	int32_t ret;
+ 	uint32_t handle;
+-	struct nvdla_gem_object *nobj;
+ 	struct drm_gem_object *dobj;
++#endif
++	struct nvdla_gem_object *nobj;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++	dma_buf = dma_buf_get(fd);
++	if (IS_ERR(dma_buf))
++		return PTR_ERR(dma_buf);
++
++	dobj = drm_gem_prime_import(dev, dma_buf);
++	dma_buf_put(dma_buf);
++	if (IS_ERR(dobj))
++		return PTR_ERR(dobj);
++#else
+ 	ret = drm_gem_prime_fd_to_handle(dev, file, fd, &handle);
+ 	if (ret)
+ 		return ret;
+@@ -409,6 +425,7 @@ int32_t nvdla_gem_dma_addr(struct drm_device *dev, struct drm_file *file,
+ 	dobj = drm_gem_object_lookup(file, handle);
+ 	if (!dobj)
+ 		return -EINVAL;
++#endif
+ 
+ 	nobj = to_nvdla_obj(dobj);
+ 
+@@ -501,8 +518,10 @@ static struct drm_driver nvdla_drm_driver = {
+ 	.gem_free_object_unlocked = nvdla_gem_free_object,
+ #endif
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
+ 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
+ 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
++#endif
+ 	.gem_prime_import = drm_gem_prime_import,
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
+-- 
+2.34.1
