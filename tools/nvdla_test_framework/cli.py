@@ -14,6 +14,7 @@ from .lenet import (
 )
 from .lockcheck import run_lock_check
 from .report import write_report
+from .stock import run_stock_sdp_control
 from .vp_audit import run_vp_small_config_audit
 from .vp import run_vp_test
 from .workloads import generate_workloads
@@ -84,6 +85,14 @@ def main(argv: list[str] | None = None) -> int:
     sdp_diag = sub.add_parser("sdp-small-diagnostic", help="Classify the current nv_small SDP diagnostic run")
     sdp_diag.add_argument("--artifacts", required=True, type=Path)
 
+    stock_sdp = sub.add_parser("stock-sdp-control", help="Run SDP through stock VP KMD/runtime")
+    stock_sdp.add_argument("--lock", required=True, type=Path)
+    stock_sdp.add_argument("--artifacts", required=True, type=Path)
+    stock_sdp.add_argument("--workloads-dir", required=True, type=Path)
+    stock_sdp.add_argument("--timeout", type=int, default=240)
+    stock_sdp.add_argument("--host-port", type=int, default=6666)
+    stock_sdp.add_argument("--workload", default="sdp_regression_full")
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -120,5 +129,14 @@ def main(argv: list[str] | None = None) -> int:
         return run_vp_small_config_audit(args.lock, args.work_dir, args.artifacts)
     if args.command == "sdp-small-diagnostic":
         return classify_sdp_small_diagnostic(args.artifacts)
+    if args.command == "stock-sdp-control":
+        return run_stock_sdp_control(
+            args.lock,
+            args.artifacts,
+            args.workloads_dir,
+            args.timeout,
+            args.host_port,
+            args.workload,
+        )
     parser.error(f"unknown command {args.command}")
     return 2

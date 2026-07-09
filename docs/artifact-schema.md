@@ -24,7 +24,8 @@ Runtime test runs also include, when available:
 - `lenet-analysis.json`: LeNet/MNIST correctness classification, repeat
   results, layer/HWL summary, config proof, and bad-pattern summary.
 - `sdp-small-diagnostic.json`: classification for the currently non-blocking
-  `sdp_regression_small` diagnostic timeout.
+  `sdp_regression_small` diagnostic result, including the known completion
+  timeout and zero-output/golden-mismatch cases.
 
 Build-phase runs include one phase log, such as `toolchain.log`, `kernel.log`, `rootfs.log`, or `kmod.log`.
 

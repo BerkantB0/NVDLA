@@ -401,8 +401,8 @@ The audit captures `CMakeCache.txt`'s `NVDLA_HW_PROJECT`, the `ldd` CMOD
 resolution inside the VP Docker image, VP binary/CMOD/DTB/KMD hashes, and the
 latest `nvidia,nv_small` probe artifact.
 
-`sdp_regression_small` is still useful, but only as a diagnostic until its
-source-built `nv_small` VP timeout is explained:
+`sdp_regression_small` is still useful, but only as a diagnostic until the
+upstream regression/golden relationship is explained:
 
 ```sh
 SOURCES_DIR=$HOME/src/nvdla-peta-sources \
@@ -410,13 +410,21 @@ WORK_DIR=$HOME/build/nvdla-peta/vp-modern \
 make vp-sdp-small-diagnostic
 ```
 
-That target accepts either a real SDP pass or the currently known timeout
-shape: module and render node are healthy, the KMD probes `nvidia,nv_small`, SDP
-is programmed/enabled, no SDP completion or output file appears, and no bad
-kernel/VP pattern is present. Any different SDP failure remains a hard failure.
-For example, if SDP completion is visible but the runtime client times out
-waiting for the server response, keep the result classified as unresolved rather
-than folding it into the known no-completion timeout.
+That target accepts a real SDP pass, the earlier known timeout shape, or the
+now observed stock-comparable zero-output mismatch shape. In the zero-output
+case, module and render node are healthy, the KMD probes `nvidia,nv_small`, SDP
+is programmed/enabled/completed, the runtime client receives
+`[OK] Test PASSED!`, the output `.dimg` is returned, no bad kernel/VP pattern is
+present, but the payload bytes after the `.dimg` header are all zero and do not
+match the pinned upstream golden. Treat this as diagnostic evidence only, not a
+driver correctness pass.
+
+The stock `nvdla/vp:latest` control with stock `opendla_1.ko` and stock
+`nvdla_runtime -s` shows the same important caveat for `sdp_regression_full`:
+the runtime reports `[OK] Test PASSED!` and returns an output, but the returned
+payload is zero and does not match the selected upstream golden. This makes the
+SDP regression useful for KMD/runtime protocol, probe, IRQ, and scheduler
+health, but weak as a tensor-correctness oracle.
 
 `VP_RCU_CPU_STALL_TIMEOUT=300` is a VP simulation timing control. Without it,
 the slow SystemC/VP run can trigger Linux RCU stall diagnostics even though the
@@ -440,8 +448,8 @@ Useful controls:
 ```sh
 VP_TIMEOUT=180 LANE=modern make vp-test
 REPEAT=100 VP_TIMEOUT=300 LANE=modern make vp-test
-REPEAT=100 MODE=runtime WORKLOAD=sdp_regression_small LANE=modern VP_TIMEOUT=600 make vp-test
-NVDLA_RUNTIME_TIMEOUT=300 MODE=runtime WORKLOAD=sdp_regression_full LANE=modern VP_TIMEOUT=420 make vp-test
+REPEAT=100 MODE=runtime WORKLOAD=sdp_regression_small LANE=modern VP_TIMEOUT=900 NVDLA_RUNTIME_TIMEOUT=600 make vp-test
+NVDLA_RUNTIME_TIMEOUT=600 MODE=runtime WORKLOAD=sdp_regression_full LANE=modern VP_TIMEOUT=900 make vp-test
 ```
 
 `NVDLA_RUNTIME_TIMEOUT` and `NVDLA_SERVER_START_TIMEOUT` are host-side controls
@@ -456,16 +464,17 @@ and `manifest.json`. A run is marked `blocked` when required artifacts are not
 available, `fail` when boot/module/smoke checks fail, and `pass` only when all
 modern VP smoke or runtime criteria are satisfied.
 
-Clean runtime evidence from `20260702T220702Z-vp-modern-runtime` showed the VP
-booted Linux 6.6, `opendla.ko` loaded, `/dev/dri/renderD128` appeared, and the
-runtime server/client completed with `NVDLA_RUNTIME_TIMEOUT=300`. That run used
-the primary `sdp_regression_small` workload while the driver probed
-`nvidia,nvdla_os_initial`, so the failure is classified as a workload/config
-mismatch. The returned tensor hash was
-`A5C53563E8AB82FB6349C44902211EB04A535FC2D73A704C33035C004194548D`, which does
-not match the `nv_small` golden. `sdp_regression_full` can be used to test the
-stock VP as a control, but the main correctness claim requires an `nv_small` VP
-or board environment that probes `nvidia,nv_small`.
+Runtime evidence from `20260709T192642Z-vp-modern-runtime` showed the
+source-built `nv_small` VP booted Linux 6.6, `opendla.ko` loaded,
+`/dev/dri/renderD128` appeared, the KMD probed `nvidia,nv_small`, SDP completed,
+and the runtime server/client completed with `NVDLA_RUNTIME_TIMEOUT=600`. The
+returned tensor hash was
+`A5C53563E8AB82FB6349C44902211EB04A535FC2D73A704C33035C004194548D`, which has a
+zero payload and does not match the `nv_small` golden. Stock control evidence
+from `20260709T191532Z-vp-stock-sdp-full` reached the same conclusion for the
+full SDP regression: runtime protocol success and output return, but zero
+payload rather than the selected upstream golden. Use LeNet/MNIST as the
+current `nv_small` correctness gate while SDP remains diagnostic.
 
 Toolchain policy:
 

@@ -71,7 +71,12 @@ def _small_highlights(manifests: list[dict], artifacts: Path) -> list[str]:
             diag = Path(manifest_path).parent / "sdp-small-diagnostic.json"
             if diag.is_file():
                 try:
-                    extra = f", classification={json.loads(diag.read_text(encoding='utf-8')).get('classification')}"
+                    diag_data = json.loads(diag.read_text(encoding="utf-8"))
+                    status = f"manifest={status}"
+                    extra = (
+                        f", diagnostic={diag_data.get('status')}, "
+                        f"classification={diag_data.get('classification')}"
+                    )
                 except Exception:
                     extra = ", classification=unreadable"
         lines.append(f"- {label}: {status}{extra} (`{manifest_path}`)")
