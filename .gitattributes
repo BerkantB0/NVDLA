@@ -11,3 +11,4 @@ Makefile text eol=lf
 *.bbappend text eol=lf
 *.dtsi text eol=lf
 *.patch text eol=lf
+*.pdf binary
