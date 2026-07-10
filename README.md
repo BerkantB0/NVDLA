@@ -137,6 +137,7 @@ files, and pinned metadata belong in Git.
 
 ## Documentation
 
+- [Milestone 1: modern Linux software stack report](docs/report-modern-linux-software-stack-milestone.md)
 - [Reproducible runbook](docs/reproducible-runbook.md)
 - [Driver correctness strategy](docs/driver-correctness-test-strategy.md)
 - [Artifact schema](docs/artifact-schema.md)
