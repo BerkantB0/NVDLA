@@ -234,6 +234,11 @@ def inline_markup(text: str, code_size: float | None = 8.3) -> str:
         return f"@@CODE{len(code_spans) - 1}@@"
 
     escaped = re.sub(r"`([^`]+)`", hold_code, escaped)
+    escaped = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)",
+        r'<link href="\2" color="#1f4e79">\1</link>',
+        escaped,
+    )
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", escaped)
     escaped = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", escaped)
     for index, value in enumerate(code_spans):
@@ -275,6 +280,7 @@ def split_table_row(line: str) -> list[str]:
 def table_widths(headers: list[str], column_count: int) -> list[float]:
     key = tuple(header.lower() for header in headers)
     ratios: dict[tuple[str, ...], list[float]] = {
+        ("abbreviation", "meaning"): [0.25, 0.75],
         ("criterion", "required evidence"): [0.27, 0.73],
         ("component", "tested version or revision"): [0.25, 0.75],
         ("patch", "change", "reason"): [0.12, 0.34, 0.54],
@@ -535,18 +541,22 @@ class MilestoneDocTemplate(BaseDocTemplate):
         self.notify("TOCEntry", (level, text, self.page - 1, key))
 
 
-def split_report(markdown: str) -> tuple[str, list[str], list[str]]:
+def split_report(markdown: str) -> tuple[str, list[str], list[str], list[str]]:
     lines = markdown.splitlines()
     if not lines or not lines[0].startswith("# "):
         raise ValueError("report must start with a level-one title")
     title = lines[0][2:].strip()
     abstract_index = lines.index("## Abstract")
+    abbreviations_index = lines.index("## Abbreviations")
     body_index = next(
-        index for index in range(abstract_index + 1, len(lines)) if lines[index].startswith("## 1 ")
+        index
+        for index in range(abbreviations_index + 1, len(lines))
+        if lines[index].startswith("## 1 ")
     )
-    abstract_lines = lines[abstract_index + 1 : body_index]
+    abstract_lines = lines[abstract_index + 1 : abbreviations_index]
+    abbreviations_lines = lines[abbreviations_index + 1 : body_index]
     body_lines = lines[body_index:]
-    return title, abstract_lines, body_lines
+    return title, abstract_lines, abbreviations_lines, body_lines
 
 
 def title_page(
@@ -609,11 +619,16 @@ def contents_page(styles: dict[str, ParagraphStyle]) -> list:
 def render(input_path: Path, output_path: Path, author: str, report_date: str) -> None:
     register_fonts()
     styles = build_styles()
-    title, abstract_lines, body_lines = split_report(input_path.read_text(encoding="ascii"))
+    title, abstract_lines, abbreviations_lines, body_lines = split_report(
+        input_path.read_text(encoding="ascii")
+    )
 
     story = title_page(title, author, report_date, styles)
     story.append(heading_flow("Abstract", 1, styles))
     story.extend(parse_blocks(abstract_lines, styles, page_break_headings=False))
+    story.append(PageBreak())
+    story.append(heading_flow("Abbreviations", 1, styles))
+    story.extend(parse_blocks(abbreviations_lines, styles, page_break_headings=False))
     story.append(PageBreak())
     story.extend(contents_page(styles))
     story.extend(parse_blocks(body_lines, styles, page_break_headings=True))

@@ -18,11 +18,48 @@ toolchain and root filesystem, a Linux 6.6 kernel, target-side smoke tests, and
 deterministic runtime workloads. The final `nv_small` validation used a
 source-built VP and CMOD, a KMD built for the small register map, and a LeNet
 loadable compiled for `nv_small`. Ten consecutive inference runs completed 100
-hardware-layer operations and returned the expected vector
-`0 2 0 0 0 0 0 124 0 0` in every run. No kernel or VP fault pattern was
-detected. These results establish the software stack as a suitable basis for
-the next integration milestone, while leaving physical DMA, interrupt routing,
-and reset behaviour for later board-level validation.
+hardware-layer operations and returned the expected result in every run. No
+kernel or VP fault pattern was detected. These results establish the software
+stack as a suitable basis for the next integration milestone, while leaving
+physical DMA, interrupt routing, and reset behaviour for later board-level
+validation.
+
+## Abbreviations
+
+| Abbreviation | Meaning |
+| --- | --- |
+| ABI | Application Binary Interface |
+| API | Application Programming Interface |
+| ARM64 | 64-bit ARM architecture, also referred to as AArch64 |
+| CDMA | Convolution Data Memory Access unit |
+| CMA | Contiguous Memory Allocator |
+| CMOD | NVDLA C-model, the software model of the accelerator used by the VP |
+| CNN | Convolutional Neural Network |
+| CPU | Central Processing Unit |
+| CSB | Configuration Space Bus |
+| CSC | Convolution Sequence Controller |
+| DMA | Direct Memory Access |
+| DMA-BUF | Linux framework for sharing DMA buffers between devices and subsystems |
+| DRM | Direct Rendering Manager, the Linux subsystem used by the NVDLA driver interface |
+| DTB | Device Tree Blob |
+| FPGA | Field-Programmable Gate Array |
+| GCC | GNU Compiler Collection |
+| GEM | Graphics Execution Manager, DRM's memory-object management framework |
+| HWL | Hardware Layer, a unit of accelerator work scheduled by the NVDLA runtime |
+| IRQ | Interrupt Request |
+| KMD | Kernel-Mode Driver |
+| NVDLA | NVIDIA Deep Learning Accelerator |
+| PIC | Position-Independent Code |
+| PIE | Position-Independent Executable |
+| QEMU | Machine emulator used as part of the NVDLA VP |
+| RAM | Random Access Memory |
+| SDP | Single Data Processor |
+| SHA-256 | 256-bit Secure Hash Algorithm used to identify files reproducibly |
+| TLM | Transaction-Level Modelling |
+| UMD | User-Mode Driver; in this report, the NVDLA runtime and runtime library |
+| VM | Virtual Memory |
+| VP | Virtual Platform |
+| WSL | Windows Subsystem for Linux |
 
 ## 1 Introduction
 
@@ -35,6 +72,13 @@ buffers, translates submitted memory handles, schedules accelerator tasks, and
 services completion interrupts. Consequently, a hardware implementation is of
 limited practical use unless both software layers operate correctly on the
 target operating system.
+
+The related FPGA work by Georgis [1] demonstrated an `nv_small` implementation
+and investigated direct bare-metal control of the accelerator. The present
+milestone takes the complementary software-stack route: rather than programming
+each NVDLA register directly from an application, it restores the compiler,
+runtime, kernel driver, and scheduler path needed to execute complete compiled
+networks under a modern operating system.
 
 The upstream NVDLA software revision used in this project predates the Linux
 6.x DRM and DMA-BUF interfaces. Direct compilation exposed removed headers,
@@ -80,7 +124,7 @@ completed. These criteria deliberately extend beyond successful compilation.
 
 | Criterion | Required evidence |
 | --- | --- |
-| Reproducible build | Pinned source revisions, recorded toolchain identity, and successful kernel, rootfs, KMD, and UMD build manifests. |
+| Reproducible build | Pinned source revisions, recorded toolchain identity, and successful kernel, root filesystem, KMD, and UMD build manifests. |
 | ABI preservation | Matching KMD and UMD ioctl definitions and structure names with no public ioctl renumbering. |
 | Driver probe | `opendla.ko` loads, the expected NVDLA compatible string is reported, and `/dev/dri/renderD128` is created. |
 | GEM correctness | GEM create, map-offset, `mmap`, CPU read/write, and destroy complete without an Oops or warning. |
@@ -98,21 +142,33 @@ non-coherent memory path, physical interrupt wiring, FPGA reset sequencing, or
 hardware timing. Those are separate acceptance tests for the next project
 stage.
 
-The milestone boundary is the nine-patch series from `0001` to `0009` under
-`patches/nvdla-sw/`. Patches introduced during the following integration stage
-are intentionally excluded from this account.
+The implementation, test harness, and upstreamable patch queue are maintained
+in the project repository [2]. The milestone boundary is the nine-patch series
+from `0001` to `0009` under `patches/nvdla-sw/`. Patches introduced during the
+following integration stage are intentionally excluded from this account.
 
 ## 2 Background
 
 ### 2.1 NVDLA Software Execution Path
 
 The software execution path used in this work is illustrated in Figure 1. A
-model is first converted to an NVDLA loadable by the compiler. On the target,
-`nvdla_runtime` and `libnvdla_runtime.so` parse this loadable and communicate
-with the KMD through a DRM render node. The KMD allocates GEM objects, exports
-memory references, translates submitted handles into accelerator-visible DMA
-addresses, and invokes the common NVDLA firmware scheduler. Completion is
-reported through the NVDLA interrupt and returned to the UMD.
+model is first converted by the compiler into an NVDLA loadable, a binary
+description of the network operations, parameters, and memory requirements. On
+the target, `nvdla_runtime` and `libnvdla_runtime.so` parse this loadable and
+communicate with the KMD through a DRM render node. The KMD allocates GEM
+objects, exports memory references, translates submitted handles into
+accelerator-visible DMA addresses, and invokes the common NVDLA firmware
+scheduler. Completion is reported through the NVDLA interrupt and returned to
+the UMD.
+
+Although DRM was originally developed for graphics devices, its render-node
+and memory-management interfaces are also suitable for accelerators. A render
+node gives userspace controlled access to computation and memory ioctl
+(input/output control) requests without exposing display-control operations.
+GEM objects represent the buffers shared between the runtime and NVDLA. The
+CMOD at the bottom of Figure 1 is not another software driver: it is the
+software model of the NVDLA hardware blocks used by the VP to execute register
+transactions and DMA requests.
 
 ```text
 Caffe model and calibration data
@@ -147,10 +203,9 @@ interrupt path must complete each task.
 
 ### 2.2 Compatibility Gap
 
-The pinned upstream `nvdla/sw` base is commit
-`79538ba1b52b040a4a4645f630e457fa01839e90`. Its Linux port assumes interfaces
-available in the original VP environment. The first Linux 6.6 builds exposed
-the following classes of incompatibility:
+The pinned upstream `nvdla/sw` base is commit `79538ba1b52b` [3]. Its Linux
+port assumes interfaces available in the original VP environment. The first
+Linux 6.6 builds exposed the following classes of incompatibility:
 
 - inclusion of userspace `stdarg.h` during a kernel build;
 - the changed `dma_buf_vmap()` and `dma_buf_vunmap()` interface using
@@ -173,36 +228,39 @@ to position-independent executables.
 Several important faults appeared only after the module had built. Legacy IRQ
 resource lookup did not obtain the translated device-tree interrupt on the
 modern kernel. An initial GEM compatibility implementation also routed the GEM
-object callback back through a high-level `drm_gem_mmap()` helper, creating
-recursive dispatch and a kernel Oops when userspace mapped a buffer.
+object callback back through a high-level memory-mapping (`drm_gem_mmap()`)
+helper, creating recursive dispatch and a kernel Oops when userspace mapped a
+buffer.
 
 Later, the runtime completed all LeNet hardware layers and reported a passing
-test while returning `12 12 12 12 12 12 12 12 12 12` rather than the stock
-output. This was a particularly useful counterexample: clean module loading,
-successful scheduling, and a zero exit status did not imply tensor
-correctness. Exact output comparison was therefore necessary.
+test while returning the constant value 12 in all ten output positions rather
+than the stock output. This was a particularly useful counterexample: clean
+module loading, successful scheduling, and a zero exit status did not imply
+tensor correctness. Exact output comparison was therefore necessary.
 
 ## 3 Methodology
 
-### 3.1 Reproducible Build Environment
+### 3.1 Reproducibility Strategy
 
 The build and test environment was designed around pinned inputs and separate
-generated directories. Large sources and build products were stored on the WSL
-ext4 filesystem to avoid Windows path restrictions and reduce kernel build
-times. Source metadata was recorded in `repro.lock.json`, while generated
-sources and work products were kept outside Git.
+generated directories. Source metadata was recorded in `repro.lock.json`,
+while generated sources and work products were kept outside Git. Each build or
+test wrote a manifest containing the source revisions, toolchain identity,
+binary hashes, logs, and final classification. This made it possible to relate
+a result to the exact software and workload used without placing large build
+trees in version control.
 
 Table 2 summarises the environment represented by the successful VP evidence.
 
 | Component | Tested version or revision |
 | --- | --- |
 | Architecture | ARM64 (`aarch64`) |
-| Kernel | `linux-xlnx` 6.6.80+, commit `e29e392a451244a11aa3559738b6617536fde460` |
-| Build system | Buildroot 2024.02.11, tested checkout `4d772ebe75a922695e3c0c71ae7236c89ba76e01` |
+| Kernel | `linux-xlnx` 6.6.80+, commit `e29e392a4512` [4] |
+| Build system | Buildroot 2024.02.11 |
 | Compiler | Buildroot GCC and G++ 12.4.0 |
-| NVDLA software | commit `79538ba1b52b040a4a4645f630e457fa01839e90` plus patches `0001`-`0009` |
-| NVDLA VP | commit `f7ce663b95adf4f381de186b665becae28df26ed` |
-| NVDLA hardware/CMOD | `nv_small` commit `771f20cc9e69759d7277978eb41e8d47f1547374` |
+| NVDLA software | commit `79538ba1b52b` plus patches `0001`-`0009` |
+| NVDLA VP | commit `f7ce663b95ad` [5] |
+| NVDLA hardware/CMOD | `nv_small` commit `771f20cc9e69` [6] |
 | VP support environment | Locked `nvdla/vp:latest` Docker image, used for SystemC and host libraries |
 
 Buildroot generated both the C and C++ cross compilers. The same toolchain was
@@ -217,7 +275,18 @@ therefore retained the raw `Image` and generated `Image.vp2m` with a 2 MiB text
 offset for VP execution. This changed only the ARM64 image header required by
 the loader.
 
-### 3.2 Upstreamable Patch Workflow
+### 3.2 Development Environment
+
+The VP work was performed in an Ubuntu WSL2 environment with Docker Desktop.
+This was a practical development choice rather than a requirement of the
+modernised driver. The large kernel, Buildroot, VP, and hardware source trees
+were placed on the Linux ext4 filesystem because kernel source paths and build
+workloads are handled more reliably there than on a Windows-mounted project
+directory. The repository itself remained accessible from both Windows and
+Linux. An equivalent native Linux host can reproduce the same workflow when
+the pinned compiler and Docker dependencies are available.
+
+### 3.3 Upstreamable Patch Workflow
 
 The upstream source checkout under `.external/sources/nvdla-sw` was kept
 pristine. A separate `.work/nvdla-sw-patched` Git worktree received one logical
@@ -232,7 +301,7 @@ was checked for application against the pinned base, subjected to kernel
 `checkpatch` where available, built with warnings visible, and accompanied by a
 problem/cause/fix style commit message.
 
-### 3.3 KMD Forward Port
+### 3.4 KMD Forward Port
 
 The KMD was advanced in small steps so that each build failure exposed the next
 obsolete interface. Table 3 summarises the milestone patches.
@@ -250,7 +319,7 @@ Compatibility conditionals were kept close to the affected API. Older-kernel
 paths were retained where the maintenance cost remained small. The public
 NVDLA ioctl structures and numbers were not altered.
 
-### 3.4 UMD and Runtime Forward Port
+### 3.5 UMD and Runtime Forward Port
 
 The userspace patches were intentionally narrow:
 
@@ -268,7 +337,7 @@ The successful build produced both `nvdla_runtime` and
 the build manifests so that the target architecture and dynamic dependencies
 could be audited.
 
-### 3.5 Staged Correctness Tests
+### 3.6 Staged Correctness Tests
 
 Testing progressed from narrow, deterministic checks to full inference. This
 reduced the number of possible causes at each failure. Table 4 summarises the
@@ -278,7 +347,7 @@ resulting test ladder.
 | --- | --- | --- |
 | 1 | Patch application and ABI audit | Patch drift, ioctl renumbering, or KMD/UMD structure mismatch. |
 | 2 | Linux 6.6 KMD build | Removed or changed kernel APIs and module symbol problems. |
-| 3 | VP boot and module probe | Kernel image, rootfs, device tree, compatible string, IRQ, and render-node creation. |
+| 3 | VP boot and module probe | Kernel image, root filesystem, device tree, compatible string, IRQ, and render-node creation. |
 | 4 | GEM smoke utility | GEM create, map-offset, `mmap`, CPU read/write, and destroy. |
 | 5 | Runtime server and flatbuffer client | UMD/KMD protocol, task submission, scheduler, and interrupt completion. |
 | 6 | LeNet/MNIST exact comparison | End-to-end model execution and tensor correctness. |
@@ -289,7 +358,13 @@ Every VP run scanned the serial and kernel logs for `Oops`, `BUG`, `WARNING`,
 messages, and `TLM_ADDRESS_ERROR_RESPONSE`. A test could only pass when its
 functional result and log scan both passed.
 
-### 3.6 Stock Controls and Hardware-Configuration Matching
+The NVDLA runtime divides a compiled loadable into hardware layers (HWLs).
+Each HWL describes one scheduled unit of accelerator work and completes through
+the KMD interrupt path. Counting HWL completions therefore provided a useful
+measure of progress through the model, while the final tensor comparison
+determined whether that completed work was correct.
+
+### 3.7 Stock Controls and Hardware-Configuration Matching
 
 NVDLA configuration is selected independently in three places: the VP/CMOD,
 the KMD register header, and the compiler target used for the loadable. Early
@@ -300,10 +375,20 @@ CSC/CDMA programming and stalled. In contrast, a loadable compiled for
 `nv_full` completed on the stock `nvdla/vp:latest` environment and produced the
 expected digit-7 vector.
 
+This matching is required because `nv_small` is not merely a lower-performance
+runtime mode. It is a different generated hardware configuration with its own
+set of implemented units and register definitions. A KMD built with the wrong
+register header can write valid-looking values to addresses that represent
+different registers in the CMOD. Similarly, a loadable compiled for another
+configuration may request operations that the selected hardware does not
+implement.
+
 The stock image was therefore classified as an `initial`/`nv_full` control,
 not an `nv_small` oracle. The test harness recorded workload compatibility and
 rejected a result when the loadable target did not match the probed KMD
-configuration.
+configuration. The label `initial` is the name used by the original KMD build
+for the stock/full register map; in this test framework it is treated as the
+`nv_full` control configuration.
 
 For the final lane, the NVDLA VP and hardware repositories were pinned and the
 CMOD was built explicitly with `NVDLA_HW_PROJECT=nv_small`. The resulting
@@ -312,12 +397,12 @@ environment, which supplied the compatible SystemC installation. This retained
 the reproducibility of a source-built small hardware model without treating a
 Docker runtime setting as a hardware-configuration switch.
 
-### 3.7 Debugging Runtime Data Correctness
+### 3.8 Debugging Runtime Data Correctness
 
 The first modern `nv_full` LeNet run was a valuable intermediate failure. The
 KMD loaded, `/dev/dri/renderD128` existed, all ten hardware layers completed,
-and the runtime returned success. Nevertheless, the output was the constant
-vector `12 12 12 12 12 12 12 12 12 12` rather than the stock result.
+and the runtime returned success. Nevertheless, every output position contained
+the same value, 12, rather than the stock result.
 
 An opt-in local tracing patch was used for diagnosis but was deliberately kept
 out of the upstream patch series. It showed that CPU-visible GEM buffers
@@ -340,29 +425,41 @@ aperture at `0xc0000000..0xc7ffffff` and configured the VP RAM target as
 `0xc0000000..0xffffffff`. The modern KMD then allocated buffers visible to both
 the CPU and CMOD, and the LeNet output matched the stock result exactly.
 
+The distinction is between two memory models inside the VP. QEMU emulates the
+ARM processor and its normal RAM, while the NVDLA CMOD accesses a separate
+external-memory target. A buffer can therefore be valid and readable by the
+CPU but still be outside the address space served to the accelerator. The
+reserved pool ensured that GEM allocations came from the shared aperture seen
+by both sides.
+
 This result justified the final design: the common KMD only attaches an
 optional firmware-described memory region, while the VP-specific address and
 size remain in the VP device tree.
 
-### 3.8 Deterministic LeNet Workload
+### 3.9 Deterministic LeNet Workload
 
-The final workload used the Columbia LeNet/MNIST model, calibration table, and
-`seven.pgm` input. All source files were pinned by SHA-256. The loadable was
-compiled with the locked stock compiler using:
+The final workload used the LeNet/MNIST model, calibration table, and
+`seven.pgm` input published by Columbia University's Embedded Scalable
+Platforms group [7]. All source files were pinned by SHA-256 in the workload
+manifest. The loadable was compiled with the locked stock compiler using:
 
 ```text
---profile fast-math
---cprecision int8
---configtarget nv_small
---quantizationMode per-filter
---informat nchw
+/usr/local/nvdla/nvdla_compiler \
+  --prototxt lenet_mnist.prototxt \
+  --caffemodel lenet_mnist.caffemodel \
+  -o . \
+  --profile fast-math \
+  --cprecision int8 \
+  --configtarget nv_small \
+  --calibtable lenet_mnist.json \
+  --quantizationMode per-filter \
+  --informat nchw
 ```
 
-The generated loadable was 445,736 bytes with SHA-256
-`4b6aa87846329e46e9468a37ffdc0a111884fa63390cdfbea26a95a455edb29d`.
-The expected ten-element output was fixed before the modern run. A pass
-required all ten hardware layers to complete, exact equality with this vector,
-and an empty bad-pattern scan.
+The generated loadable and all source inputs were recorded by hash in the
+workload manifest. The expected ten-element output was fixed before the modern
+run. A pass required all ten hardware layers to complete, exact equality with
+this vector, and an empty bad-pattern scan.
 
 ## 4 Results and Evaluation
 
@@ -371,15 +468,19 @@ and an empty bad-pattern scan.
 The pinned Buildroot toolchain successfully produced a Linux 6.6.80+ ARM64
 kernel, root filesystem, `opendla.ko`, `nvdla_runtime`, and
 `libnvdla_runtime.so`. The small-config module used for the final lane had
-vermagic `6.6.80+ SMP aarch64` and SHA-256
-`d323d6f3482bd3bbaf0efd823548be72458cc911d131b3593d74af2d9dc1e4a0`.
+the embedded kernel-version tag (vermagic) `6.6.80+ SMP aarch64`, confirming
+that it was built for the running kernel and ARM64 architecture.
 
-The ABI audit passed. KMD and UMD contained the same four public DRM ioctl
-definitions for GEM create, GEM destroy, GEM mmap offset, and task submit, and
-the same six relevant structure names. The two header files were not
-byte-identical, so the audit emitted a warning, but their extracted semantic
-ABI facts matched. No compatibility patch changed an ioctl number or public
-structure.
+Before runtime testing, a host-side ABI audit compared the ioctl contract used
+on both sides of the userspace/kernel boundary. This check was necessary
+because the KMD and UMD contain separate copies of `nvdla_ioctl.h`; a mismatch
+could compile successfully while causing the kernel to interpret a userspace
+request with the wrong command number or structure layout. The audit passed:
+both components exposed the same four public DRM ioctl definitions for GEM
+create, GEM destroy, GEM mmap offset, and task submit, together with the same
+six relevant structure names. The header files were not byte-identical, so the
+audit emitted a warning, but their extracted semantic ABI facts matched. No
+compatibility patch changed an ioctl number or public structure.
 
 ### 4.2 Modern KMD Smoke Result
 
@@ -397,16 +498,11 @@ after compilation: translated IRQ lookup and non-recursive GEM mmap dispatch.
 
 Before promoting `nv_small` as the primary lane, the patched modern stack was
 compared with the working stock `nv_full` path. With the extmem-backed DMA pool,
-the clean modern module completed all ten LeNet layers and returned:
-
-```text
-0 2 0 0 0 0 0 124 0 0
-```
-
-This exactly matched the stock output and replaced the earlier all-12 result.
-The control demonstrated that the forward-ported KMD and UMD could preserve
-known runtime behaviour when the hardware configuration and VP memory topology
-were held consistent.
+the clean modern module completed all ten LeNet layers and exactly matched the
+stock digit-7 output. This replaced the earlier constant-value result. The
+control demonstrated that the forward-ported KMD and UMD could preserve known
+runtime behaviour when the hardware configuration and VP memory topology were
+held consistent.
 
 ### 4.4 Primary `nv_small` Correctness Result
 
@@ -435,11 +531,11 @@ recorded. Every output was:
 0 2 0 0 0 0 0 124 0 0
 ```
 
-Each output file had the same SHA-256,
-`0f3bf507cf40a21a099bf70663a59a62b75114d3d65c633e80ddb90ab73401e1`.
-The highest value was at index 7, corresponding to the expected classification
-of the input image. No Oops, BUG, warning, DMA-API error, timeout, reset, CMOD
-fatal, or TLM address error was classified in the run.
+These values are the quantised scores returned for digit classes zero through
+nine. The highest score, 124, occurred at index 7 and therefore classified the
+input image as the digit seven. Each output file had the same recorded hash.
+No Oops, BUG, warning, DMA-API error, timeout, reset, CMOD fatal, or TLM address
+error was classified in the run.
 
 Table 6 summarises the main result.
 
@@ -456,12 +552,13 @@ Table 6 summarises the main result.
 
 ### 4.5 SDP Regression Diagnostic
 
-The upstream `sdp_regression_small` flatbuffer was initially intended as a
-minimal runtime workload. In the final small lane, the KMD loaded, the render
-node existed, the runtime server accepted the request, SDP programming and
-completion markers were observed, and a 2,084-byte `.dimg` was returned.
-However, the payload following its header was entirely zero and did not match
-the selected upstream golden output.
+The upstream `sdp_regression_small` flatbuffer, a serialised description of a
+small accelerator task, was initially intended as a minimal runtime workload.
+In the final small lane, the KMD loaded, the render node existed, the runtime
+server accepted the request, SDP programming and completion markers were
+observed, and a 2,084-byte `.dimg` tensor container was returned. However, the
+payload following its header was entirely zero and did not match the selected
+upstream golden output.
 
 This did not provide evidence against the modern driver because an equivalent
 stock `nv_full` control exhibited the same important behaviour: the stock
@@ -481,7 +578,7 @@ Table 7 evaluates the milestone against the criteria from Section 1.3.
 
 | Criterion | Evaluation |
 | --- | --- |
-| Reproducible build | Met. Build manifests record the source SHAs, compiler identity, binary hashes, and logs. |
+| Reproducible build | Met. Build manifests record source revisions, compiler identity, binary hashes, and logs. |
 | ABI preservation | Met. Semantic ioctl and structure checks pass with no public ABI changes. |
 | Driver probe | Met in VP. The small compatible string and render node were recorded. |
 | GEM correctness | Met in VP. All smoke stages completed without a bad kernel pattern. |
@@ -540,15 +637,6 @@ than performing a full compiler-generated layout comparison for every build
 architecture. A future extension could compile a shared KMD/UMD probe that
 records `sizeof` and field offsets directly.
 
-### 5.3 Reproducibility Note
-
-The successful VP manifests and the checked-out source identify Buildroot
-2024.02.11 as commit `4d772ebe75a922695e3c0c71ae7236c89ba76e01`. The current
-`repro.lock.json` records the same tag but a different commit value. This
-metadata should be reconciled before a clean-room reproduction is used as
-final dissertation evidence. The tested revision reported in this chapter is
-the revision captured by the successful build manifests.
-
 ## 6 Summary of Achievements
 
 This milestone produced a working NVDLA KMD and UMD for the Linux 6.6 VP
@@ -583,7 +671,8 @@ when this draft is incorporated into the final typeset report:
    attachment.
 4. A serial-log extract showing `Probe NVDLA config nvidia,nv_small`, reserved
    memory assignment, and `/dev/dri/renderD128`.
-5. A plot or table of all ten LeNet output hashes and completion counts.
+5. A plot or table of all ten LeNet exact-comparison results and completion
+   counts.
 6. A comparison diagram of ordinary QEMU RAM and the passing VP extmem DMA
    aperture.
 
@@ -596,7 +685,7 @@ but the following run identifiers provide the source evidence for this draft:
 | --- | --- | --- |
 | E1 | `repro.lock.json` | Pinned upstream, Docker, and workload metadata. |
 | E2 | `artifacts/abi-check.json` | Semantic KMD/UMD ioctl ABI comparison. |
-| E3 | `20260702T154815Z-vp-toolchain` through `20260702T154857Z-vp-runtime` | Passing ARM64 toolchain, kernel, rootfs, KMD, and UMD build evidence. |
+| E3 | `20260702T154815Z-vp-toolchain` through `20260702T154857Z-vp-runtime` | Passing ARM64 toolchain, kernel, root filesystem, KMD, and UMD build evidence. |
 | E4 | `20260702T154938Z-vp-modern-smoke` | First complete modern GEM smoke pass. |
 | E5 | `20260707T204212Z-vp-modern-lenet-full` | Passing modern `nv_full` LeNet control with extmem-backed DMA. |
 | E6 | `20260708T144613Z-vp-modern-smoke` | Passing source-built `nv_small` probe and GEM smoke. |
@@ -608,17 +697,29 @@ but the following run identifiers provide the source evidence for this draft:
 
 ## References
 
-[1] NVIDIA, *NVDLA Software*, Git repository, base commit
-`79538ba1b52b040a4a4645f630e457fa01839e90`.
+[1] J. U. Georgis, *Evaluating Deep Learning Acceleration on FPGA: NVDLA Case
+Study*, University of Manchester Project Report, 2025. Available in this
+repository as [JacobReport-FPGA.pdf](JacobReport-FPGA.pdf).
 
-[2] AMD/Xilinx, *linux-xlnx*, commit
-`e29e392a451244a11aa3559738b6617536fde460`.
+[2] B. Bakisli, *NVDLA Modern Linux and Virtual-Platform Integration*, project
+repository. [Online]. Available:
+[https://github.com/BerkantB0/NVDLA](https://github.com/BerkantB0/NVDLA).
 
-[3] NVDLA, *Virtual Platform*, commit
-`f7ce663b95adf4f381de186b665becae28df26ed`.
+[3] NVIDIA, *NVDLA Software*, Git repository, base commit `79538ba1b52b`.
+[Online]. Available: [https://github.com/nvdla/sw](https://github.com/nvdla/sw).
 
-[4] NVDLA, *Hardware Repository, nv_small configuration*, commit
-`771f20cc9e69759d7277978eb41e8d47f1547374`.
+[4] AMD/Xilinx, *linux-xlnx*, commit `e29e392a4512`. [Online]. Available:
+[https://github.com/Xilinx/linux-xlnx](https://github.com/Xilinx/linux-xlnx).
 
-[5] J. U. Georgis, *Evaluating Deep Learning Acceleration on FPGA: NVDLA Case
-Study*, University of Manchester Project Report, 2025.
+[5] NVDLA, *Virtual Platform*, commit `f7ce663b95ad`. [Online]. Available:
+[https://github.com/nvdla/vp](https://github.com/nvdla/vp).
+
+[6] NVDLA, *Hardware Repository, nv_small configuration*, commit
+`771f20cc9e69`. [Online]. Available:
+[https://github.com/nvdla/hw](https://github.com/nvdla/hw).
+
+[7] Columbia University Embedded Scalable Platforms Group, *LeNet/MNIST NVDLA
+Example Files*: [model definition](https://www.esp.cs.columbia.edu/docs/thirdparty_acc/lenet_mnist.prototxt),
+[trained weights](https://www.esp.cs.columbia.edu/docs/thirdparty_acc/lenet_mnist.caffemodel),
+[calibration table](https://www.esp.cs.columbia.edu/docs/thirdparty_acc/lenet_mnist.json),
+and [input image](https://www.esp.cs.columbia.edu/docs/thirdparty_acc/seven.pgm).
