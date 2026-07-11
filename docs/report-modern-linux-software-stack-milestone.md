@@ -698,8 +698,7 @@ but the following run identifiers provide the source evidence for this draft:
 ## References
 
 [1] J. U. Georgis, *Evaluating Deep Learning Acceleration on FPGA: NVDLA Case
-Study*, University of Manchester Project Report, 2025. Available in this
-repository as [JacobReport-FPGA.pdf](JacobReport-FPGA.pdf).
+Study*, University of Manchester Project Report, 2025.
 
 [2] B. Bakisli, *NVDLA Modern Linux and Virtual-Platform Integration*, project
 repository. [Online]. Available:

@@ -23,3 +23,5 @@ rootfs.*
 *.ext2
 *.ext4
 
+# Related report used as a local reference; do not redistribute it.
+/docs/JacobReport-FPGA.pdf
