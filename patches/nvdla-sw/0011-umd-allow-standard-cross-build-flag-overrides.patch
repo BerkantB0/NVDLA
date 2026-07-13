@@ -1,0 +1,134 @@
+From e3384b848dc936dc5b881c2c7b9d5045311b4a73 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 13 Jul 2026 23:53:52 +0100
+Subject: [PATCH 11/11] umd: allow standard cross-build flag overrides
+
+The UMD makefiles derive every compiler and linker invocation from
+TOOLCHAIN_PREFIX and hardcode a working-directory RPATH. Embedded build
+systems need to provide complete compiler commands, sysroot and policy
+flags, and packaged binaries must not retain that RPATH.
+
+Add optional NVDLA tool and flag variables while retaining the historical
+prefix defaults. Compile C++ sources with the configured C++ compiler and
+make the runtime RPATH overrideable without changing its default.
+
+Tested with the pinned ARM64 Buildroot GCC 12.4.0 runtime build.
+
+Signed-off-by: Codex <codex@local>
+---
+ umd/apps/runtime/Makefile     | 3 ++-
+ umd/apps/runtime/rules.mk     | 6 +++---
+ umd/core/src/runtime/Makefile | 2 +-
+ umd/core/src/runtime/rules.mk | 6 +++---
+ umd/make/compile.mk           | 5 +++--
+ umd/make/macros.mk            | 9 +++++++++
+ 6 files changed, 21 insertions(+), 10 deletions(-)
+
+diff --git a/umd/apps/runtime/Makefile b/umd/apps/runtime/Makefile
+index 08265eb..c3f9b5e 100644
+--- a/umd/apps/runtime/Makefile
++++ b/umd/apps/runtime/Makefile
+@@ -45,6 +45,7 @@ MODULE_COMPILEFLAGS := -W -Wall -Wno-multichar -Wno-unused-parameter -Wno-unused
+ MODULE_CFLAGS := --std=c99
+ MODULE_CPPFLAGS := --std=c++11 -fexceptions -fno-rtti
+ RUNTIME_LDFLAGS ?=
++RUNTIME_RPATH ?= -Wl,-rpath=.
+ 
+ all:: $(TEST_BIN)
+ 
+@@ -53,4 +54,4 @@ include rules.mk
+ # the logic to compile and link stuff is in here
+ $(TEST_BIN): $(ALLMODULE_OBJS) $(SHARED_LIBS)
+ 	@echo building $(MODULE)  $@
+-	$(TOOLCHAIN_PREFIX)g++ $(ALLMODULE_OBJS) $(RUNTIME_LDFLAGS) -pthread -L$(ROOT)/external/ -ljpeg -L$(ROOT)/out/core/src/runtime/libnvdla_runtime -lnvdla_runtime -o $@ -Wl,-rpath=.
++	$(NVDLA_CXX) $(ALLMODULE_OBJS) $(NVDLA_LDFLAGS) $(RUNTIME_LDFLAGS) -pthread -L$(ROOT)/external/ -ljpeg -L$(ROOT)/out/core/src/runtime/libnvdla_runtime -lnvdla_runtime -o $@ $(RUNTIME_RPATH)
+diff --git a/umd/apps/runtime/rules.mk b/umd/apps/runtime/rules.mk
+index 595be01..3886a3f 100644
+--- a/umd/apps/runtime/rules.mk
++++ b/umd/apps/runtime/rules.mk
+@@ -26,9 +26,9 @@
+ 
+ LOCAL_DIR := $(GET_LOCAL_DIR)
+ 
+-MODULE_CC := $(TOOLCHAIN_PREFIX)gcc
+-MODULE_CPP := $(TOOLCHAIN_PREFIX)g++
+-MODULE_LD := $(TOOLCHAIN_PREFIX)ld
++MODULE_CC := $(NVDLA_CC)
++MODULE_CPP := $(NVDLA_CXX)
++MODULE_LD := $(NVDLA_LD)
+ 
+ NVDLA_SRC_FILES := \
+     DlaImage.cpp \
+diff --git a/umd/core/src/runtime/Makefile b/umd/core/src/runtime/Makefile
+index c6ef9d1..79bf007 100644
+--- a/umd/core/src/runtime/Makefile
++++ b/umd/core/src/runtime/Makefile
+@@ -53,4 +53,4 @@ include rules.mk
+ # the logic to compile and link stuff is in here
+ $(LIB): $(ALLMODULE_OBJS)
+ 	@echo building $(MODULE)  $@
+-	$(TOOLCHAIN_PREFIX)g++ -shared $(ALLMODULE_OBJS) -o $@
++	$(NVDLA_CXX) -shared $(ALLMODULE_OBJS) $(NVDLA_LDFLAGS) -o $@
+diff --git a/umd/core/src/runtime/rules.mk b/umd/core/src/runtime/rules.mk
+index f6f286a..7bc5a9d 100644
+--- a/umd/core/src/runtime/rules.mk
++++ b/umd/core/src/runtime/rules.mk
+@@ -30,9 +30,9 @@
+ 
+ LOCAL_DIR := $(GET_LOCAL_DIR)
+ 
+-MODULE_CC := $(TOOLCHAIN_PREFIX)gcc
+-MODULE_CPP := $(TOOLCHAIN_PREFIX)g++
+-MODULE_LD := $(TOOLCHAIN_PREFIX)ld
++MODULE_CC := $(NVDLA_CC)
++MODULE_CPP := $(NVDLA_CXX)
++MODULE_LD := $(NVDLA_LD)
+ 
+ NVDLA_RUNTIME_SRC_FILES := \
+     $(ROOT)/core/src/common/Check.cpp \
+diff --git a/umd/make/compile.mk b/umd/make/compile.mk
+index e0f509f..9f51a64 100644
+--- a/umd/make/compile.mk
++++ b/umd/make/compile.mk
+@@ -43,6 +43,7 @@ MODULE_OBJS := $(MODULE_COBJS) $(MODULE_CPPOBJS)
+ #$(info MODULE_CPPOBJS = $(MODULE_CPPOBJS))
+ 
+ $(MODULE_OBJS): MODULE_CC:=$(MODULE_CC)
++$(MODULE_OBJS): MODULE_CPP:=$(MODULE_CPP)
+ $(MODULE_OBJS): MODULE_OPTFLAGS:=$(MODULE_OPTFLAGS)
+ $(MODULE_OBJS): MODULE_COMPILEFLAGS:=$(MODULE_COMPILEFLAGS)
+ $(MODULE_OBJS): MODULE_CFLAGS:=$(MODULE_CFLAGS)
+@@ -55,12 +56,12 @@ $(MODULE_OBJS): $(MODULE_SRCDEPS) $(SRCDEPS)
+ $(MODULE_COBJS): $(BUILDDIR)/%.o: %.c $(SRCDEPS)
+ 	@$(MKDIR)
+ 	@echo compiling $<
+-	$(MODULE_CC) $(MODULE_OPTFLAGS) $(MODULE_COMPILEFLAGS) $(MODULE_CFLAGS) $(MODULE_INCLUDES) $(INCLUDES) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
++	$(MODULE_CC) $(MODULE_OPTFLAGS) $(MODULE_COMPILEFLAGS) $(MODULE_CFLAGS) $(NVDLA_CFLAGS) $(MODULE_INCLUDES) $(INCLUDES) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+ 
+ $(MODULE_CPPOBJS): $(BUILDDIR)/%.o: %.cpp $(SRCDEPS)
+ 	@$(MKDIR)
+ 	@echo compiling $<
+-	$(MODULE_CC) $(MODULE_OPTFLAGS) $(MODULE_COMPILEFLAGS) $(MODULE_CPPFLAGS) $(INCLUDES) $(MODULE_INCLUDES) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
++	$(MODULE_CPP) $(MODULE_OPTFLAGS) $(MODULE_COMPILEFLAGS) $(MODULE_CPPFLAGS) $(NVDLA_CXXFLAGS) $(INCLUDES) $(MODULE_INCLUDES) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+ 
+ # clear some variables we set here
+ MODULE_CSRCS :=
+diff --git a/umd/make/macros.mk b/umd/make/macros.mk
+index 24c56d0..8e1d180 100644
+--- a/umd/make/macros.mk
++++ b/umd/make/macros.mk
+@@ -33,3 +33,12 @@ MKDIR = if [ ! -d $(dir $@) ]; then mkdir -p $(dir $@); fi
+ 
+ # prepends the BUILD_DIR var to each item in the list
+ TOBUILDDIR = $(addprefix $(BUILDDIR)/,$(1))
++
++# Keep the historical prefix interface while allowing build systems to pass
++# complete compiler commands and policy flags.
++NVDLA_CC ?= $(TOOLCHAIN_PREFIX)gcc
++NVDLA_CXX ?= $(TOOLCHAIN_PREFIX)g++
++NVDLA_LD ?= $(TOOLCHAIN_PREFIX)ld
++NVDLA_CFLAGS ?=
++NVDLA_CXXFLAGS ?=
++NVDLA_LDFLAGS ?=
+-- 
+2.54.0.windows.1
