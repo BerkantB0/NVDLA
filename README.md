@@ -24,7 +24,8 @@ The project covers four connected areas:
    stability.
 3. **PetaLinux integration** - import the checked-in FPGA hardware description,
    install an XSA-derived device-tree node, build the patched driver as a
-   PetaLinux module, and produce bootable PetaLinux 2024.1 artifacts.
+   PetaLinux module, package the ARM64 UMD/runtime, and produce bootable
+   PetaLinux 2024.1 artifacts.
 4. **Hardware acceptance** - boot the generated image on the target board,
    validate probe, interrupt, and non-coherent DMA behavior, then run the same
    deterministic runtime workloads used in the VP.
@@ -45,6 +46,10 @@ non-coherent DMA path; those remain board-level acceptance criteria.
 - A PetaLinux 2024.1 ZynqMP project can be created reproducibly from
   `NVDLA_FPGA_wrapper.xsa`; the small-config `opendla.ko`, `image.ub`,
   `system.dtb`, and `BOOT.BIN` have been built successfully.
+- `nvdla_runtime` and `libnvdla_runtime.so` are built by BitBake with the
+  PetaLinux ARM64 toolchain and installed in `petalinux-image-minimal` alongside
+  `opendla.ko`. A host-side rootfs audit verifies their architecture, dynamic
+  dependency closure, hashes, and absence of RPATHs or host build paths.
 - Physical ZCU102 probe, DMA, interrupt, and inference validation is the next
   integration stage. Host build success is not treated as hardware proof.
 
@@ -57,7 +62,7 @@ non-coherent DMA path; those remain board-level acceptance criteria.
 | `tools/nvdla_test_framework/` | Python validation, workload, audit, manifest, and report tooling. |
 | `tests/` | Fast unit tests for the host-side framework. |
 | `configs/vp/` | Modern VP kernel, rootfs, and target smoke-test configuration. |
-| `recipes/petalinux/` | Local PetaLinux recipe used to build and install `opendla.ko`. |
+| `recipes/petalinux/` | Local PetaLinux recipes for `opendla.ko`, the UMD/runtime, and image composition. |
 | `workloads/` | Tracked workload definitions and target-side test utilities. |
 | `docs/` | Test strategy, reproducible runbook, artifact schema, feasibility analysis, and patch workflow. |
 | `repro.lock.json` | Pinned source commits, Docker identities, XSA facts, PetaLinux revision, and workload hashes. |
@@ -77,9 +82,9 @@ Pinned upstream sources
         |                                      |
         |                                      +--> nv_small VP correctness
         |
-Checked-in XSA --> audited device tree --> PetaLinux module and boot images
-                                                   |
-                                                   +--> ZCU102 acceptance tests
+Checked-in XSA --> audited device tree --> PetaLinux module + runtime + images
+                                                        |
+                                                        +--> ZCU102 acceptance tests
 ```
 
 Use Ubuntu 24.04 WSL2 for VP work and Ubuntu 22.04 WSL2 for PetaLinux 2024.1.
@@ -107,9 +112,16 @@ export PETALINUX_PROJECT=${PETALINUX_PROJECT:-$HOME/build/nvdla-peta/petalinux/z
 make petalinux-project
 make petalinux-dts
 NVDLA_KMD_CONFIG=small make petalinux-kmod
+make petalinux-runtime
 make petalinux-image
+make petalinux-rootfs-audit
 make petalinux-package
 ```
+
+This installs the driver and runtime but deliberately does not autoload the
+module, start a runtime service, or include model assets. The first board boot
+therefore remains a controlled manual probe before LeNet is added as a separate
+test payload.
 
 Each significant run writes evidence under `artifacts/<run-id>/`, including a
 `manifest.json`, environment details, source and binary hashes, logs, output

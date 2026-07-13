@@ -380,6 +380,17 @@ export NVDLA_DEVICE_NODE=/dev/dri/renderD128
 If another DRM device registers first, adjust to the actual render node found
 under `/dev/dri/`.
 
+Current PetaLinux 2024.1 implementation status:
+
+- The tracked `nvdla-runtime` BitBake recipe builds the patched UMD using
+  Yocto's compiler, sysroot, hardening, and reproducibility flags.
+- `/usr/bin/nvdla_runtime` and `/usr/lib/libnvdla_runtime.so` are installed in
+  `petalinux-image-minimal` alongside the split `kernel-module-opendla` package.
+- The generated rootfs passes host-side AArch64, dependency-closure, RPATH, and
+  embedded-build-path audits.
+- The module remains manual-load and no runtime service is enabled before board
+  probe and DMA validation.
+
 ## Implementation Roadmap
 
 ### Phase 0: Pin Inputs
@@ -526,7 +537,8 @@ Build checks:
 - PetaLinux image builds cleanly.
 - `opendla.ko` builds against the PetaLinux kernel.
 - UMD/runtime cross-compiles for ARM64.
-- Rootfs contains module, runtime app, loadable, and any libraries.
+- Rootfs contains the module, runtime app, shared library, and all dynamic
+  dependencies; model loadables remain separate test assets.
 
 Boot checks:
 

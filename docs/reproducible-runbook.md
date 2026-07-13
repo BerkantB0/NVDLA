@@ -39,6 +39,10 @@ export PETALINUX_PROJECT=${PETALINUX_PROJECT:-$HOME/build/nvdla-peta/petalinux/z
 make petalinux-project
 make petalinux-dts
 NVDLA_KMD_CONFIG=small make petalinux-kmod
+make petalinux-runtime
+make petalinux-image
+make petalinux-rootfs-audit
+make petalinux-package
 ```
 
 `make petalinux-project` creates a ZynqMP project when needed and imports the
@@ -47,16 +51,36 @@ checked-in `NVDLA_FPGA_wrapper.xsa`. `make petalinux-dts` installs a local
 `compatible = "nvidia,nv_small"`, CSB `0xA0000000` size `0x10000`, interrupt
 `<0 89 4>`, and leaves coherent-DMA absent for the audited HP0 path.
 
-After the module recipe and DTS are installed, build boot artifacts:
+`make petalinux-runtime` installs the tracked BitBake runtime recipe and image
+append, applies the same pinned NVDLA patch queue as the KMD recipe, and builds
+the runtime with PetaLinux's ARM64 compiler and sysroot. The image append adds
+both `opendla` and `nvdla-runtime` to `petalinux-image-minimal`.
 
-```sh
-make petalinux-image
-make petalinux-package
+The resulting rootfs contains:
+
+```text
+/usr/bin/nvdla_runtime
+/usr/lib/libnvdla_runtime.so
+/lib/modules/<kernel>/extra/opendla.ko
 ```
 
+`make petalinux-rootfs-audit` checks the generated `rootfs.tar.gz` without a
+board. It requires all three files, confirms AArch64 ELF identity, resolves each
+dynamic dependency inside the rootfs, rejects RPATH/RUNPATH and embedded host
+build paths, and records extracted binary hashes. The runtime build also treats
+Yocto `rpaths`, `textrel`, `file-rdeps`, `already-stripped`, and `buildpaths` QA
+findings as failures.
+
 These targets write manifests under `artifacts/<run-id>/` with the project path,
-XSA hash, PetaLinux settings log, DT fragment hash, module hash/vermagic when
-available, image hashes, and pass/fail/block reason.
+XSA and patch-series hashes, PetaLinux settings log, recipe/package hashes, DT
+fragment, module hash/vermagic, runtime ELF metadata, rootfs audit, image hashes,
+and pass/fail/block reason.
+
+The image does not autoload `opendla.ko` or start a runtime service. Model
+loadables and input/golden data remain separate generated test assets. After
+the board probe, IRQ, and GEM/DMA gates pass, copy or package the pinned
+`nv_small` LeNet assets and run `nvdla_runtime` manually against the discovered
+render node.
 
 ## Fetching Sources
 

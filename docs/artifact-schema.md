@@ -96,14 +96,23 @@ source-built VP binary, CMOD, DTB, and KMD hashes, the VP CMake
 `nvidia,nv_small` probe artifact.
 
 PetaLinux manifests use lanes such as `petalinux-project`, `petalinux-dts`,
-`petalinux-kmod`, `petalinux-image`, and `petalinux-package`. They include the
-Ubuntu WSL host facts, PetaLinux install path, default or explicit project path,
-settings log, XSA hash, patch-series hash, kernel version when discoverable,
-logs, and pass/fail/block reason. The DTS phase records the generated
-`nvdla-user.dtsi` hash and audit JSON; the KMD phase records `NVDLA_HW_CONFIG`,
-recipe files, `opendla.ko` path/hash, and module `vermagic`; image/package
-phases record produced boot artifact hashes. The default project path is
-`$HOME/build/nvdla-peta/petalinux/zcu102-nvdla` so generated builds stay on WSL
-ext4 unless `PETALINUX_PROJECT` is overridden.
+`petalinux-kmod`, `petalinux-runtime`, `petalinux-image`,
+`petalinux-rootfs-audit`, and `petalinux-package`. They include the Ubuntu WSL
+host facts, PetaLinux install path, default or explicit project path, settings
+log, XSA hash, patch-series hash, kernel version when discoverable, logs, and
+pass/fail/block reason. The DTS phase records the generated `nvdla-user.dtsi`
+hash and audit JSON; the KMD phase records `NVDLA_HW_CONFIG`, recipe files,
+`opendla.ko` path/hash, and module `vermagic`; image/package phases record
+produced boot artifact hashes.
+
+The runtime phase records the pinned NVDLA source revision, patch queue, recipe,
+RPM, executable, and shared-library hashes. The rootfs audit stores
+`rootfs-audit.json` plus extracted copies of the three NVDLA ELF files. Its
+manifest records rootfs archive hashes, installed paths, AArch64 machine type,
+`NEEDED` libraries, RPATH results, dependency closure, module `vermagic`, and
+binary/library/module hashes. A missing component or dependency, wrong
+architecture, RPATH/RUNPATH, or embedded host build path makes this lane fail.
+The default project path is `$HOME/build/nvdla-peta/petalinux/zcu102-nvdla` so
+generated builds stay on WSL ext4 unless `PETALINUX_PROJECT` is overridden.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.
