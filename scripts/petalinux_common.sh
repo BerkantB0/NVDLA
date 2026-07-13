@@ -145,6 +145,7 @@ runtime_binary_path = os.environ.get("RUNTIME_BINARY_PATH") or None
 runtime_library_path = os.environ.get("RUNTIME_LIBRARY_PATH") or None
 runtime_package_path = os.environ.get("RUNTIME_PACKAGE_PATH") or None
 runtime_recipe_path = os.environ.get("RUNTIME_RECIPE_PATH") or None
+image_append_path = os.environ.get("IMAGE_APPEND_PATH") or None
 image_dir = Path(os.environ["PETALINUX_PROJECT"]) / "images" / "linux"
 image_files = {}
 if image_dir.is_dir():
@@ -198,6 +199,10 @@ manifest = {
         "audit_path": os.environ.get("DTS_AUDIT_PATH") or None,
     },
     "images": image_files,
+    "image_configuration": {
+        "append_path": image_append_path,
+        "append_sha256": sha256(image_append_path),
+    },
     "package": {
         "boot_bin": package_path,
         "boot_bin_sha256": sha256(package_path),

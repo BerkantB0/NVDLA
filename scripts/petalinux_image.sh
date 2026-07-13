@@ -12,6 +12,15 @@ if ! pl_source_settings; then
 fi
 pl_require_project
 
+image_append="$PETALINUX_PROJECT/project-spec/meta-user/recipes-core/images/petalinux-image-minimal.bbappend"
+if [[ ! -f "$image_append" ]]; then
+  pl_finish_blocked "NVDLA image package append is missing; run make petalinux-runtime first"
+fi
+if ! grep -Eq 'IMAGE_INSTALL:append.*opendla.*nvdla-runtime' "$image_append"; then
+  pl_finish_fail "NVDLA image package append does not include opendla and nvdla-runtime"
+fi
+export IMAGE_APPEND_PATH="$image_append"
+
 {
   echo "Building PetaLinux image"
   echo "  project: $PETALINUX_PROJECT"

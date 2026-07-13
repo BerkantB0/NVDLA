@@ -20,12 +20,19 @@ cp -r "$ROOT/recipes/petalinux/apps/nvdla-runtime/"* "$DEST/"
 PATCH_INC="$DEST/nvdla-runtime-patches.inc"
 pl_install_patch_queue "$DEST" "$PATCH_INC" "scripts/petalinux_runtime.sh"
 
-RECIPE_FILES="$(find "$DEST" -maxdepth 2 -type f -printf '%P\n' | sort | paste -sd ':' -)"
+IMAGE_DEST="$PETALINUX_PROJECT/project-spec/meta-user/recipes-core/images"
+mkdir -p "$IMAGE_DEST"
+rm -f "$IMAGE_DEST/petalinux-image-minimal_%.bbappend"
+IMAGE_APPEND_PATH="$IMAGE_DEST/petalinux-image-minimal.bbappend"
+cp "$ROOT/recipes/petalinux/images/nvdla-stack/petalinux-image-minimal.bbappend" "$IMAGE_APPEND_PATH"
+
+RECIPE_FILES="$(find "$DEST" -maxdepth 2 -type f -printf '%P\n' | sort | paste -sd ':' -):recipes-core/images/$(basename "$IMAGE_APPEND_PATH")"
 RUNTIME_RECIPE_PATH="$DEST/nvdla-runtime.bb"
-export RECIPE_FILES RUNTIME_RECIPE_PATH
+export RECIPE_FILES RUNTIME_RECIPE_PATH IMAGE_APPEND_PATH
 
 {
   echo "Installed nvdla-runtime recipe into $DEST"
+  echo "Installed NVDLA image append into $IMAGE_APPEND_PATH"
   echo "Building nvdla-runtime in $PETALINUX_PROJECT"
 } | tee "$BUILD_LOG"
 

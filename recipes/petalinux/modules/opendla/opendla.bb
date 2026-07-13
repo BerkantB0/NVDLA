@@ -18,6 +18,7 @@ NVDLA_HW_CONFIG ?= "small"
 EXTRA_OEMAKE += "KDIR=${STAGING_KERNEL_DIR}"
 EXTRA_OEMAKE += "ARCH=${ARCH}"
 EXTRA_OEMAKE += "NVDLA_HW_CONFIG=${NVDLA_HW_CONFIG}"
+EXTRA_OEMAKE += 'KCFLAGS="-ffile-prefix-map=${S}=nvdla-sw -fmacro-prefix-map=${S}=nvdla-sw"'
 
 do_compile() {
     oe_runmake -C ${STAGING_KERNEL_DIR} M=${KMD_SRC} modules
@@ -27,5 +28,3 @@ do_install() {
     install -d ${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/extra
     install -m 0644 ${KMD_SRC}/opendla.ko ${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/extra/opendla.ko
 }
-
-FILES:${PN} += "${nonarch_base_libdir}/modules/${KERNEL_VERSION}/extra/opendla.ko"
