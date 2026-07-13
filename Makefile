@@ -13,7 +13,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control \
-        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-image petalinux-package \
+        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-runtime petalinux-image petalinux-package \
         test report clean
 
 help:
@@ -64,6 +64,7 @@ help:
 	  '  make petalinux-project Create/verify the Ubuntu-22.04 PetaLinux project and XSA import' \
 	  '  make petalinux-dts   Install the XSA-derived NVDLA device-tree fragment' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
+	  '  make petalinux-runtime Build and package the NVDLA userspace runtime' \
 	  '  make petalinux-image Build the PetaLinux bootable image artifacts' \
 	  '  make petalinux-package Package BOOT.BIN evidence after image build' \
 	  '' \
@@ -211,6 +212,9 @@ petalinux-dts:
 
 petalinux-kmod:
 	@scripts/petalinux_kmod.sh
+
+petalinux-runtime:
+	@scripts/petalinux_runtime.sh
 
 petalinux-image:
 	@scripts/petalinux_image.sh
