@@ -1,7 +1,7 @@
 From b7f9f4652a460277f435ba60f866f4a9702b10ce Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Tue, 23 Jun 2026 00:00:00 +0000
-Subject: [PATCH 01/10] umd: allow render node override from environment
+Subject: [PATCH 01/11] umd: allow render node override from environment
 
 The Linux UMD always opens /dev/dri/renderD128. That is convenient for the
 original virtual platform, but it makes bring-up on systems with multiple DRM

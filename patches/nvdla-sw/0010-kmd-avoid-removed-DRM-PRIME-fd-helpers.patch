@@ -1,7 +1,7 @@
 From 1108ea181eef268d1f09193462bdd1b7e6c2ee3f Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Thu, 9 Jul 2026 21:29:51 +0100
-Subject: [PATCH 10/10] kmd: avoid removed DRM PRIME fd helpers
+Subject: [PATCH 10/11] kmd: avoid removed DRM PRIME fd helpers
 
 Linux 6.6 keeps PRIME fd and handle ioctls in DRM core, but drm_gem_prime_fd_to_handle and drm_gem_prime_handle_to_fd are no longer exported driver helpers. Referencing them from the NVDLA driver breaks out-of-tree module builds on PetaLinux 2024.1.
 

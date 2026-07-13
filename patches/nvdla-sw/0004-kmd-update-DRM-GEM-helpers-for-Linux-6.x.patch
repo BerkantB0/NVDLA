@@ -1,7 +1,7 @@
 From f5e93cd41889422584e53f813eaab698f0c97902 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Wed, 24 Jun 2026 21:42:21 +0300
-Subject: [PATCH 04/10] kmd: update DRM GEM helpers for Linux 6.x
+Subject: [PATCH 04/11] kmd: update DRM GEM helpers for Linux 6.x
 
 Linux 6.x removed the CMA GEM helper header, moved GEM object callbacks into drm_gem_object_funcs, removed old object unreference helpers, made vm_flags read-only, and changed coherent-memory declaration APIs. The old NVDLA KMD therefore fails to build after the DMA-BUF updates.
 
