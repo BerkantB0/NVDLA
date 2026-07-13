@@ -14,6 +14,7 @@ from .lenet import (
 )
 from .lockcheck import run_lock_check
 from .petalinux import run_petalinux_dts
+from .petalinux_rootfs import run_petalinux_rootfs_audit
 from .report import write_report
 from .stock import run_stock_sdp_control
 from .vp_audit import run_vp_small_config_audit
@@ -100,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
     pl_dts.add_argument("--out", required=True, type=Path)
     pl_dts.add_argument("--audit-out", type=Path)
 
+    pl_rootfs = sub.add_parser("petalinux-rootfs-audit", help="Audit NVDLA packages in a PetaLinux rootfs")
+    pl_rootfs.add_argument("--rootfs", required=True, type=Path)
+    pl_rootfs.add_argument("--extract-dir", required=True, type=Path)
+    pl_rootfs.add_argument("--out", required=True, type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -147,5 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "petalinux-dts":
         return run_petalinux_dts(args.lock, args.xsa, args.out, args.audit_out)
+    if args.command == "petalinux-rootfs-audit":
+        return run_petalinux_rootfs_audit(args.rootfs, args.extract_dir, args.out)
     parser.error(f"unknown command {args.command}")
     return 2

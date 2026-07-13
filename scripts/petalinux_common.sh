@@ -146,15 +146,22 @@ runtime_library_path = os.environ.get("RUNTIME_LIBRARY_PATH") or None
 runtime_package_path = os.environ.get("RUNTIME_PACKAGE_PATH") or None
 runtime_recipe_path = os.environ.get("RUNTIME_RECIPE_PATH") or None
 image_append_path = os.environ.get("IMAGE_APPEND_PATH") or None
+rootfs_tar_path = os.environ.get("ROOTFS_TAR_PATH") or None
+rootfs_audit_path = os.environ.get("ROOTFS_AUDIT_PATH") or None
 image_dir = Path(os.environ["PETALINUX_PROJECT"]) / "images" / "linux"
 image_files = {}
 if image_dir.is_dir():
-    for name in ("image.ub", "system.dtb", "boot.scr", "rootfs.cpio.gz.u-boot", "BOOT.BIN"):
+    for name in ("image.ub", "system.dtb", "boot.scr", "rootfs.cpio.gz.u-boot", "rootfs.tar.gz", "rootfs.ext4", "BOOT.BIN"):
         path = image_dir / name
         if path.is_file():
             image_files[name] = {"path": str(path), "sha256": sha256(str(path))}
 
 lock = json.loads((Path(os.environ["ROOT"]) / "repro.lock.json").read_text(encoding="utf-8"))
+rootfs_audit = {}
+if rootfs_audit_path and Path(rootfs_audit_path).is_file():
+    rootfs_audit = json.loads(Path(rootfs_audit_path).read_text(encoding="utf-8"))
+runtime_elf = rootfs_audit.get("elf", {}).get("runtime", {})
+library_elf = rootfs_audit.get("elf", {}).get("library", {})
 
 manifest = {
     "schema_version": 1,
@@ -192,6 +199,7 @@ manifest = {
         "module_path": module_path,
         "module_sha256": sha256(module_path),
         "module_vermagic": os.environ.get("MODULE_VERMAGIC") or None,
+        "in_rootfs": rootfs_audit.get("members", {}).get("module") if rootfs_audit else None,
     },
     "device_tree": {
         "fragment_path": dts_path,
@@ -216,6 +224,21 @@ manifest = {
         "binary_sha256": sha256(runtime_binary_path),
         "library_path": runtime_library_path,
         "library_sha256": sha256(runtime_library_path),
+        "elf_machine": runtime_elf.get("machine"),
+        "needed": runtime_elf.get("needed", []),
+        "rpaths": runtime_elf.get("rpaths", []),
+        "in_rootfs": rootfs_audit.get("members", {}).get("runtime") if rootfs_audit else None,
+        "library_elf_machine": library_elf.get("machine"),
+        "library_needed": library_elf.get("needed", []),
+        "library_rpaths": library_elf.get("rpaths", []),
+        "library_in_rootfs": rootfs_audit.get("members", {}).get("library") if rootfs_audit else None,
+    },
+    "rootfs": {
+        "archive_path": rootfs_tar_path,
+        "archive_sha256": sha256(rootfs_tar_path),
+        "audit_path": rootfs_audit_path,
+        "audit_sha256": sha256(rootfs_audit_path),
+        "audit_status": rootfs_audit.get("status") if rootfs_audit else None,
     },
     "recipe_files": os.environ.get("RECIPE_FILES", "").split(":") if os.environ.get("RECIPE_FILES") else [],
     "logs": logs,

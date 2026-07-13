@@ -86,7 +86,7 @@ def _small_highlights(manifests: list[dict], artifacts: Path) -> list[str]:
 
 def _petalinux_highlights(manifests: list[dict]) -> list[str]:
     lines = ["## PetaLinux Highlights", ""]
-    phases = ["project", "dts", "kmod", "image", "package"]
+    phases = ["project", "dts", "kmod", "runtime", "image", "rootfs-audit", "package"]
     found = False
     for phase in phases:
         item = _latest_matching(manifests, lambda m, p=phase: m.get("lane") == f"petalinux-{p}")
