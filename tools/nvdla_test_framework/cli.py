@@ -17,7 +17,7 @@ from .petalinux import run_petalinux_dts
 from .petalinux_rootfs import run_petalinux_rootfs_audit
 from .report import write_report
 from .stock import run_stock_sdp_control
-from .trace import DEFAULT_CSB_BASE, run_trace_parse
+from .trace import DEFAULT_CSB_BASE, run_trace_compare, run_trace_parse
 from .vp_audit import run_vp_small_config_audit
 from .vp import run_vp_test
 from .workloads import generate_workloads
@@ -116,6 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     trace_parse.add_argument("--summary-out", required=True, type=Path)
     trace_parse.add_argument("--csb-base", type=lambda value: int(value, 0), default=DEFAULT_CSB_BASE)
 
+    trace_compare = sub.add_parser("trace-compare", help="Compare canonical NVDLA CSB trace artifacts")
+    trace_compare.add_argument("--reference-artifact", required=True, type=Path)
+    trace_compare.add_argument("--candidate-artifact", required=True, type=Path)
+    trace_compare.add_argument("--out", required=True, type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -175,5 +180,7 @@ def main(argv: list[str] | None = None) -> int:
             args.summary_out,
             args.csb_base,
         )
+    if args.command == "trace-compare":
+        return run_trace_compare(args.reference_artifact, args.candidate_artifact, args.out)
     parser.error(f"unknown command {args.command}")
     return 2

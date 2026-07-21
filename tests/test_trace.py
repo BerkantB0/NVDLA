@@ -6,6 +6,8 @@ from pathlib import Path
 
 from nvdla_test_framework.trace import (
     canonicalize_vp_trace,
+    compare_normalized_traces,
+    normalize_csb_events,
     parse_register_map,
     parse_vp_transactions,
     split_raw_transactions,
@@ -25,6 +27,28 @@ DBB_WRITE = (
     "Info: nvdla.dbb_adaptor: GP: iswrite=1 addr=0xc0001e80 len=16 "
     "data=0x abcd01b0 abcd01b1 abcd01b2 abcd01b3 resp=TLM_OK_RESPONSE"
 )
+
+
+def event(
+    sequence: int,
+    operation: str,
+    offset: int,
+    data: int,
+    register: str,
+    source: str = "vp",
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "sequence": sequence,
+        "source": source,
+        "interface": "csb",
+        "operation": operation,
+        "offset": f"0x{offset:08x}",
+        "length": 4,
+        "data": f"0x{data:08x}",
+        "response": "ok",
+        "register": register,
+    }
 
 
 class TraceParserTests(unittest.TestCase):
@@ -97,6 +121,87 @@ class TraceParserTests(unittest.TestCase):
             self.assertIn("CDMA_D_OP_ENABLE_0", (root / "csb-events.jsonl").read_text())
             self.assertEqual((root / "csb.raw.log").read_text().strip(), CSB_WRITE)
             self.assertEqual((root / "dbb.raw.log").read_text().strip(), DBB_WRITE)
+
+    def test_equivalent_polling_and_dma_addresses_compare_equal(self) -> None:
+        reference = [
+            event(0, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+            event(1, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+            event(2, "write", 0x3038, 0xC0016000, "CDMA_D_DAIN_ADDR_LOW_0_0"),
+            event(3, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0"),
+        ]
+        candidate = [
+            event(0, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0", source="ila"),
+            event(1, "write", 0x3038, 0xC1016000, "CDMA_D_DAIN_ADDR_LOW_0_0", source="ila"),
+            event(2, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0", source="ila"),
+        ]
+        normalized_reference, reference_policy = normalize_csb_events(reference)
+        normalized_candidate, candidate_policy = normalize_csb_events(candidate)
+
+        self.assertFalse(reference_policy["errors"])
+        self.assertFalse(candidate_policy["errors"])
+        self.assertTrue(compare_normalized_traces(normalized_reference, normalized_candidate)["match"])
+
+    def test_changed_write_value_and_order_fail(self) -> None:
+        reference, _ = normalize_csb_events(
+            [
+                event(0, "write", 0x3004, 2, "CDMA_D_MISC_CFG_0"),
+                event(1, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0"),
+            ]
+        )
+        changed_value, _ = normalize_csb_events(
+            [
+                event(0, "write", 0x3004, 3, "CDMA_D_MISC_CFG_0"),
+                event(1, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0"),
+            ]
+        )
+        reordered, _ = normalize_csb_events(list(reversed([
+            event(0, "write", 0x3004, 2, "CDMA_D_MISC_CFG_0"),
+            event(1, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0"),
+        ])))
+
+        self.assertFalse(compare_normalized_traces(reference, changed_value)["match"])
+        self.assertGreater(compare_normalized_traces(reference, changed_value)["counts"]["value_mismatched"], 0)
+        self.assertFalse(compare_normalized_traces(reference, reordered)["match"])
+        self.assertGreater(compare_normalized_traces(reference, reordered)["counts"]["reordered"], 0)
+
+    def test_missing_enable_and_changed_offset_fail(self) -> None:
+        reference, _ = normalize_csb_events(
+            [
+                event(0, "write", 0x3004, 2, "CDMA_D_MISC_CFG_0"),
+                event(1, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0"),
+            ]
+        )
+        missing, _ = normalize_csb_events([event(0, "write", 0x3004, 2, "CDMA_D_MISC_CFG_0")])
+        changed_offset, _ = normalize_csb_events(
+            [
+                event(0, "write", 0x3008, 2, "CDMA_D_DATAIN_FORMAT_0"),
+                event(1, "write", 0x3010, 1, "CDMA_D_OP_ENABLE_0"),
+            ]
+        )
+
+        self.assertEqual(compare_normalized_traces(reference, missing)["counts"]["missing"], 1)
+        self.assertFalse(compare_normalized_traces(reference, changed_offset)["match"])
+
+    def test_rejects_invalid_dma_address_and_non_ok_response(self) -> None:
+        invalid = event(0, "write", 0x3038, 0x80000001, "CDMA_D_DAIN_ADDR_LOW_0_0")
+        failed = event(1, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0")
+        failed["response"] = "address_error"
+        _, policy = normalize_csb_events([invalid, failed])
+        self.assertEqual(len(policy["errors"]), 2)
+
+    def test_interrupt_service_may_interleave_without_weakening_each_stream(self) -> None:
+        pointer = event(0, "write", 0xB004, 0, "PDP_S_POINTER_0")
+        interrupt_read = event(1, "read", 0x100C, 0x15, "GLB_S_INTR_STATUS_0")
+        interrupt_clear = event(2, "write", 0x100C, 0x15, "GLB_S_INTR_STATUS_0")
+        enable = event(3, "write", 0xB010, 1, "PDP_D_OP_ENABLE_0")
+        reference, _ = normalize_csb_events([pointer, interrupt_read, interrupt_clear, enable])
+        candidate, _ = normalize_csb_events([interrupt_read, interrupt_clear, pointer, enable])
+        changed_interrupt, _ = normalize_csb_events(
+            [event(0, "read", 0x100C, 0x16, "GLB_S_INTR_STATUS_0"), interrupt_clear, pointer, enable]
+        )
+
+        self.assertTrue(compare_normalized_traces(reference, candidate)["match"])
+        self.assertFalse(compare_normalized_traces(reference, changed_interrupt)["match"])
 
 
 if __name__ == "__main__":
