@@ -152,6 +152,7 @@ files, and pinned metadata belong in Git.
 - Milestone 1: modern Linux software stack report ([source](docs/report-modern-linux-software-stack-milestone.md), [PDF](output/pdf/modern-linux-software-stack-milestone.pdf))
 - [Reproducible runbook](docs/reproducible-runbook.md)
 - [Driver correctness strategy](docs/driver-correctness-test-strategy.md)
+- [Differential VP trace strategy](docs/differential-vp-trace-strategy.md)
 - [Artifact schema](docs/artifact-schema.md)
 - [Upstreamable patch workflow](docs/upstreamable-patch-workflow.md)
 - [PetaLinux compatibility analysis](docs/nvdla-petalinux-compatible-version-analysis.md)
