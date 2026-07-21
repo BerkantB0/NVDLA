@@ -51,12 +51,27 @@ def _small_highlights(manifests: list[dict], artifacts: Path) -> list[str]:
         lambda item: _modern(item).get("mode") == "runtime"
         and any(w.get("name") == "sdp_regression_small" for w in (_modern(item).get("workloads") or [])),
     )
+    trace_reference = _latest_matching(
+        manifests,
+        lambda item: item.get("lane") == "vp-reference" and item.get("mode") == "trace_lenet_small",
+    )
+    trace_modern = _latest_matching(
+        manifests,
+        lambda item: item.get("lane") == "vp-modern" and item.get("mode") == "trace_lenet_small",
+    )
+    trace_diff = _latest_matching(
+        manifests,
+        lambda item: item.get("lane") == "vp-trace-differential" and item.get("mode") == "trace_lenet_small",
+    )
 
     for label, item in [
         ("Smoke", smoke),
         ("LeNet Gate", lenet),
         ("LeNet Stability", stability),
         ("SDP Diagnostic", sdp),
+        ("Trace Reference", trace_reference),
+        ("Trace Candidate", trace_modern),
+        ("Trace Differential", trace_diff),
     ]:
         if item is None:
             lines.append(f"- {label}: not found")
@@ -79,6 +94,26 @@ def _small_highlights(manifests: list[dict], artifacts: Path) -> list[str]:
                     )
                 except Exception:
                     extra = ", classification=unreadable"
+        if label in {"Trace Reference", "Trace Candidate"}:
+            summary = Path(manifest_path).parent / "trace-summary.json"
+            if summary.is_file():
+                try:
+                    trace = json.loads(summary.read_text(encoding="utf-8"))
+                    extra = f", csb={trace.get('csb_event_count')}, dbb={trace.get('dbb_event_count')}"
+                except Exception:
+                    extra = ", trace-summary=unreadable"
+        if label == "Trace Differential":
+            diff = Path(manifest_path).parent / "trace-diff.json"
+            if diff.is_file():
+                try:
+                    comparison = json.loads(diff.read_text(encoding="utf-8"))
+                    counts = comparison.get("trace", {}).get("counts", {})
+                    extra = (
+                        f", classification={comparison.get('classification')}, "
+                        f"events={counts.get('reference')}/{counts.get('candidate')}"
+                    )
+                except Exception:
+                    extra = ", trace-diff=unreadable"
         lines.append(f"- {label}: {status}{extra} (`{manifest_path}`)")
     lines.append("")
     return lines

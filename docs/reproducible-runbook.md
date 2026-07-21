@@ -398,6 +398,51 @@ VP_TIMEOUT=900 \
 make vp-lenet-full
 ```
 
+## Differential `nv_small` CSB Trace Gate
+
+The differential gate runs the pinned Linux 4.13 software stack and the modern
+Linux 6.6 stack on the same source-built `nv_small` VP/CMOD. Both lanes use the
+same pinned LeNet loadable and `seven.pgm` input. The legacy capture is accepted
+as a reference only after exact output and all ten HWLs pass.
+
+Run the complete gate from WSL:
+
+```sh
+export SOURCES_DIR="$HOME/src/nvdla-peta-sources"
+export WORK_DIR="$HOME/build/nvdla-peta/vp-modern"
+
+make vp-trace-reference-small
+make vp-trace-modern-small
+make vp-trace-compare
+
+# Equivalent aggregate command:
+make vp-trace-small-gate
+```
+
+To compare existing captures explicitly:
+
+```sh
+REFERENCE_ARTIFACT=/path/to/reference \
+CANDIDATE_ARTIFACT=/path/to/candidate \
+make vp-trace-compare
+```
+
+Each capture retains `systemc.log`, split `csb.raw.log` and `dbb.raw.log`,
+canonical `csb-events.jsonl`, `trace-summary.json`, serial/runtime/dmesg output,
+and a hash-bearing manifest. The differential artifact contains
+`trace-diff.json`, `trace-diff.md`, and its own evidence manifest. Generated
+artifacts remain ignored.
+
+The automated capture uses `sc_high`, the minimum verbosity that emits every
+adaptor transaction. `VP_TRACE_VERBOSITY=sc_debug` is available for exploratory
+CMOD diagnostics but is substantially slower and is not the reproducible gate
+default.
+
+The JSONL schema is source-neutral. A future ILA CSV importer should set
+`source` to `ila` and emit the same operation, relative offset, length, data,
+response, and optional register fields. DBB comparison and the ILA importer are
+separate follow-on milestones.
+
 For the `nv_small` LeNet control, first provide a loadable compiled with
 `--configtarget nv_small --cprecision int8`; then run:
 

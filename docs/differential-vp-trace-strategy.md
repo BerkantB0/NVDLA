@@ -32,10 +32,19 @@ second comparison format.
 - Ignore timestamps and textual log formatting.
 - Mask absolute values written to DMA address registers, while requiring the
   same address-register order, valid extmem range, and word alignment.
-- Collapse consecutive duplicate status, pointer, and interrupt reads so host
-  scheduling and polling frequency do not create false mismatches.
+- Collapse duplicate status, pointer, and interrupt read states per register so
+  host scheduling and polling frequency do not create false mismatches.
 - Keep operation-enable, interrupt-mask, interrupt-status, and interrupt-clear
   transactions strict.
+- Compare programming and interrupt-status service streams independently. Linux
+  may service an interrupt before or after unrelated next-operation setup, but
+  order and values within both streams remain strict.
+
+The adaptors report transactions at SystemC verbosity `SC_HIGH`. The automated
+gate therefore uses `verbosity_level:sc_high`; `sc_debug` is available through
+`VP_TRACE_VERBOSITY=sc_debug` for exploratory captures. Enabling global debug
+also emits per-element CMOD diagnostics and changed a roughly 90-second LeNet
+run into an incomplete 30-minute run, without adding CSB or DBB transactions.
 
 The comparison records the first mismatch with context, mismatch counts,
 per-register summaries, output hashes, and completed-layer counts. Its result is
