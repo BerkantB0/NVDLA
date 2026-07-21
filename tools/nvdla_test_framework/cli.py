@@ -17,6 +17,7 @@ from .petalinux import run_petalinux_dts
 from .petalinux_rootfs import run_petalinux_rootfs_audit
 from .report import write_report
 from .stock import run_stock_sdp_control
+from .trace import DEFAULT_CSB_BASE, run_trace_parse
 from .vp_audit import run_vp_small_config_audit
 from .vp import run_vp_test
 from .workloads import generate_workloads
@@ -106,6 +107,15 @@ def main(argv: list[str] | None = None) -> int:
     pl_rootfs.add_argument("--extract-dir", required=True, type=Path)
     pl_rootfs.add_argument("--out", required=True, type=Path)
 
+    trace_parse = sub.add_parser("trace-parse", help="Canonicalize NVDLA VP SystemC transactions")
+    trace_parse.add_argument("--input", required=True, type=Path)
+    trace_parse.add_argument("--register-header", required=True, type=Path)
+    trace_parse.add_argument("--csb-out", required=True, type=Path)
+    trace_parse.add_argument("--raw-csb-out", required=True, type=Path)
+    trace_parse.add_argument("--raw-dbb-out", required=True, type=Path)
+    trace_parse.add_argument("--summary-out", required=True, type=Path)
+    trace_parse.add_argument("--csb-base", type=lambda value: int(value, 0), default=DEFAULT_CSB_BASE)
+
     args = parser.parse_args(argv)
     if args.command == "xsa-audit":
         return run_xsa_audit(args.xsa, args.lock, args.out)
@@ -155,5 +165,15 @@ def main(argv: list[str] | None = None) -> int:
         return run_petalinux_dts(args.lock, args.xsa, args.out, args.audit_out)
     if args.command == "petalinux-rootfs-audit":
         return run_petalinux_rootfs_audit(args.rootfs, args.extract_dir, args.out)
+    if args.command == "trace-parse":
+        return run_trace_parse(
+            args.input,
+            args.register_header,
+            args.csb_out,
+            args.raw_csb_out,
+            args.raw_dbb_out,
+            args.summary_out,
+            args.csb_base,
+        )
     parser.error(f"unknown command {args.command}")
     return 2
