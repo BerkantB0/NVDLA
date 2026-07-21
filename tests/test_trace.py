@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from nvdla_test_framework.trace import (
+    canonicalize_vp_trace,
     parse_register_map,
     parse_vp_transactions,
     split_raw_transactions,
@@ -70,6 +71,32 @@ class TraceParserTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(parse_register_map(header), {0x3010: "CDMA_D_OP_ENABLE_0"})
+
+    def test_streams_canonical_csb_and_raw_interface_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "systemc.log"
+            header = root / "opendla_small.h"
+            source.write_text(f"ignored\n{CSB_WRITE}\n{DBB_WRITE}\n", encoding="utf-8")
+            header.write_text(
+                "#define CDMA_D_OP_ENABLE_0 _MK_ADDR_CONST(0x3010)\n",
+                encoding="utf-8",
+            )
+
+            summary = canonicalize_vp_trace(
+                source,
+                header,
+                root / "csb-events.jsonl",
+                root / "csb.raw.log",
+                root / "dbb.raw.log",
+                root / "trace-summary.json",
+            )
+
+            self.assertEqual(summary["csb_event_count"], 1)
+            self.assertEqual(summary["dbb_event_count"], 1)
+            self.assertIn("CDMA_D_OP_ENABLE_0", (root / "csb-events.jsonl").read_text())
+            self.assertEqual((root / "csb.raw.log").read_text().strip(), CSB_WRITE)
+            self.assertEqual((root / "dbb.raw.log").read_text().strip(), DBB_WRITE)
 
 
 if __name__ == "__main__":

@@ -144,21 +144,57 @@ def canonicalize_vp_trace(
     summary_out: Path,
     csb_base: int = DEFAULT_CSB_BASE,
 ) -> dict[str, Any]:
-    lines = input_path.read_text(encoding="utf-8", errors="replace").splitlines()
     registers = parse_register_map(register_header)
-    events = parse_vp_transactions(lines, registers, csb_base=csb_base)
-    csb_events = [event for event in events if event["interface"] == "csb"]
-    raw_csb, raw_dbb = split_raw_transactions(lines)
+    by_interface: Counter[str] = Counter()
+    by_operation: Counter[str] = Counter()
+    responses: Counter[str] = Counter()
+    register_counts: Counter[str] = Counter()
+    event_count = 0
+    csb_event_count = 0
 
-    write_jsonl(csb_out, csb_events)
+    csb_out.parent.mkdir(parents=True, exist_ok=True)
     raw_csb_out.parent.mkdir(parents=True, exist_ok=True)
-    raw_csb_out.write_text("\n".join(raw_csb) + ("\n" if raw_csb else ""), encoding="utf-8")
     raw_dbb_out.parent.mkdir(parents=True, exist_ok=True)
-    raw_dbb_out.write_text("\n".join(raw_dbb) + ("\n" if raw_dbb else ""), encoding="utf-8")
+    with (
+        input_path.open("r", encoding="utf-8", errors="replace") as source,
+        csb_out.open("w", encoding="utf-8") as canonical_csb,
+        raw_csb_out.open("w", encoding="utf-8") as raw_csb,
+        raw_dbb_out.open("w", encoding="utf-8") as raw_dbb,
+    ):
+        for line_number, line in enumerate(source, start=1):
+            is_csb = "nvdla.csb_adaptor: GP:" in line
+            is_dbb = "nvdla.dbb_adaptor: GP:" in line
+            if not is_csb and not is_dbb:
+                continue
+            try:
+                event = parse_vp_transactions([line], registers, csb_base=csb_base)[0]
+            except ValueError as exc:
+                raise ValueError(f"{exc} (source line {line_number})") from exc
 
-    summary = summarize_trace(events)
-    summary["csb_event_count"] = len(csb_events)
-    summary["dbb_event_count"] = len(events) - len(csb_events)
+            event_count += 1
+            by_interface[event["interface"]] += 1
+            by_operation[f"{event['interface']}:{event['operation']}"] += 1
+            responses[event["response"]] += 1
+            if is_csb:
+                event["sequence"] = csb_event_count
+                csb_event_count += 1
+                register_counts[event.get("register") or event["offset"]] += 1
+                canonical_csb.write(json.dumps(event, sort_keys=True) + "\n")
+                raw_csb.write(line)
+            else:
+                raw_dbb.write(line)
+
+    summary = {
+        "schema_version": TRACE_SCHEMA_VERSION,
+        "event_count": event_count,
+        "by_interface": dict(sorted(by_interface.items())),
+        "by_operation": dict(sorted(by_operation.items())),
+        "responses": dict(sorted(responses.items())),
+        "non_ok_responses": sum(count for response, count in responses.items() if response != "ok"),
+        "registers": dict(sorted(register_counts.items())),
+        "csb_event_count": csb_event_count,
+        "dbb_event_count": event_count - csb_event_count,
+    }
     write_json(summary_out, summary)
     return summary
 
