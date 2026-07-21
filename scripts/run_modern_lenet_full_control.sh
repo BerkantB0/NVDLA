@@ -415,7 +415,7 @@ if [[ "$VP_RUNNER" == "docker" ]]; then
         -v "$PAYLOAD:/payload:ro" \
         -w /vp-run \
         "$DOCKER_IMAGE" \
-        bash -lc "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua" \
+        bash -lc "set +e; cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua; status=\$?; echo __NVDLA_VP_PROCESS_STATUS__=\$status; if [ \$status -eq 139 ] && [ -f /vp-run/runtime-output/output.txt ]; then exit 0; fi; exit \$status" \
         | tee "$OUT/serial.log"
 elif [[ "$VP_RUNNER" == "source-docker" ]]; then
     timeout -k 30 "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
@@ -431,7 +431,7 @@ elif [[ "$VP_RUNNER" == "source-docker" ]]; then
         -v "$VP_CMOD_LIBRARY_DIR:/vp-small-cmod:ro" \
         -w /vp-run \
         "$DOCKER_IMAGE" \
-        bash -lc "export LD_LIBRARY_PATH=/vp-small-lib:/vp-small-cmod:/usr/local/systemc-2.3.0/lib-linux64:\${LD_LIBRARY_PATH:-}; cd /vp-run && /vp-small-bin/$VP_BINARY_BASENAME -c /vp-run/modern-vp.lua" \
+        bash -lc "set +e; export LD_LIBRARY_PATH=/vp-small-lib:/vp-small-cmod:/usr/local/systemc-2.3.0/lib-linux64:\${LD_LIBRARY_PATH:-}; cd /vp-run && /vp-small-bin/$VP_BINARY_BASENAME -c /vp-run/modern-vp.lua; status=\$?; echo __NVDLA_VP_PROCESS_STATUS__=\$status; if [ \$status -eq 139 ] && [ -f /vp-run/runtime-output/output.txt ]; then exit 0; fi; exit \$status" \
         | tee "$OUT/serial.log"
 else
     timeout -k 30 "$VP_TIMEOUT" env SC_SIGNAL_WRITE_CHECK=DISABLE LD_LIBRARY_PATH="$VP_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}" \
@@ -441,6 +441,18 @@ else
 fi
 RUN_STATUS=${PIPESTATUS[0]}
 set -e
+
+VP_PROCESS_STATUS="$(sed -n 's/^__NVDLA_VP_PROCESS_STATUS__=//p' "$OUT/serial.log" | tail -n 1)"
+VP_PROCESS_STATUS="${VP_PROCESS_STATUS:-$RUN_STATUS}"
+VP_TEARDOWN_ONLY=false
+if [[ "$VP_PROCESS_STATUS" -eq 139 ]] \
+    && grep -q '__NVDLA_RUNTIME_END__' "$OUT/serial.log" \
+    && grep -q 'reboot: Power down' "$OUT/serial.log"; then
+    VP_TEARDOWN_ONLY=true
+    grep -E 'reboot: Power down|Segmentation fault|__NVDLA_VP_PROCESS_STATUS__' "$OUT/serial.log" >"$OUT/vp-teardown.log" || true
+else
+    : >"$OUT/vp-teardown.log"
+fi
 
 OUTPUT_FILE="$OUT/runtime-output/output.txt"
 OUTPUT_NORMALIZED=""
@@ -485,7 +497,12 @@ else
     : >"$OUT/bad-patterns.log"
 fi
 
-if [[ "$RUN_STATUS" -eq 0 && "$TRACE_STATUS" -eq 0 && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && ! -s "$OUT/bad-patterns.log" ]]; then
+VP_EXIT_ACCEPTED=false
+if [[ "$VP_PROCESS_STATUS" -eq 0 || "$VP_TEARDOWN_ONLY" == true ]]; then
+    VP_EXIT_ACCEPTED=true
+fi
+if [[ "$RUN_STATUS" -eq 0 && "$VP_EXIT_ACCEPTED" == true && "$TRACE_STATUS" -eq 0 \
+    && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && ! -s "$OUT/bad-patterns.log" ]]; then
     STATUS="pass"
 else
     STATUS="fail"
@@ -501,6 +518,8 @@ cat >"$OUT/manifest.json" <<EOF
   "vp_hw_config": "$VP_HW_CONFIG",
   "vp_runner": "$VP_RUNNER",
   "docker_status": $RUN_STATUS,
+  "vp_process_status": $VP_PROCESS_STATUS,
+  "vp_teardown_only": $VP_TEARDOWN_ONLY,
   "trace": {
     "enabled": $(if [[ "$VP_TRACE" == "1" ]]; then echo true; else echo false; fi),
     "status": $TRACE_STATUS,
@@ -578,7 +597,8 @@ cat >"$OUT/manifest.json" <<EOF
     "cmdline": "cmdline.txt",
     "device_tree_summary": "device-tree-summary.txt",
     "rcu_cpu_stall_timeout": "rcu-cpu-stall-timeout.txt",
-    "bad_patterns": "bad-patterns.log"
+    "bad_patterns": "bad-patterns.log",
+    "vp_teardown": "vp-teardown.log"
     $(if [[ "$VP_TRACE" == "1" ]]; then printf ',\n    "systemc": "systemc.log",\n    "csb_raw": "csb.raw.log",\n    "dbb_raw": "dbb.raw.log",\n    "csb_events": "csb-events.jsonl",\n    "trace_summary": "trace-summary.json"'; fi)
   }
 }

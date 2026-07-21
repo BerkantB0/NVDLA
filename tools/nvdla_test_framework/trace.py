@@ -390,6 +390,117 @@ def _comparison_channel(event: dict[str, Any]) -> str:
     return "programming"
 
 
+def _interrupt_bit_counts(values: list[int]) -> Counter[int]:
+    counts: Counter[int] = Counter()
+    for value in values:
+        bit = 0
+        while value:
+            if value & 1:
+                counts[bit] += 1
+            value >>= 1
+            bit += 1
+    return counts
+
+
+def _summarize_interrupt_service(events: list[dict[str, Any]]) -> dict[str, Any]:
+    acknowledgements: list[int] = []
+    errors: list[dict[str, Any]] = []
+    index = 0
+    while index < len(events):
+        event = events[index]
+        value = int(event["data"], 16)
+        if event["operation"] == "read" and value == 0:
+            index += 1
+            continue
+        if event["operation"] != "read":
+            errors.append({"index": index, "reason": "expected_nonzero_status_read", "event": event})
+            index += 1
+            continue
+        if index + 1 >= len(events):
+            errors.append({"index": index, "reason": "missing_interrupt_acknowledge", "event": event})
+            break
+
+        acknowledge = events[index + 1]
+        if acknowledge["operation"] != "write" or acknowledge["data"] != event["data"]:
+            errors.append(
+                {
+                    "index": index + 1,
+                    "reason": "interrupt_acknowledge_mismatch",
+                    "status": event,
+                    "acknowledge": acknowledge,
+                }
+            )
+            index += 1
+            continue
+
+        if index + 2 >= len(events):
+            errors.append({"index": index + 1, "reason": "missing_interrupt_clear_confirmation", "event": acknowledge})
+            break
+        confirmation = events[index + 2]
+        if confirmation["operation"] != "read" or int(confirmation["data"], 16) != 0:
+            errors.append(
+                {
+                    "index": index + 2,
+                    "reason": "interrupt_not_cleared",
+                    "acknowledge": acknowledge,
+                    "confirmation": confirmation,
+                }
+            )
+            index += 2
+            continue
+
+        acknowledgements.append(value)
+        index += 3
+
+    bit_counts = _interrupt_bit_counts(acknowledgements)
+    return {
+        "valid": not errors,
+        "batch_count": len(acknowledgements),
+        "acknowledged_values": [f"0x{value:08x}" for value in acknowledgements],
+        "bit_counts": {str(bit): count for bit, count in sorted(bit_counts.items())},
+        "errors": errors,
+        "_bit_counter": bit_counts,
+    }
+
+
+def _compare_interrupt_service(
+    reference: list[dict[str, Any]], candidate: list[dict[str, Any]]
+) -> dict[str, Any]:
+    reference_service = _summarize_interrupt_service(reference)
+    candidate_service = _summarize_interrupt_service(candidate)
+    reference_bits = reference_service.pop("_bit_counter")
+    candidate_bits = candidate_service.pop("_bit_counter")
+    missing = sum((reference_bits - candidate_bits).values())
+    unexpected = sum((candidate_bits - reference_bits).values())
+    match = reference_service["valid"] and candidate_service["valid"] and reference_bits == candidate_bits
+    first_mismatch = None
+    if not match:
+        first_mismatch = {
+            "index": 0,
+            "reference_context": _event_context(reference, 0) if reference else [],
+            "candidate_context": _event_context(candidate, 0) if candidate else [],
+            "reference_errors": reference_service["errors"],
+            "candidate_errors": candidate_service["errors"],
+        }
+    return {
+        "match": match,
+        "counts": {
+            "reference": len(reference),
+            "candidate": len(candidate),
+            "missing": missing,
+            "unexpected": unexpected,
+            "reordered": 0,
+            "value_mismatched": 0 if reference_bits == candidate_bits else missing + unexpected,
+        },
+        "first_mismatch": first_mismatch,
+        "semantics": {
+            "reference": reference_service,
+            "candidate": candidate_service,
+            "coalescing_equivalent": reference_bits == candidate_bits,
+        },
+    }
+
+
 def compare_normalized_traces(
     reference: list[dict[str, Any]], candidate: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -397,7 +508,10 @@ def compare_normalized_traces(
     for channel in ("programming", "interrupt"):
         reference_channel = [event for event in reference if _comparison_channel(event) == channel]
         candidate_channel = [event for event in candidate if _comparison_channel(event) == channel]
-        channels[channel] = _compare_sequence(reference_channel, candidate_channel)
+        if channel == "interrupt":
+            channels[channel] = _compare_interrupt_service(reference_channel, candidate_channel)
+        else:
+            channels[channel] = _compare_sequence(reference_channel, candidate_channel)
 
     first_mismatch = None
     for channel in ("programming", "interrupt"):
@@ -509,7 +623,8 @@ def compare_trace_artifacts(reference_artifact: Path, candidate_artifact: Path, 
         "dma_address_values": "masked_after_extmem_range_and_alignment_validation",
         "state_reads": "unique_transitions_per_register",
         "ordinary_writes": "exact_offset_value_order",
-        "interrupt_interleaving": "programming_and_interrupt_streams_are_independently_ordered",
+        "interrupt_interleaving": "programming_and_interrupt_service_are_compared_independently",
+        "interrupt_coalescing": "exact_status_acknowledge_clear_cycles_and_per_bit_occurrence_counts",
         "strict_control": ["operation-enable", "interrupt-mask", "interrupt-status", "interrupt-clear"],
     }
     result = {

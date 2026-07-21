@@ -34,11 +34,17 @@ second comparison format.
   same address-register order, valid extmem range, and word alignment.
 - Collapse duplicate status, pointer, and interrupt read states per register so
   host scheduling and polling frequency do not create false mismatches.
-- Keep operation-enable, interrupt-mask, interrupt-status, and interrupt-clear
-  transactions strict.
-- Compare programming and interrupt-status service streams independently. Linux
-  may service an interrupt before or after unrelated next-operation setup, but
-  order and values within both streams remain strict.
+- Keep operation-enable and interrupt-mask transactions strict. For interrupt
+  service, require every nonzero status read to be acknowledged by an identical
+  write and followed by a zero status read. Compare the number of occurrences
+  of every acknowledged interrupt bit.
+- Allow interrupt bits to be split across multiple service cycles or coalesced
+  into one status value. Linux may enter the ISR before or after another engine
+  completes, so raw status values and batch order are scheduling-dependent even
+  when the same interrupts are handled correctly.
+- Compare programming and interrupt service independently. This permits only
+  interrupt timing and coalescing differences; the programming stream remains
+  exact in offset, value, and order.
 
 The adaptors report transactions at SystemC verbosity `SC_HIGH`. The automated
 gate therefore uses `verbosity_level:sc_high`; `sc_debug` is available through
@@ -59,3 +65,9 @@ behavior in the register-accurate VP. It does not prove FPGA timing, reset,
 physical interrupt routing, or non-coherent HP0 DMA behavior. Later ILA captures
 from the real design will be normalized into the same event format and compared
 against the validated VP trace.
+
+The source-built VP can terminate with status 139 after the guest has completed
+LeNet and printed `reboot: Power down`. A capture accepts this only when the
+runtime success marker, exact output, all ten HWLs, and guest poweroff marker
+are already present. The raw process status and `vp-teardown.log` remain in the
+manifest; any earlier status 139 is a lane failure.

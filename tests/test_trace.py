@@ -193,15 +193,69 @@ class TraceParserTests(unittest.TestCase):
         pointer = event(0, "write", 0xB004, 0, "PDP_S_POINTER_0")
         interrupt_read = event(1, "read", 0x100C, 0x15, "GLB_S_INTR_STATUS_0")
         interrupt_clear = event(2, "write", 0x100C, 0x15, "GLB_S_INTR_STATUS_0")
-        enable = event(3, "write", 0xB010, 1, "PDP_D_OP_ENABLE_0")
-        reference, _ = normalize_csb_events([pointer, interrupt_read, interrupt_clear, enable])
-        candidate, _ = normalize_csb_events([interrupt_read, interrupt_clear, pointer, enable])
+        clear_confirmation = event(3, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0")
+        enable = event(4, "write", 0xB010, 1, "PDP_D_OP_ENABLE_0")
+        reference, _ = normalize_csb_events([pointer, interrupt_read, interrupt_clear, clear_confirmation, enable])
+        candidate, _ = normalize_csb_events([interrupt_read, interrupt_clear, clear_confirmation, pointer, enable])
         changed_interrupt, _ = normalize_csb_events(
-            [event(0, "read", 0x100C, 0x16, "GLB_S_INTR_STATUS_0"), interrupt_clear, pointer, enable]
+            [
+                event(0, "read", 0x100C, 0x16, "GLB_S_INTR_STATUS_0"),
+                event(1, "write", 0x100C, 0x16, "GLB_S_INTR_STATUS_0"),
+                clear_confirmation,
+                pointer,
+                enable,
+            ]
         )
 
         self.assertTrue(compare_normalized_traces(reference, candidate)["match"])
         self.assertFalse(compare_normalized_traces(reference, changed_interrupt)["match"])
+
+    def test_interrupt_coalescing_preserves_acknowledged_bit_counts(self) -> None:
+        reference_events = [
+            event(0, "read", 0x100C, 0x00040000, "GLB_S_INTR_STATUS_0"),
+            event(1, "write", 0x100C, 0x00040000, "GLB_S_INTR_STATUS_0"),
+            event(2, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+            event(3, "read", 0x100C, 0x00110001, "GLB_S_INTR_STATUS_0"),
+            event(4, "write", 0x100C, 0x00110001, "GLB_S_INTR_STATUS_0"),
+            event(5, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+        ]
+        candidate_events = [
+            event(0, "read", 0x100C, 0x00150001, "GLB_S_INTR_STATUS_0"),
+            event(1, "write", 0x100C, 0x00150001, "GLB_S_INTR_STATUS_0"),
+            event(2, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+        ]
+        reference, _ = normalize_csb_events(reference_events)
+        candidate, _ = normalize_csb_events(candidate_events)
+        result = compare_normalized_traces(reference, candidate)
+
+        self.assertTrue(result["match"])
+        self.assertTrue(result["channels"]["interrupt"]["semantics"]["coalescing_equivalent"])
+
+    def test_interrupt_acknowledge_and_clear_cycle_remains_strict(self) -> None:
+        reference, _ = normalize_csb_events(
+            [
+                event(0, "read", 0x100C, 0x15, "GLB_S_INTR_STATUS_0"),
+                event(1, "write", 0x100C, 0x15, "GLB_S_INTR_STATUS_0"),
+                event(2, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+            ]
+        )
+        bad_acknowledge, _ = normalize_csb_events(
+            [
+                event(0, "read", 0x100C, 0x15, "GLB_S_INTR_STATUS_0"),
+                event(1, "write", 0x100C, 0x14, "GLB_S_INTR_STATUS_0"),
+                event(2, "read", 0x100C, 0, "GLB_S_INTR_STATUS_0"),
+            ]
+        )
+        uncleared, _ = normalize_csb_events(
+            [
+                event(0, "read", 0x100C, 0x15, "GLB_S_INTR_STATUS_0"),
+                event(1, "write", 0x100C, 0x15, "GLB_S_INTR_STATUS_0"),
+                event(2, "read", 0x100C, 0x01, "GLB_S_INTR_STATUS_0"),
+            ]
+        )
+
+        self.assertFalse(compare_normalized_traces(reference, bad_acknowledge)["match"])
+        self.assertFalse(compare_normalized_traces(reference, uncleared)["match"])
 
 
 if __name__ == "__main__":

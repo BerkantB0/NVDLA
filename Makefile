@@ -223,9 +223,14 @@ vp-trace-compare:
 	exit $$status
 
 vp-trace-small-gate:
-	@$(MAKE) vp-trace-reference-small
-	@$(MAKE) vp-trace-modern-small
-	@$(MAKE) vp-trace-compare
+	@root="$(CURDIR)"; \
+	set -e; \
+	cd /tmp; \
+	$(MAKE) -C "$$root" vp-trace-reference-small; \
+	cd /tmp; \
+	$(MAKE) -C "$$root" vp-trace-modern-small; \
+	cd /tmp; \
+	$(MAKE) -C "$$root" vp-trace-compare
 
 petalinux-smoke:
 	@scripts/petalinux_smoke.sh

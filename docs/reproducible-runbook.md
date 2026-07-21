@@ -438,6 +438,18 @@ adaptor transaction. `VP_TRACE_VERBOSITY=sc_debug` is available for exploratory
 CMOD diagnostics but is substantially slower and is not the reproducible gate
 default.
 
+Interrupt status values may be coalesced differently by the Linux 4.13 and 6.6
+guests. The comparator requires exact status-read/acknowledge-write/zero-read
+cycles and equal per-bit occurrence counts, while allowing equivalent bits to
+be split across or combined within service cycles. Ordinary CSB programming is
+still compared in exact offset, value, and order.
+
+The source VP occasionally exits with status 139 after a successful guest
+poweroff. This is accepted only when the exact LeNet output, all ten HWLs, the
+runtime completion marker, and `reboot: Power down` precede it. The capture
+records `vp_process_status`, `vp_teardown_only`, and `vp-teardown.log`; a crash
+before those markers remains a hard failure.
+
 The JSONL schema is source-neutral. A future ILA CSV importer should set
 `source` to `ila` and emit the same operation, relative offset, length, data,
 response, and optional register fields. DBB comparison and the ILA importer are

@@ -230,7 +230,7 @@ timeout -k 30 "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
     -v "$VP_CMOD_LIBRARY_DIR:/vp-small-cmod:ro" \
     -w /vp-run \
     "$DOCKER_IMAGE" \
-    bash -lc "export LD_LIBRARY_PATH=/vp-small-lib:/vp-small-cmod:$SYSTEMC_PREFIX/lib-linux64:\${LD_LIBRARY_PATH:-}; /vp-small-bin/$VP_BINARY_BASENAME -c /vp-run/reference-vp.lua" \
+    bash -lc "set +e; export LD_LIBRARY_PATH=/vp-small-lib:/vp-small-cmod:$SYSTEMC_PREFIX/lib-linux64:\${LD_LIBRARY_PATH:-}; /vp-small-bin/$VP_BINARY_BASENAME -c /vp-run/reference-vp.lua; status=\$?; echo __NVDLA_VP_PROCESS_STATUS__=\$status; if [ \$status -eq 139 ] && [ -f /vp-run/output.txt ]; then exit 0; fi; exit \$status" \
     2>&1 | tee "$OUT/serial.log"
 RUN_STATUS=${PIPESTATUS[0]}
 set -e
@@ -249,6 +249,18 @@ set +e
 TRACE_STATUS=$?
 set -e
 
+VP_PROCESS_STATUS="$(sed -n 's/^__NVDLA_VP_PROCESS_STATUS__=//p' "$OUT/serial.log" | tail -n 1)"
+VP_PROCESS_STATUS="${VP_PROCESS_STATUS:-$RUN_STATUS}"
+VP_TEARDOWN_ONLY=false
+if [[ "$VP_PROCESS_STATUS" -eq 139 ]] \
+    && grep -q '__NVDLA_REFERENCE_END__' "$OUT/serial.log" \
+    && grep -q 'reboot: Power down' "$OUT/serial.log"; then
+    VP_TEARDOWN_ONLY=true
+    grep -E 'reboot: Power down|Segmentation fault|__NVDLA_VP_PROCESS_STATUS__' "$OUT/serial.log" >"$OUT/vp-teardown.log" || true
+else
+    : >"$OUT/vp-teardown.log"
+fi
+
 OUTPUT_NORMALIZED=""
 if [[ -f "$OUT/output.txt" ]]; then
     OUTPUT_NORMALIZED="$(tr -s '[:space:]' ' ' <"$OUT/output.txt" | sed 's/^ //; s/ $//')"
@@ -260,7 +272,12 @@ grep -E "$BAD_PATTERNS" "$OUT/serial.log" "$OUT/dmesg.log" "$OUT/systemc.log" >"
 
 STATUS="blocked"
 CLASSIFICATION="reference_invalid"
-if [[ "$RUN_STATUS" -eq 0 && "$TRACE_STATUS" -eq 0 && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && "$LAYER_COMPLETIONS" -eq 10 && ! -s "$OUT/bad-patterns.log" ]]; then
+VP_EXIT_ACCEPTED=false
+if [[ "$VP_PROCESS_STATUS" -eq 0 || "$VP_TEARDOWN_ONLY" == true ]]; then
+    VP_EXIT_ACCEPTED=true
+fi
+if [[ "$RUN_STATUS" -eq 0 && "$TRACE_STATUS" -eq 0 && "$VP_EXIT_ACCEPTED" == true \
+    && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && "$LAYER_COMPLETIONS" -eq 10 && ! -s "$OUT/bad-patterns.log" ]]; then
     STATUS="pass"
     CLASSIFICATION="pass"
 fi
@@ -277,6 +294,8 @@ cat >"$OUT/manifest.json" <<EOF
   "classification": "$CLASSIFICATION",
   "vp_hw_config": "small",
   "runner_status": $RUN_STATUS,
+  "vp_process_status": $VP_PROCESS_STATUS,
+  "vp_teardown_only": $VP_TEARDOWN_ONLY,
   "trace_status": $TRACE_STATUS,
   "trace_verbosity": "$VP_TRACE_VERBOSITY",
   "expected_output": "$EXPECTED_OUTPUT",
@@ -309,7 +328,8 @@ cat >"$OUT/manifest.json" <<EOF
     "dmesg": "dmesg.log",
     "runtime": "runtime.log",
     "output": "output.txt",
-    "bad_patterns": "bad-patterns.log"
+    "bad_patterns": "bad-patterns.log",
+    "vp_teardown": "vp-teardown.log"
   }
 }
 EOF
