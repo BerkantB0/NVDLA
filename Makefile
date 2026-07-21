@@ -12,7 +12,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         workloads abi-check \
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
-        vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small \
+        vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small \
         petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-runtime petalinux-image petalinux-rootfs-audit petalinux-package \
         test report clean
 
@@ -62,6 +62,7 @@ help:
 	  '  make vp-sdp-small-diagnostic Classify current SDP small diagnostic result' \
 	  '  make vp-stock-sdp-control Run stock VP/KMD/runtime SDP full control' \
 	  '  make vp-trace-reference-small Capture a validated legacy nv_small CSB reference' \
+	  '  make vp-trace-modern-small Capture modern Linux nv_small CSB candidate evidence' \
 	  '  make petalinux-project Create/verify the Ubuntu-22.04 PetaLinux project and XSA import' \
 	  '  make petalinux-dts   Install the XSA-derived NVDLA device-tree fragment' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
@@ -205,6 +206,9 @@ vp-stock-sdp-control: workloads
 
 vp-trace-reference-small: vp-lenet-small-workload
 	@scripts/run_legacy_lenet_small_trace.sh
+
+vp-trace-modern-small:
+	@VP_TRACE=1 REPEAT=1 $(MAKE) vp-lenet-small-gate
 
 petalinux-smoke:
 	@scripts/petalinux_smoke.sh

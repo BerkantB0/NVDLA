@@ -3,11 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$HOME/build/nvdla-peta/vp-modern}"
+SOURCES_DIR="${SOURCES_DIR:-$ROOT/.external/sources}"
 LENET_DIR="${LENET_DIR:-$ROOT/artifacts/20260703T115149Z-vp-stock-lenet}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvdla/vp:latest}"
 VP_TIMEOUT="${VP_TIMEOUT:-900}"
 VP_HW_CONFIG="${VP_HW_CONFIG:-full}"
 REPEAT="${REPEAT:-1}"
+VP_TRACE="${VP_TRACE:-0}"
+VP_TRACE_VERBOSITY="${VP_TRACE_VERBOSITY:-sc_high}"
 
 case "$VP_HW_CONFIG" in
     full)
@@ -40,6 +43,15 @@ case "$VP_HW_CONFIG" in
         exit 2
         ;;
 esac
+
+if [[ "$VP_TRACE" == "1" ]]; then
+    if [[ "$VP_HW_CONFIG" != "small" ]]; then
+        echo "VP_TRACE currently supports only VP_HW_CONFIG=small" >&2
+        exit 2
+    fi
+    RUN_SUFFIX="vp-trace-modern-small"
+    MODE_NAME="trace_lenet_small"
+fi
 
 KERNEL_IMAGE="${VP_MODERN_KERNEL:-$WORK_DIR/kernel/arch/arm64/boot/Image.vp2m}"
 ROOTFS_IMAGE="${VP_MODERN_ROOTFS:-$WORK_DIR/buildroot/images/rootfs-smoke.ext4}"
@@ -173,6 +185,15 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$RUN_SUFFIX"
 OUT="$ROOT/artifacts/$RUN_ID"
 PAYLOAD="$OUT/payload"
 mkdir -p "$PAYLOAD"
+
+TRACE_DOCKER_ENV=()
+TRACE_HOST_ENV=()
+SC_LOG_VALUE=""
+if [[ "$VP_TRACE" == "1" ]]; then
+    SC_LOG_VALUE="outfile:/vp-run/systemc.log;verbosity_level:$VP_TRACE_VERBOSITY;csb_adaptor:enable;dbb_adaptor:enable"
+    TRACE_DOCKER_ENV=(-e "SC_LOG=$SC_LOG_VALUE")
+    TRACE_HOST_ENV=("SC_LOG=outfile:$OUT/systemc.log;verbosity_level:$VP_TRACE_VERBOSITY;csb_adaptor:enable;dbb_adaptor:enable")
+fi
 
 cp "$KMOD" "$PAYLOAD/opendla.ko"
 cp "$RUNTIME_BIN" "$PAYLOAD/nvdla_runtime"
@@ -384,8 +405,9 @@ sha256sum "$PAYLOAD"/* >"$OUT/input-sha256.txt"
 
 set +e
 if [[ "$VP_RUNNER" == "docker" ]]; then
-    timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
+    timeout -k 30 "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
         -e SC_SIGNAL_WRITE_CHECK=DISABLE \
+        "${TRACE_DOCKER_ENV[@]}" \
         -v "$OUT:/vp-run" \
         -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
         -v "$(dirname "$ROOTFS_IMAGE"):/vp-rootfs:ro" \
@@ -396,8 +418,9 @@ if [[ "$VP_RUNNER" == "docker" ]]; then
         bash -lc "cd /vp-run && aarch64_toplevel -c /vp-run/modern-vp.lua" \
         | tee "$OUT/serial.log"
 elif [[ "$VP_RUNNER" == "source-docker" ]]; then
-    timeout "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
+    timeout -k 30 "$VP_TIMEOUT" "$DOCKER_BIN_RESOLVED" run --rm -i \
         -e SC_SIGNAL_WRITE_CHECK=DISABLE \
+        "${TRACE_DOCKER_ENV[@]}" \
         -v "$OUT:/vp-run" \
         -v "$(dirname "$KERNEL_IMAGE"):/vp-kernel:ro" \
         -v "$(dirname "$ROOTFS_IMAGE"):/vp-rootfs:ro" \
@@ -411,7 +434,8 @@ elif [[ "$VP_RUNNER" == "source-docker" ]]; then
         bash -lc "export LD_LIBRARY_PATH=/vp-small-lib:/vp-small-cmod:/usr/local/systemc-2.3.0/lib-linux64:\${LD_LIBRARY_PATH:-}; cd /vp-run && /vp-small-bin/$VP_BINARY_BASENAME -c /vp-run/modern-vp.lua" \
         | tee "$OUT/serial.log"
 else
-    timeout "$VP_TIMEOUT" env SC_SIGNAL_WRITE_CHECK=DISABLE LD_LIBRARY_PATH="$VP_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}" \
+    timeout -k 30 "$VP_TIMEOUT" env SC_SIGNAL_WRITE_CHECK=DISABLE LD_LIBRARY_PATH="$VP_LD_LIBRARY_PATH:${LD_LIBRARY_PATH:-}" \
+        "${TRACE_HOST_ENV[@]}" \
         "$VP_BINARY" -c "$OUT/modern-vp.lua" \
         | tee "$OUT/serial.log"
 fi
@@ -424,14 +448,44 @@ if [[ -f "$OUTPUT_FILE" ]]; then
     OUTPUT_NORMALIZED="$(tr -s '[:space:]' ' ' <"$OUTPUT_FILE" | sed 's/^ //; s/ $//')"
 fi
 
+TRACE_STATUS=0
+REGISTER_HEADER=""
+if [[ "$VP_TRACE" == "1" ]]; then
+    REGISTER_HEADER="${NVDLA_REGISTER_HEADER:-$SOURCES_DIR/nvdla-sw/kmd/firmware/include/opendla_small.h}"
+    if [[ ! -f "$REGISTER_HEADER" ]]; then
+        REGISTER_HEADER="$ROOT/.work/nvdla-sw-patched/kmd/firmware/include/opendla_small.h"
+    fi
+    if [[ ! -f "$OUT/systemc.log" || ! -f "$REGISTER_HEADER" ]]; then
+        TRACE_STATUS=1
+    else
+        set +e
+        (cd /tmp && PYTHONPATH="$ROOT/tools:${PYTHONPATH:-}" "${PYTHON:-python3}" -m nvdla_test_framework trace-parse \
+            --input "$OUT/systemc.log" \
+            --register-header "$REGISTER_HEADER" \
+            --csb-out "$OUT/csb-events.jsonl" \
+            --raw-csb-out "$OUT/csb.raw.log" \
+            --raw-dbb-out "$OUT/dbb.raw.log" \
+            --summary-out "$OUT/trace-summary.json")
+        TRACE_STATUS=$?
+        set -e
+    fi
+fi
+
 BAD_PATTERNS="Oops|BUG|WARNING|DMA-API|scheduler timeout|interrupt timeout|rcu_sched detected stalls|RCU grace-period|TLM_ADDRESS_ERROR_RESPONSE|invalid configuration"
-if [[ -f "$OUT/dmesg.log" ]]; then
-    grep -E "$BAD_PATTERNS" "$OUT/dmesg.log" >"$OUT/bad-patterns.log" || true
+BAD_PATTERN_INPUTS=()
+for candidate in "$OUT/dmesg.log" "$OUT/serial.log"; do
+    [[ -f "$candidate" ]] && BAD_PATTERN_INPUTS+=("$candidate")
+done
+if [[ "$VP_TRACE" == "1" && -f "$OUT/systemc.log" ]]; then
+    BAD_PATTERN_INPUTS+=("$OUT/systemc.log")
+fi
+if [[ "${#BAD_PATTERN_INPUTS[@]}" -gt 0 ]]; then
+    grep -E "$BAD_PATTERNS" "${BAD_PATTERN_INPUTS[@]}" >"$OUT/bad-patterns.log" || true
 else
     : >"$OUT/bad-patterns.log"
 fi
 
-if [[ "$RUN_STATUS" -eq 0 && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && ! -s "$OUT/bad-patterns.log" ]]; then
+if [[ "$RUN_STATUS" -eq 0 && "$TRACE_STATUS" -eq 0 && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && ! -s "$OUT/bad-patterns.log" ]]; then
     STATUS="pass"
 else
     STATUS="fail"
@@ -447,6 +501,14 @@ cat >"$OUT/manifest.json" <<EOF
   "vp_hw_config": "$VP_HW_CONFIG",
   "vp_runner": "$VP_RUNNER",
   "docker_status": $RUN_STATUS,
+  "trace": {
+    "enabled": $(if [[ "$VP_TRACE" == "1" ]]; then echo true; else echo false; fi),
+    "status": $TRACE_STATUS,
+    "verbosity": "$VP_TRACE_VERBOSITY",
+    "systemc_sha256": "$(if [[ -f "$OUT/systemc.log" ]]; then hash_file "$OUT/systemc.log"; fi)",
+    "canonical_csb_sha256": "$(if [[ -f "$OUT/csb-events.jsonl" ]]; then hash_file "$OUT/csb-events.jsonl"; fi)",
+    "register_map_sha256": "$(if [[ -f "$REGISTER_HEADER" ]]; then hash_file "$REGISTER_HEADER"; fi)"
+  },
   "repeat_count": $REPEAT,
   "expected_output": "$EXPECTED_OUTPUT",
   "actual_output": "$OUTPUT_NORMALIZED",
@@ -464,6 +526,10 @@ cat >"$OUT/manifest.json" <<EOF
     "path": "$VP_BINARY",
     "sha256": "$(if [[ -f "$VP_BINARY" ]]; then hash_file "$VP_BINARY"; fi)",
     "ld_library_path": "$VP_LD_LIBRARY_PATH"
+  },
+  "vp_cmod": {
+    "path": "$VP_CMOD_LIBRARY_DIR/libnvdla_cmod.so",
+    "sha256": "$(if [[ -f "$VP_CMOD_LIBRARY_DIR/libnvdla_cmod.so" ]]; then hash_file "$VP_CMOD_LIBRARY_DIR/libnvdla_cmod.so"; fi)"
   },
   "patch_series_sha256": "$PATCH_SERIES_SHA",
   "inputs": {
@@ -513,21 +579,26 @@ cat >"$OUT/manifest.json" <<EOF
     "device_tree_summary": "device-tree-summary.txt",
     "rcu_cpu_stall_timeout": "rcu-cpu-stall-timeout.txt",
     "bad_patterns": "bad-patterns.log"
+    $(if [[ "$VP_TRACE" == "1" ]]; then printf ',\n    "systemc": "systemc.log",\n    "csb_raw": "csb.raw.log",\n    "dbb_raw": "dbb.raw.log",\n    "csb_events": "csb-events.jsonl",\n    "trace_summary": "trace-summary.json"'; fi)
   }
 }
 EOF
 
 PYTHON_BIN="${PYTHON:-python3}"
 set +e
-PYTHONPATH="$ROOT/tools:${PYTHONPATH:-}" "$PYTHON_BIN" -m nvdla_test_framework lenet-analyze \
+(cd /tmp && PYTHONPATH="$ROOT/tools:${PYTHONPATH:-}" "$PYTHON_BIN" -m nvdla_test_framework lenet-analyze \
     --artifact "$OUT" \
-    --expected-output "$EXPECTED_OUTPUT"
+    --expected-output "$EXPECTED_OUTPUT")
 ANALYSIS_STATUS=$?
 set -e
-if [[ "$ANALYSIS_STATUS" -ne 0 ]]; then
+if [[ "$ANALYSIS_STATUS" -ne 0 || "$STATUS" != "pass" ]]; then
     STATUS="fail"
 else
     STATUS="pass"
+fi
+
+if [[ "$VP_TRACE" == "1" ]]; then
+    printf '%s\n' "$OUT" >"$ROOT/artifacts/latest-vp-trace-modern-small.txt"
 fi
 
 echo "VP modern LeNet $VP_HW_CONFIG status: $STATUS"
