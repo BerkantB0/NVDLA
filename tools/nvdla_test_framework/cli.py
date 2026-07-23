@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .abi import run_abi_check
 from .board_artifact import run_board_artifact_import
+from .board_payload import run_board_payload
 from .diagnostics import classify_sdp_small_diagnostic
 from .lenet import (
     DEFAULT_STOCK_DIR,
@@ -122,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
     board_import.add_argument("--out", required=True, type=Path)
     board_import.add_argument("--serial-log", type=Path)
 
+    board_payload = sub.add_parser("board-payload", help="Build a deterministic SD workload payload")
+    board_payload.add_argument("--workloads-dir", required=True, type=Path)
+    board_payload.add_argument("--out-dir", required=True, type=Path)
+    board_payload.add_argument("--archive", required=True, type=Path)
+    board_payload.add_argument("--manifest", required=True, type=Path)
+
     trace_parse = sub.add_parser("trace-parse", help="Canonicalize NVDLA VP SystemC transactions")
     trace_parse.add_argument("--input", required=True, type=Path)
     trace_parse.add_argument("--register-header", required=True, type=Path)
@@ -196,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "board-artifact-import":
         return run_board_artifact_import(args.archive, args.out, args.serial_log)
+    if args.command == "board-payload":
+        return run_board_payload(args.workloads_dir, args.out_dir, args.archive, args.manifest)
     if args.command == "trace-parse":
         return run_trace_parse(
             args.input,
