@@ -118,8 +118,12 @@ generated builds stay on WSL ext4 unless `PETALINUX_PROJECT` is overridden.
 
 Board-tool manifests record the recipe, RPM, smoke binary, collector, and patch
 hashes. Rootfs audit manifests additionally require the executable collector
-and explicit `ttyPS0` serial-autologin override. SD-bundle manifests record the
-three source and copied boot-file hashes plus a deterministic archive hash.
+and explicit `ttyPS0` serial-autologin override. For this ZCU102 direct-link
+image, the audit also requires the project-specific `eth0` profile containing
+MAC `02:00:00:50:10:02` and address `192.168.50.2/24`. That requirement
+describes this bring-up image, not a generic NVDLA runtime or KMD dependency.
+SD-bundle manifests record the three source and copied boot-file hashes plus a
+deterministic archive hash.
 
 Imported board archives use lanes `petalinux-board-preflight`,
 `petalinux-board-probe`, or `petalinux-board-smoke`. They record target status,

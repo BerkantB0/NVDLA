@@ -31,13 +31,19 @@ SMOKE_NEEDED = [
 
 
 class PetaLinuxRootfsTests(unittest.TestCase):
-    def _write_archive(self, path: Path, omit: set[str] | None = None) -> None:
+    def _write_archive(
+        self,
+        path: Path,
+        omit: set[str] | None = None,
+        network_profile: bytes | None = None,
+    ) -> None:
         names = {
             "usr/bin/nvdla_runtime",
             "usr/lib/libnvdla_runtime.so",
             "usr/bin/nvdla-kmd-smoke",
             "usr/bin/nvdla-board-check",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
+            "etc/systemd/network/20-nvdla-direct.network",
             "lib/modules/6.6.10/extra/opendla.ko",
             "lib/ld-linux-aarch64.so.1",
             "usr/lib/libc.so.6",
@@ -53,6 +59,18 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                     if name == "usr/bin/nvdla-board-check"
                     else b"[Service]\nExecStart=-/sbin/agetty --autologin root ttyPS0\n"
                     if name == "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
+                    else (
+                        network_profile
+                        or (
+                            b"[Match]\n"
+                            b"Name=eth0\n"
+                            b"MACAddress=02:00:00:50:10:02\n"
+                            b"[Network]\n"
+                            b"Address=192.168.50.2/24\n"
+                            b"DHCP=no\n"
+                        )
+                    )
+                    if name == "etc/systemd/network/20-nvdla-direct.network"
                     else f"synthetic:{name}".encode("ascii")
                 )
                 member = tarfile.TarInfo(f"./{name}")
@@ -121,6 +139,23 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing serial_autologin from rootfs", result["errors"])
+
+    def test_rejects_missing_static_network_profile(self) -> None:
+        result = self._audit({"etc/systemd/network/20-nvdla-direct.network"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing network_profile from rootfs", result["errors"])
+
+    def test_rejects_incomplete_static_network_profile(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        archive = root / "rootfs.tar.gz"
+        self._write_archive(archive, network_profile=b"[Match]\nName=eth0\n")
+        result = audit_petalinux_rootfs(archive, root / "extract", self._inspector())
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(
+            any("network profile is missing required settings" in error for error in result["errors"])
+        )
 
     def test_rejects_wrong_elf_architecture(self) -> None:
         result = self._audit(inspector=self._inspector(machine="Advanced Micro Devices X86-64"))

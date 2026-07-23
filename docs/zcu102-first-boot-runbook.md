@@ -175,6 +175,18 @@ DP83867 PHY at MDIO address 12 and applies the Xilinx Rev1.0/Rev1.1 RGMII delay
 settings. A boot log that reports `Generic PHY`, an invalid/random MAC address,
 or increasing receive errors is a device-tree integration failure.
 
+The board-tools package installs a persistent direct-link profile for `eth0`:
+
+```text
+board: 192.168.50.2/24
+host:  192.168.50.1/24
+```
+
+The profile deliberately contains no gateway or DNS server. Configure the host
+address on the dedicated wired adapter and keep normal internet routing on a
+separate interface. Do not attach multiple images using the fixed MAC address
+to the same Ethernet segment.
+
 For SSH retrieval, first assign or obtain an IP address and set a temporary
 password for the `petalinux` account from the serial root shell if required:
 

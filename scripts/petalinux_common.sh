@@ -266,6 +266,9 @@ manifest = {
         "serial_autologin_in_rootfs": rootfs_audit.get("members", {}).get("serial_autologin")
         if rootfs_audit
         else None,
+        "network_profile_in_rootfs": rootfs_audit.get("members", {}).get("network_profile")
+        if rootfs_audit
+        else None,
     },
     "rootfs": {
         "archive_path": rootfs_tar_path,

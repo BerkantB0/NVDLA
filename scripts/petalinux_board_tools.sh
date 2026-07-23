@@ -19,6 +19,7 @@ cp -r "$ROOT/recipes/petalinux/apps/nvdla-board-tools/"* "$DEST/"
 cp "$ROOT/tools/smoke/nvdla-kmd-smoke.c" "$DEST/files/nvdla-kmd-smoke.c"
 cp "$ROOT/tools/board/nvdla-board-check" "$DEST/files/nvdla-board-check"
 cp "$ROOT/tools/board/serial-root-autologin.conf" "$DEST/files/serial-root-autologin.conf"
+cp "$ROOT/tools/board/20-nvdla-direct.network" "$DEST/files/20-nvdla-direct.network"
 
 PATCH_INC="$DEST/nvdla-board-tools-patches.inc"
 pl_install_patch_queue "$DEST" "$PATCH_INC" "scripts/petalinux_board_tools.sh"

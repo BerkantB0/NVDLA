@@ -1,5 +1,5 @@
-SUMMARY = "NVDLA board bring-up and GEM smoke tools"
-DESCRIPTION = "Controlled probe evidence collector and NVDLA DRM/GEM smoke utility"
+SUMMARY = "ZCU102 NVDLA board bring-up profile and GEM smoke tools"
+DESCRIPTION = "Controlled NVDLA probe tools plus the project-specific ZCU102 direct-link network profile"
 LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=1139d824882ec34a56e67bf8e2b55491"
 
@@ -10,6 +10,7 @@ SRC_URI = " \
     file://nvdla-kmd-smoke.c \
     file://nvdla-board-check \
     file://serial-root-autologin.conf \
+    file://20-nvdla-direct.network \
 "
 SRCREV = "79538ba1b52b040a4a4645f630e457fa01839e90"
 
@@ -28,10 +29,13 @@ do_compile() {
 do_install() {
     install -d ${D}${bindir}
     install -d ${D}${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d
+    install -d ${D}${sysconfdir}/systemd/network
     install -m 0755 ${B}/nvdla-kmd-smoke ${D}${bindir}/nvdla-kmd-smoke
     install -m 0755 ${WORKDIR}/nvdla-board-check ${D}${bindir}/nvdla-board-check
     install -m 0644 ${WORKDIR}/serial-root-autologin.conf \
         ${D}${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf
+    install -m 0644 ${WORKDIR}/20-nvdla-direct.network \
+        ${D}${sysconfdir}/systemd/network/20-nvdla-direct.network
 }
 
 do_deploy() {
@@ -41,4 +45,7 @@ do_deploy() {
 }
 addtask deploy after do_install before do_build
 
-FILES:${PN} += "${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
+FILES:${PN} += " \
+    ${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf \
+    ${sysconfdir}/systemd/network/20-nvdla-direct.network \
+"

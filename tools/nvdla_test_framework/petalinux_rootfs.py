@@ -14,6 +14,7 @@ LIBRARY_MEMBER = "usr/lib/libnvdla_runtime.so"
 SMOKE_MEMBER = "usr/bin/nvdla-kmd-smoke"
 COLLECTOR_MEMBER = "usr/bin/nvdla-board-check"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
+NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
 MODULE_PREFIX = "lib/modules/"
 MODULE_SUFFIX = "/extra/opendla.ko"
 FORBIDDEN_HOST_PREFIXES = ("/home/", "/mnt/", "/tmp/work/", "/build/tmp/")
@@ -75,6 +76,7 @@ def audit_petalinux_rootfs(
             "smoke": SMOKE_MEMBER,
             "collector": COLLECTOR_MEMBER,
             "serial_autologin": AUTOLOGIN_MEMBER,
+            "network_profile": NETWORK_MEMBER,
             "module": module_members[0] if module_members else None,
         }
 
@@ -104,6 +106,20 @@ def audit_petalinux_rootfs(
                 text = destination.read_text(encoding="utf-8", errors="replace")
                 if "agetty --autologin root" not in text:
                     errors.append("serial autologin override does not select root")
+            if label == "network_profile":
+                text = destination.read_text(encoding="utf-8", errors="replace")
+                required_lines = {
+                    "Name=eth0",
+                    "MACAddress=02:00:00:50:10:02",
+                    "Address=192.168.50.2/24",
+                    "DHCP=no",
+                }
+                missing_lines = sorted(required_lines.difference(text.splitlines()))
+                if missing_lines:
+                    errors.append(
+                        "network profile is missing required settings: "
+                        + ", ".join(missing_lines)
+                    )
 
         available_by_name: dict[str, list[str]] = {}
         for name in members:
@@ -111,7 +127,7 @@ def audit_petalinux_rootfs(
 
     elf: dict[str, dict[str, Any]] = {}
     for label, path in extracted.items():
-        if label in {"collector", "serial_autologin"}:
+        if label in {"collector", "serial_autologin", "network_profile"}:
             continue
         try:
             info = inspector(path)

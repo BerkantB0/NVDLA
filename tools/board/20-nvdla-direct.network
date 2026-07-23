@@ -1,0 +1,16 @@
+# ZCU102 NVDLA direct-link bring-up profile.
+# This is intentionally specific to one board connected directly to one host.
+# Replace or omit it for routed networks, multiple boards, or other platforms.
+[Match]
+Name=eth0
+MACAddress=02:00:00:50:10:02
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+Address=192.168.50.2/24
+DHCP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes

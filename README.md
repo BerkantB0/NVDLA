@@ -128,6 +128,14 @@ module, start a runtime service, or include model assets. The first board boot
 therefore remains a controlled manual probe before LeNet is added as a separate
 test payload.
 
+The `nvdla-board-tools` package in this repository also installs a deliberately
+configuration-specific direct-link profile: ZCU102 MAC
+`02:00:00:50:10:02`, board address `192.168.50.2/24`, and host address
+`192.168.50.1/24`. This is a convenience for the single-board dissertation
+bring-up setup, not part of the portable NVDLA software stack. Replace or omit
+it for a routed network, multiple boards, a different ZCU102 revision, or
+another platform.
+
 Each significant run writes evidence under `artifacts/<run-id>/`, including a
 `manifest.json`, environment details, source and binary hashes, logs, output
 tensors where applicable, and an explicit pass, fail, or blocked result.
