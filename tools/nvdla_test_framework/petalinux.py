@@ -62,6 +62,7 @@ def generate_nvdla_dtsi(lock_path: Path, xsa_path: Path, out_path: Path, audit_p
     nvdla_0: nvdla@{base:x} {{
         compatible = "nvidia,nv_small";
         reg = <{base_hi} {base_lo} {size_hi} {size_lo}>;
+        interrupt-parent = <&gic>;
         interrupts = <{irq_type} {irq_hwirq} {irq_flags}>;
         status = "okay";
         /*
@@ -86,6 +87,7 @@ def generate_nvdla_dtsi(lock_path: Path, xsa_path: Path, out_path: Path, audit_p
             "reg": [base_hi, base_lo, size_hi, size_lo],
             "base": audit["wrapper"]["base"],
             "size": size,
+            "interrupt_parent": "gic",
             "interrupts": [irq_type, irq_hwirq, irq_flags],
             "interrupt_source_port": irq_port,
             "dma_coherent": False,

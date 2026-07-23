@@ -2,6 +2,7 @@
     nvdla_0: nvdla@a0000000 {
         compatible = "nvidia,nv_small";
         reg = <0x0 0xa0000000 0x0 0x00010000>;
+        interrupt-parent = <&gic>;
         interrupts = <0 89 4>; /* XSA pl_ps_irq0 on ZynqMP. */
         status = "okay";
         /*

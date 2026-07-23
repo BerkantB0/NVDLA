@@ -26,9 +26,11 @@ class PetaLinuxDtsTests(unittest.TestCase):
 
             self.assertIn('compatible = "nvidia,nv_small";', text)
             self.assertIn("reg = <0x0 0xa0000000 0x0 0x00010000>;", text)
+            self.assertIn("interrupt-parent = <&gic>;", text)
             self.assertIn("interrupts = <0 89 4>;", text)
             self.assertNotIn("dma-coherent", text)
             self.assertEqual(result["node"]["interrupt_source_port"], "pl_ps_irq0")
+            self.assertEqual(result["node"]["interrupt_parent"], "gic")
             self.assertEqual(result["node"]["interrupts"], [0, 89, 4])
             self.assertFalse(result["node"]["dma_coherent"])
 
