@@ -17,6 +17,7 @@ rm -rf "$DEST"
 mkdir -p "$DEST/files"
 cp -r "$ROOT/recipes/petalinux/apps/nvdla-board-tools/"* "$DEST/"
 cp "$ROOT/tools/smoke/nvdla-kmd-smoke.c" "$DEST/files/nvdla-kmd-smoke.c"
+cp "$ROOT/tools/runtime/nvdla-flatbuf-client.c" "$DEST/files/nvdla-flatbuf-client.c"
 cp "$ROOT/tools/board/nvdla-board-check" "$DEST/files/nvdla-board-check"
 cp "$ROOT/tools/board/serial-root-autologin.conf" "$DEST/files/serial-root-autologin.conf"
 cp "$ROOT/tools/board/20-nvdla-direct.network" "$DEST/files/20-nvdla-direct.network"
@@ -56,17 +57,24 @@ BOARD_CHECK_SCRIPT_PATH="$(
   find "$PETALINUX_PROJECT/build/tmp/deploy/images" -type f -name nvdla-board-check -printf '%T@ %p\n' 2>/dev/null \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
 )"
+BOARD_FLATBUF_CLIENT_PATH="$(
+  find "$PETALINUX_PROJECT/build/tmp/deploy/images" -type f -name nvdla-flatbuf-client -printf '%T@ %p\n' 2>/dev/null \
+    | sort -n | tail -n 1 | cut -d ' ' -f 2-
+)"
 BOARD_TOOLS_PACKAGE_PATH="$(
   find "$PETALINUX_PROJECT/build/tmp/deploy/rpm" -type f -name 'nvdla-board-tools-[0-9]*.rpm' -printf '%T@ %p\n' 2>/dev/null \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
 )"
-export BOARD_SMOKE_BINARY_PATH BOARD_CHECK_SCRIPT_PATH BOARD_TOOLS_PACKAGE_PATH
+export BOARD_SMOKE_BINARY_PATH BOARD_FLATBUF_CLIENT_PATH BOARD_CHECK_SCRIPT_PATH BOARD_TOOLS_PACKAGE_PATH
 
 if [[ -z "$BOARD_SMOKE_BINARY_PATH" || ! -f "$BOARD_SMOKE_BINARY_PATH" ]]; then
   pl_finish_fail "nvdla-kmd-smoke was not deployed"
 fi
 if [[ -z "$BOARD_CHECK_SCRIPT_PATH" || ! -f "$BOARD_CHECK_SCRIPT_PATH" ]]; then
   pl_finish_fail "nvdla-board-check was not deployed"
+fi
+if [[ -z "$BOARD_FLATBUF_CLIENT_PATH" || ! -f "$BOARD_FLATBUF_CLIENT_PATH" ]]; then
+  pl_finish_fail "nvdla-flatbuf-client was not deployed"
 fi
 if [[ -z "$BOARD_TOOLS_PACKAGE_PATH" || ! -f "$BOARD_TOOLS_PACKAGE_PATH" ]]; then
   pl_finish_fail "nvdla-board-tools RPM was not produced"
@@ -75,9 +83,10 @@ fi
 {
   echo "PetaLinux board-tools build passed"
   echo "  smoke: $BOARD_SMOKE_BINARY_PATH"
+  echo "  flatbuffer client: $BOARD_FLATBUF_CLIENT_PATH"
   echo "  collector: $BOARD_CHECK_SCRIPT_PATH"
   echo "  package: $BOARD_TOOLS_PACKAGE_PATH"
-  sha256sum "$BOARD_SMOKE_BINARY_PATH" "$BOARD_CHECK_SCRIPT_PATH" "$BOARD_TOOLS_PACKAGE_PATH"
+  sha256sum "$BOARD_SMOKE_BINARY_PATH" "$BOARD_FLATBUF_CLIENT_PATH" "$BOARD_CHECK_SCRIPT_PATH" "$BOARD_TOOLS_PACKAGE_PATH"
 } | tee -a "$BUILD_LOG"
 
 pl_write_manifest "pass"

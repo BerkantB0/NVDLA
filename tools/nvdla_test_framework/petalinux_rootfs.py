@@ -12,6 +12,7 @@ from .common import run_command, sha256_file, write_json
 RUNTIME_MEMBER = "usr/bin/nvdla_runtime"
 LIBRARY_MEMBER = "usr/lib/libnvdla_runtime.so"
 SMOKE_MEMBER = "usr/bin/nvdla-kmd-smoke"
+FLATBUF_CLIENT_MEMBER = "usr/bin/nvdla-flatbuf-client"
 COLLECTOR_MEMBER = "usr/bin/nvdla-board-check"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
@@ -74,6 +75,7 @@ def audit_petalinux_rootfs(
             "runtime": RUNTIME_MEMBER,
             "library": LIBRARY_MEMBER,
             "smoke": SMOKE_MEMBER,
+            "flatbuf_client": FLATBUF_CLIENT_MEMBER,
             "collector": COLLECTOR_MEMBER,
             "serial_autologin": AUTOLOGIN_MEMBER,
             "network_profile": NETWORK_MEMBER,

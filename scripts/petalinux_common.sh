@@ -152,6 +152,7 @@ rootfs_audit_path = os.environ.get("ROOTFS_AUDIT_PATH") or None
 board_tools_recipe_path = os.environ.get("BOARD_TOOLS_RECIPE_PATH") or None
 board_tools_package_path = os.environ.get("BOARD_TOOLS_PACKAGE_PATH") or None
 board_smoke_binary_path = os.environ.get("BOARD_SMOKE_BINARY_PATH") or None
+board_flatbuf_client_path = os.environ.get("BOARD_FLATBUF_CLIENT_PATH") or None
 board_check_script_path = os.environ.get("BOARD_CHECK_SCRIPT_PATH") or None
 sd_bundle_path = os.environ.get("SD_BUNDLE_PATH") or None
 sd_bundle_manifest_path = os.environ.get("SD_BUNDLE_MANIFEST_PATH") or None
@@ -170,6 +171,7 @@ if rootfs_audit_path and Path(rootfs_audit_path).is_file():
 runtime_elf = rootfs_audit.get("elf", {}).get("runtime", {})
 library_elf = rootfs_audit.get("elf", {}).get("library", {})
 smoke_elf = rootfs_audit.get("elf", {}).get("smoke", {})
+flatbuf_client_elf = rootfs_audit.get("elf", {}).get("flatbuf_client", {})
 
 manifest = {
     "schema_version": 1,
@@ -256,12 +258,20 @@ manifest = {
         "package_sha256": sha256(board_tools_package_path),
         "smoke_binary_path": board_smoke_binary_path,
         "smoke_binary_sha256": sha256(board_smoke_binary_path),
+        "flatbuf_client_path": board_flatbuf_client_path,
+        "flatbuf_client_sha256": sha256(board_flatbuf_client_path),
         "collector_path": board_check_script_path,
         "collector_sha256": sha256(board_check_script_path),
         "smoke_elf_machine": smoke_elf.get("machine"),
         "smoke_needed": smoke_elf.get("needed", []),
         "smoke_rpaths": smoke_elf.get("rpaths", []),
         "smoke_in_rootfs": rootfs_audit.get("members", {}).get("smoke") if rootfs_audit else None,
+        "flatbuf_client_elf_machine": flatbuf_client_elf.get("machine"),
+        "flatbuf_client_needed": flatbuf_client_elf.get("needed", []),
+        "flatbuf_client_rpaths": flatbuf_client_elf.get("rpaths", []),
+        "flatbuf_client_in_rootfs": rootfs_audit.get("members", {}).get("flatbuf_client")
+        if rootfs_audit
+        else None,
         "collector_in_rootfs": rootfs_audit.get("members", {}).get("collector") if rootfs_audit else None,
         "serial_autologin_in_rootfs": rootfs_audit.get("members", {}).get("serial_autologin")
         if rootfs_audit

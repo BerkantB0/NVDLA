@@ -41,6 +41,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla_runtime",
             "usr/lib/libnvdla_runtime.so",
             "usr/bin/nvdla-kmd-smoke",
+            "usr/bin/nvdla-flatbuf-client",
             "usr/bin/nvdla-board-check",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
@@ -90,7 +91,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                 needed = RUNTIME_NEEDED
             elif path.name == "libnvdla_runtime.so":
                 needed = LIBRARY_NEEDED
-            elif path.name == "nvdla-kmd-smoke":
+            elif path.name in {"nvdla-kmd-smoke", "nvdla-flatbuf-client"}:
                 needed = SMOKE_NEEDED
             return {
                 "machine": machine,
@@ -129,6 +130,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/bin/nvdla-kmd-smoke"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing smoke from rootfs", result["errors"])
+
+    def test_rejects_missing_flatbuffer_client(self) -> None:
+        result = self._audit({"usr/bin/nvdla-flatbuf-client"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing flatbuf_client from rootfs", result["errors"])
 
     def test_rejects_missing_board_collector(self) -> None:
         result = self._audit({"usr/bin/nvdla-board-check"})
