@@ -169,6 +169,12 @@ Each board command creates a timestamped archive and updates:
 The root filesystem is an initramfs, so retrieve every required archive and the
 terminal log before powering off.
 
+For a direct Ethernet link, the board image uses the locally administered MAC
+address `02:00:00:50:10:02`. The board DT fragment identifies the ZCU102
+DP83867 PHY at MDIO address 12 and applies the Xilinx Rev1.0/Rev1.1 RGMII delay
+settings. A boot log that reports `Generic PHY`, an invalid/random MAC address,
+or increasing receive errors is a device-tree integration failure.
+
 For SSH retrieval, first assign or obtain an IP address and set a temporary
 password for the `petalinux` account from the serial root shell if required:
 

@@ -11,6 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PetaLinuxDtsTests(unittest.TestCase):
+    def test_zcu102_ethernet_fragment_uses_board_phy_settings(self) -> None:
+        text = (
+            ROOT / "recipes/petalinux/device-tree/files/zcu102-ethernet.dtsi"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("local-mac-address = [02 00 00 50 10 02];", text)
+        self.assertIn("phy-handle = <&nvdla_zcu102_phy>;", text)
+        self.assertIn('phy-mode = "rgmii-id";', text)
+        self.assertIn('compatible = "ethernet-phy-id2000.a231";', text)
+        self.assertIn("reg = <0xc>;", text)
+        self.assertIn("ti,rx-internal-delay = <0x8>;", text)
+        self.assertIn("ti,tx-internal-delay = <0xa>;", text)
+        self.assertIn("ti,dp83867-rxctrl-strap-quirk;", text)
+
     def test_generates_nv_small_node_from_checked_in_xsa(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "nvdla-user.dtsi"

@@ -140,6 +140,7 @@ logs = sorted(path.name for path in run_dir.glob("*.log"))
 json_files = sorted(path.name for path in run_dir.glob("*.json") if path.name != "manifest.json")
 module_path = os.environ.get("MODULE_PATH") or None
 dts_path = os.environ.get("DTS_PATH") or None
+ethernet_dts_path = os.environ.get("ETHERNET_DTS_PATH") or None
 package_path = os.environ.get("PACKAGE_PATH") or None
 runtime_binary_path = os.environ.get("RUNTIME_BINARY_PATH") or None
 runtime_library_path = os.environ.get("RUNTIME_LIBRARY_PATH") or None
@@ -211,6 +212,8 @@ manifest = {
     "device_tree": {
         "fragment_path": dts_path,
         "fragment_sha256": sha256(dts_path),
+        "ethernet_fragment_path": ethernet_dts_path,
+        "ethernet_fragment_sha256": sha256(ethernet_dts_path),
         "audit_path": os.environ.get("DTS_AUDIT_PATH") or None,
     },
     "images": image_files,

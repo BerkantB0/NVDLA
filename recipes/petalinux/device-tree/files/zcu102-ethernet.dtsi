@@ -1,0 +1,28 @@
+/*
+ * Board-local ZCU102 Rev1.0/Rev1.1 Ethernet description.
+ *
+ * The PHY identity and timing values match the upstream Xilinx
+ * zynqmp-zcu102-revB.dts inherited by the Rev1.0 and Rev1.1 boards.
+ * The locally administered MAC keeps host-only bring-up deterministic when
+ * the generated XSA device tree does not describe the board EEPROM.
+ */
+&gem3 {
+    local-mac-address = [02 00 00 50 10 02];
+    phy-handle = <&nvdla_zcu102_phy>;
+    phy-mode = "rgmii-id";
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        nvdla_zcu102_phy: ethernet-phy@c {
+            #phy-cells = <1>;
+            compatible = "ethernet-phy-id2000.a231";
+            reg = <0xc>;
+            ti,rx-internal-delay = <0x8>;
+            ti,tx-internal-delay = <0xa>;
+            ti,fifo-depth = <0x1>;
+            ti,dp83867-rxctrl-strap-quirk;
+        };
+    };
+};
