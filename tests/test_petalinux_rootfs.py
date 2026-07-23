@@ -24,6 +24,10 @@ LIBRARY_NEEDED = [
     "libm.so.6",
     "libstdc++.so.6",
 ]
+SMOKE_NEEDED = [
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+]
 
 
 class PetaLinuxRootfsTests(unittest.TestCase):
@@ -31,6 +35,9 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         names = {
             "usr/bin/nvdla_runtime",
             "usr/lib/libnvdla_runtime.so",
+            "usr/bin/nvdla-kmd-smoke",
+            "usr/bin/nvdla-board-check",
+            "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "lib/modules/6.6.10/extra/opendla.ko",
             "lib/ld-linux-aarch64.so.1",
             "usr/lib/libc.so.6",
@@ -41,9 +48,16 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         names -= omit or set()
         with tarfile.open(path, "w:gz") as archive:
             for name in sorted(names):
-                data = f"synthetic:{name}".encode("ascii")
+                data = (
+                    b"#!/bin/sh\nexit 0\n"
+                    if name == "usr/bin/nvdla-board-check"
+                    else b"[Service]\nExecStart=-/sbin/agetty --autologin root ttyPS0\n"
+                    if name == "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
+                    else f"synthetic:{name}".encode("ascii")
+                )
                 member = tarfile.TarInfo(f"./{name}")
                 member.size = len(data)
+                member.mode = 0o755
                 archive.addfile(member, io.BytesIO(data))
 
     @staticmethod
@@ -58,6 +72,8 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                 needed = RUNTIME_NEEDED
             elif path.name == "libnvdla_runtime.so":
                 needed = LIBRARY_NEEDED
+            elif path.name == "nvdla-kmd-smoke":
+                needed = SMOKE_NEEDED
             return {
                 "machine": machine,
                 "needed": needed,
@@ -90,6 +106,21 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/lib/libnvdla_runtime.so"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing library from rootfs", result["errors"])
+
+    def test_rejects_missing_smoke_binary(self) -> None:
+        result = self._audit({"usr/bin/nvdla-kmd-smoke"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing smoke from rootfs", result["errors"])
+
+    def test_rejects_missing_board_collector(self) -> None:
+        result = self._audit({"usr/bin/nvdla-board-check"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing collector from rootfs", result["errors"])
+
+    def test_rejects_missing_serial_autologin_override(self) -> None:
+        result = self._audit({"etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing serial_autologin from rootfs", result["errors"])
 
     def test_rejects_wrong_elf_architecture(self) -> None:
         result = self._audit(inspector=self._inspector(machine="Advanced Micro Devices X86-64"))
