@@ -1,0 +1,121 @@
+#!/bin/sh
+set -eu
+
+MODE="${1:-preflight}"
+case "$MODE" in
+    preflight|probe|smoke) ;;
+    *)
+        echo "usage: nvdla-board-check {preflight|probe|smoke} [output-directory]" >&2
+        exit 2
+        ;;
+esac
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="${2:-/tmp/nvdla-board-${MODE}-${STAMP}}"
+ARCHIVE="${OUT}.tar.gz"
+LATEST="/tmp/nvdla-board-latest.tar.gz"
+STATUS=0
+
+mkdir -p "$OUT"
+
+capture() {
+    name="$1"
+    shift
+    if "$@" >"$OUT/$name" 2>&1; then
+        return 0
+    fi
+    result=$?
+    printf '%s\n' "$result" >"$OUT/${name}.exit-status"
+    return 0
+}
+
+capture_shell() {
+    name="$1"
+    command="$2"
+    if sh -c "$command" >"$OUT/$name" 2>&1; then
+        return 0
+    fi
+    result=$?
+    printf '%s\n' "$result" >"$OUT/${name}.exit-status"
+    return 0
+}
+
+dmesg >"$OUT/dmesg-before.log" 2>&1 || true
+DMESG_LINES="$(wc -l <"$OUT/dmesg-before.log" | tr -d ' ')"
+
+capture uname.txt uname -a
+capture cmdline.txt cat /proc/cmdline
+capture os-release.txt cat /etc/os-release
+capture modules-before.txt lsmod
+capture module-info.txt modinfo opendla
+capture interrupts-before.txt cat /proc/interrupts
+capture dev-dri-before.txt ls -la /dev/dri
+capture runtime-files.txt ls -l \
+    /usr/bin/nvdla_runtime \
+    /usr/lib/libnvdla_runtime.so \
+    /usr/bin/nvdla-kmd-smoke \
+    /usr/bin/nvdla-board-check
+capture runtime-hashes.txt sha256sum \
+    /usr/bin/nvdla_runtime \
+    /usr/lib/libnvdla_runtime.so \
+    /usr/bin/nvdla-kmd-smoke \
+    /usr/bin/nvdla-board-check
+
+DT_NODE="/proc/device-tree/nvdla@a0000000"
+if [ -d "$DT_NODE" ]; then
+    capture_shell dt-compatible.txt "tr '\\000' '\\n' <'$DT_NODE/compatible'"
+    capture dt-reg.hex od -An -tx1 "$DT_NODE/reg"
+    capture dt-interrupts.hex od -An -tx1 "$DT_NODE/interrupts"
+    capture dt-status.txt cat "$DT_NODE/status"
+else
+    echo "missing $DT_NODE" >"$OUT/device-tree.error"
+    STATUS=1
+fi
+
+if [ "$MODE" = "probe" ] || [ "$MODE" = "smoke" ]; then
+    if modprobe opendla >"$OUT/module-load.log" 2>&1; then
+        :
+    else
+        STATUS=$?
+    fi
+fi
+
+capture modules-after.txt lsmod
+capture dev-dri-after.txt ls -la /dev/dri
+
+if [ "$MODE" = "smoke" ] && [ "$STATUS" -eq 0 ]; then
+    if nvdla-kmd-smoke >"$OUT/kmd-smoke.stdout.log" 2>"$OUT/kmd-smoke.stderr.log"; then
+        :
+    else
+        STATUS=$?
+    fi
+fi
+
+dmesg >"$OUT/dmesg-after.log" 2>&1 || true
+DELTA_START=$((DMESG_LINES + 1))
+tail -n +"$DELTA_START" "$OUT/dmesg-after.log" >"$OUT/dmesg-delta.log" 2>/dev/null || true
+capture interrupts-after.txt cat /proc/interrupts
+
+BAD_PATTERN='Oops|BUG:|WARNING:|DMA-API|scheduler timeout|interrupt timeout|SError|External abort'
+if grep -E "$BAD_PATTERN" "$OUT/dmesg-delta.log" >"$OUT/bad-kernel-patterns.txt"; then
+    STATUS=1
+else
+    : >"$OUT/bad-kernel-patterns.txt"
+fi
+
+{
+    echo "schema_version=1"
+    echo "mode=$MODE"
+    echo "status=$STATUS"
+    echo "timestamp_utc=$STAMP"
+    echo "dt_node=$DT_NODE"
+} >"$OUT/result.env"
+
+rm -f "$ARCHIVE" "$LATEST"
+tar -czf "$ARCHIVE" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+ln -s "$ARCHIVE" "$LATEST"
+
+echo "NVDLA_BOARD_MODE=$MODE"
+echo "NVDLA_BOARD_STATUS=$STATUS"
+echo "NVDLA_BOARD_ARTIFACT=$ARCHIVE"
+exit "$STATUS"

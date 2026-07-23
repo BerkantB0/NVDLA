@@ -16,8 +16,8 @@ image_append="$PETALINUX_PROJECT/project-spec/meta-user/recipes-core/images/peta
 if [[ ! -f "$image_append" ]]; then
   pl_finish_blocked "NVDLA image package append is missing; run make petalinux-runtime first"
 fi
-if ! grep -Eq 'IMAGE_INSTALL:append.*opendla.*nvdla-runtime' "$image_append"; then
-  pl_finish_fail "NVDLA image package append does not include opendla and nvdla-runtime"
+if ! grep -Eq 'IMAGE_INSTALL:append.*opendla.*nvdla-runtime.*nvdla-board-tools' "$image_append"; then
+  pl_finish_fail "NVDLA image package append does not include the complete board bring-up stack"
 fi
 export IMAGE_APPEND_PATH="$image_append"
 

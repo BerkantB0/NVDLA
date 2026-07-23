@@ -13,7 +13,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
-        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-runtime petalinux-image petalinux-rootfs-audit petalinux-package \
+        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-collect \
         test report clean
 
 help:
@@ -69,9 +69,12 @@ help:
 	  '  make petalinux-dts   Install the XSA-derived NVDLA device-tree fragment' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
 	  '  make petalinux-runtime Build and package the NVDLA userspace runtime' \
+	  '  make petalinux-board-tools Build and package controlled board bring-up tools' \
 	  '  make petalinux-image Build the PetaLinux bootable image artifacts' \
 	  '  make petalinux-rootfs-audit Verify NVDLA packages and ELF dependencies in the rootfs' \
 	  '  make petalinux-package Package BOOT.BIN evidence after image build' \
+	  '  make petalinux-sd-bundle Build a hashed SD-card handoff without writing media' \
+	  '  make petalinux-board-collect Import a manual or SSH board evidence archive' \
 	  '' \
 	  'Reports:' \
 	  '  make report          Summarize artifacts into artifacts/latest-report.md'
@@ -247,6 +250,9 @@ petalinux-kmod:
 petalinux-runtime:
 	@scripts/petalinux_runtime.sh
 
+petalinux-board-tools:
+	@scripts/petalinux_board_tools.sh
+
 petalinux-image:
 	@scripts/petalinux_image.sh
 
@@ -255,6 +261,12 @@ petalinux-rootfs-audit:
 
 petalinux-package:
 	@scripts/petalinux_package.sh
+
+petalinux-sd-bundle:
+	@scripts/petalinux_sd_bundle.sh
+
+petalinux-board-collect:
+	@scripts/petalinux_board_collect.sh
 
 test: doctor lock-check unit xsa-audit vp-reference petalinux-smoke
 

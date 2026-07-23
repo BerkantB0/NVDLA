@@ -35,6 +35,7 @@ if [[ ! -f "$package_out" ]]; then
   pl_finish_fail "petalinux-package completed but BOOT.BIN was not found"
 fi
 
+install -m 0644 "$package_out" "$PETALINUX_PROJECT/images/linux/BOOT.BIN"
 export PACKAGE_PATH="$package_out"
 echo "PetaLinux package passed: $package_out" | tee -a "$BUILD_LOG"
 pl_write_manifest "pass"

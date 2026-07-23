@@ -11,6 +11,9 @@ from .common import run_command, sha256_file, write_json
 
 RUNTIME_MEMBER = "usr/bin/nvdla_runtime"
 LIBRARY_MEMBER = "usr/lib/libnvdla_runtime.so"
+SMOKE_MEMBER = "usr/bin/nvdla-kmd-smoke"
+COLLECTOR_MEMBER = "usr/bin/nvdla-board-check"
+AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 MODULE_PREFIX = "lib/modules/"
 MODULE_SUFFIX = "/extra/opendla.ko"
 FORBIDDEN_HOST_PREFIXES = ("/home/", "/mnt/", "/tmp/work/", "/build/tmp/")
@@ -69,6 +72,9 @@ def audit_petalinux_rootfs(
         selected = {
             "runtime": RUNTIME_MEMBER,
             "library": LIBRARY_MEMBER,
+            "smoke": SMOKE_MEMBER,
+            "collector": COLLECTOR_MEMBER,
+            "serial_autologin": AUTOLOGIN_MEMBER,
             "module": module_members[0] if module_members else None,
         }
 
@@ -89,6 +95,15 @@ def audit_petalinux_rootfs(
             with destination.open("wb") as output:
                 output.write(source.read())
             extracted[label] = destination
+            if label == "collector":
+                if member.mode & 0o111 == 0:
+                    errors.append("collector is not executable")
+                if not destination.read_bytes().startswith(b"#!/bin/sh\n"):
+                    errors.append("collector does not use the expected /bin/sh interpreter")
+            if label == "serial_autologin":
+                text = destination.read_text(encoding="utf-8", errors="replace")
+                if "agetty --autologin root" not in text:
+                    errors.append("serial autologin override does not select root")
 
         available_by_name: dict[str, list[str]] = {}
         for name in members:
@@ -96,6 +111,8 @@ def audit_petalinux_rootfs(
 
     elf: dict[str, dict[str, Any]] = {}
     for label, path in extracted.items():
+        if label in {"collector", "serial_autologin"}:
+            continue
         try:
             info = inspector(path)
         except Exception as exc:

@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from .abi import run_abi_check
+from .board_artifact import run_board_artifact_import
 from .diagnostics import classify_sdp_small_diagnostic
 from .lenet import (
     DEFAULT_STOCK_DIR,
@@ -15,6 +16,7 @@ from .lenet import (
 from .lockcheck import run_lock_check
 from .petalinux import run_petalinux_dts
 from .petalinux_rootfs import run_petalinux_rootfs_audit
+from .petalinux_sd import run_petalinux_sd_bundle
 from .report import write_report
 from .stock import run_stock_sdp_control
 from .trace import DEFAULT_CSB_BASE, run_trace_compare, run_trace_parse
@@ -107,6 +109,19 @@ def main(argv: list[str] | None = None) -> int:
     pl_rootfs.add_argument("--extract-dir", required=True, type=Path)
     pl_rootfs.add_argument("--out", required=True, type=Path)
 
+    pl_sd = sub.add_parser("petalinux-sd-bundle", help="Build a deterministic PetaLinux SD handoff bundle")
+    pl_sd.add_argument("--boot-bin", required=True, type=Path)
+    pl_sd.add_argument("--boot-script", required=True, type=Path)
+    pl_sd.add_argument("--fit-image", required=True, type=Path)
+    pl_sd.add_argument("--out-dir", required=True, type=Path)
+    pl_sd.add_argument("--archive", required=True, type=Path)
+    pl_sd.add_argument("--manifest", required=True, type=Path)
+
+    board_import = sub.add_parser("board-artifact-import", help="Import a target-side NVDLA board evidence archive")
+    board_import.add_argument("--archive", required=True, type=Path)
+    board_import.add_argument("--out", required=True, type=Path)
+    board_import.add_argument("--serial-log", type=Path)
+
     trace_parse = sub.add_parser("trace-parse", help="Canonicalize NVDLA VP SystemC transactions")
     trace_parse.add_argument("--input", required=True, type=Path)
     trace_parse.add_argument("--register-header", required=True, type=Path)
@@ -170,6 +185,17 @@ def main(argv: list[str] | None = None) -> int:
         return run_petalinux_dts(args.lock, args.xsa, args.out, args.audit_out)
     if args.command == "petalinux-rootfs-audit":
         return run_petalinux_rootfs_audit(args.rootfs, args.extract_dir, args.out)
+    if args.command == "petalinux-sd-bundle":
+        return run_petalinux_sd_bundle(
+            args.boot_bin,
+            args.boot_script,
+            args.fit_image,
+            args.out_dir,
+            args.archive,
+            args.manifest,
+        )
+    if args.command == "board-artifact-import":
+        return run_board_artifact_import(args.archive, args.out, args.serial_log)
     if args.command == "trace-parse":
         return run_trace_parse(
             args.input,
