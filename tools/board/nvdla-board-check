@@ -58,11 +58,15 @@ capture runtime-files.txt ls -l \
     /usr/bin/nvdla_runtime \
     /usr/lib/libnvdla_runtime.so \
     /usr/bin/nvdla-kmd-smoke \
+    /usr/bin/nvdla-flatbuf-client \
+    /usr/bin/nvdla-board-workload \
     /usr/bin/nvdla-board-check
 capture runtime-hashes.txt sha256sum \
     /usr/bin/nvdla_runtime \
     /usr/lib/libnvdla_runtime.so \
     /usr/bin/nvdla-kmd-smoke \
+    /usr/bin/nvdla-flatbuf-client \
+    /usr/bin/nvdla-board-workload \
     /usr/bin/nvdla-board-check
 
 DT_NODE="/proc/device-tree/nvdla@a0000000"

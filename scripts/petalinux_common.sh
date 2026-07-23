@@ -154,6 +154,7 @@ board_tools_package_path = os.environ.get("BOARD_TOOLS_PACKAGE_PATH") or None
 board_smoke_binary_path = os.environ.get("BOARD_SMOKE_BINARY_PATH") or None
 board_flatbuf_client_path = os.environ.get("BOARD_FLATBUF_CLIENT_PATH") or None
 board_check_script_path = os.environ.get("BOARD_CHECK_SCRIPT_PATH") or None
+board_workload_script_path = os.environ.get("BOARD_WORKLOAD_SCRIPT_PATH") or None
 sd_bundle_path = os.environ.get("SD_BUNDLE_PATH") or None
 sd_bundle_manifest_path = os.environ.get("SD_BUNDLE_MANIFEST_PATH") or None
 image_dir = Path(os.environ["PETALINUX_PROJECT"]) / "images" / "linux"
@@ -262,6 +263,8 @@ manifest = {
         "flatbuf_client_sha256": sha256(board_flatbuf_client_path),
         "collector_path": board_check_script_path,
         "collector_sha256": sha256(board_check_script_path),
+        "workload_runner_path": board_workload_script_path,
+        "workload_runner_sha256": sha256(board_workload_script_path),
         "smoke_elf_machine": smoke_elf.get("machine"),
         "smoke_needed": smoke_elf.get("needed", []),
         "smoke_rpaths": smoke_elf.get("rpaths", []),
@@ -273,6 +276,9 @@ manifest = {
         if rootfs_audit
         else None,
         "collector_in_rootfs": rootfs_audit.get("members", {}).get("collector") if rootfs_audit else None,
+        "workload_runner_in_rootfs": rootfs_audit.get("members", {}).get("workload_runner")
+        if rootfs_audit
+        else None,
         "serial_autologin_in_rootfs": rootfs_audit.get("members", {}).get("serial_autologin")
         if rootfs_audit
         else None,

@@ -1,0 +1,414 @@
+#!/bin/sh
+set -eu
+
+MODE="${1:-}"
+PAYLOAD_ROOT="${2:-}"
+case "$MODE" in
+    sdp|lenet) ;;
+    *)
+        echo "usage: nvdla-board-workload {sdp|lenet} PAYLOAD_ROOT [output-directory]" >&2
+        exit 2
+        ;;
+esac
+if [ -z "$PAYLOAD_ROOT" ] || [ ! -d "$PAYLOAD_ROOT" ]; then
+    echo "payload root does not exist: $PAYLOAD_ROOT" >&2
+    exit 2
+fi
+
+REPEAT="${REPEAT:-1}"
+RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-120}"
+WATCHDOG_GRACE="${WATCHDOG_GRACE:-5}"
+case "$REPEAT:$RUNTIME_TIMEOUT:$WATCHDOG_GRACE" in
+    *[!0-9:]*|0:*|*:0:*|*:*:0)
+        echo "REPEAT, RUNTIME_TIMEOUT, and WATCHDOG_GRACE must be positive integers" >&2
+        exit 2
+        ;;
+esac
+if [ "$MODE" = "sdp" ] && [ "$REPEAT" -ne 1 ]; then
+    echo "SDP diagnostic supports REPEAT=1 only" >&2
+    exit 2
+fi
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RESULT_MODE="$MODE"
+if [ "$MODE" = "sdp" ]; then
+    RESULT_MODE="runtime-sdp"
+fi
+OUT="${3:-/tmp/nvdla-board-${RESULT_MODE}-${STAMP}}"
+ARCHIVE="${OUT}.tar.gz"
+LATEST="/tmp/nvdla-board-latest.tar.gz"
+STATUS=0
+CLASSIFICATION="not-run"
+PASS_COUNT=0
+FIRST_FAILURE=0
+NODE=""
+BAD_PATTERN='Oops|BUG:|WARNING:|DMA-API|scheduler timeout|interrupt timeout|SError|External abort'
+
+mkdir -p "$OUT"
+
+capture() {
+    name="$1"
+    shift
+    if "$@" >"$OUT/$name" 2>&1; then
+        return 0
+    fi
+    result=$?
+    printf '%s\n' "$result" >"$OUT/${name}.exit-status"
+    return 0
+}
+
+irq_total() {
+    awk '
+        /nvdla/ {
+            for (field = 2; field <= NF; field++) {
+                if ($field ~ /^[0-9]+$/)
+                    total += $field
+                else
+                    break
+            }
+        }
+        END { print total + 0 }
+    ' /proc/interrupts
+}
+
+run_with_watchdog() {
+    marker="$1"
+    stdout="$2"
+    stderr="$3"
+    shift 3
+
+    rm -f "$marker"
+    "$@" >"$stdout" 2>"$stderr" &
+    command_pid=$!
+    (
+        sleep "$RUNTIME_TIMEOUT"
+        if kill -0 "$command_pid" 2>/dev/null; then
+            echo "runtime exceeded ${RUNTIME_TIMEOUT}s" >"$marker"
+            kill -TERM "$command_pid" 2>/dev/null || true
+            sleep "$WATCHDOG_GRACE"
+            kill -KILL "$command_pid" 2>/dev/null || true
+        fi
+    ) &
+    watchdog_pid=$!
+
+    if wait "$command_pid"; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+
+    if [ -f "$marker" ]; then
+        return 124
+    fi
+    return "$command_status"
+}
+
+finish() {
+    dmesg >"$OUT/dmesg-after.log" 2>&1 || true
+    delta_start=$((DMESG_LINES + 1))
+    tail -n +"$delta_start" "$OUT/dmesg-after.log" >"$OUT/dmesg-delta.log" 2>/dev/null || true
+    capture interrupts-after.txt cat /proc/interrupts
+    IRQ_AFTER="$(irq_total)"
+    IRQ_DELTA=$((IRQ_AFTER - IRQ_BEFORE))
+
+    if grep -E "$BAD_PATTERN" "$OUT/dmesg-delta.log" >"$OUT/bad-kernel-patterns.txt"; then
+        STATUS=1
+        CLASSIFICATION="kernel-log-failure"
+    else
+        : >"$OUT/bad-kernel-patterns.txt"
+    fi
+
+    {
+        echo "schema_version=2"
+        echo "mode=$RESULT_MODE"
+        echo "status=$STATUS"
+        echo "classification=$CLASSIFICATION"
+        echo "timestamp_utc=$STAMP"
+        echo "payload_root=$PAYLOAD_ROOT"
+        echo "render_node=$NODE"
+        echo "repeat_requested=$REPEAT"
+        echo "repeat_passed=$PASS_COUNT"
+        echo "first_failure=$FIRST_FAILURE"
+        echo "runtime_timeout_seconds=$RUNTIME_TIMEOUT"
+        echo "irq_before=$IRQ_BEFORE"
+        echo "irq_after=$IRQ_AFTER"
+        echo "irq_delta=$IRQ_DELTA"
+    } >"$OUT/result.env"
+
+    rm -f "$ARCHIVE" "$LATEST"
+    tar -czf "$ARCHIVE" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+    ln -s "$ARCHIVE" "$LATEST"
+
+    echo "NVDLA_BOARD_MODE=$RESULT_MODE"
+    echo "NVDLA_BOARD_STATUS=$STATUS"
+    echo "NVDLA_BOARD_CLASSIFICATION=$CLASSIFICATION"
+    echo "NVDLA_BOARD_ARTIFACT=$ARCHIVE"
+    exit "$STATUS"
+}
+
+dmesg >"$OUT/dmesg-before.log" 2>&1 || true
+DMESG_LINES="$(wc -l <"$OUT/dmesg-before.log" | tr -d ' ')"
+capture uname.txt uname -a
+capture cmdline.txt cat /proc/cmdline
+capture interrupts-before.txt cat /proc/interrupts
+IRQ_BEFORE="$(irq_total)"
+capture modules-before.txt lsmod
+capture payload-files.txt find "$PAYLOAD_ROOT" -type f -print
+capture tool-hashes.txt sha256sum \
+    /usr/bin/nvdla_runtime \
+    /usr/lib/libnvdla_runtime.so \
+    /usr/bin/nvdla-flatbuf-client \
+    /usr/bin/nvdla-board-workload
+
+if (
+    cd "$PAYLOAD_ROOT"
+    sha256sum -c SHA256SUMS
+) >"$OUT/payload-verify.log" 2>&1; then
+    :
+else
+    STATUS=1
+    CLASSIFICATION="payload-verification-failure"
+    finish
+fi
+
+if modprobe opendla >"$OUT/module-load.log" 2>&1; then
+    :
+else
+    STATUS=$?
+    CLASSIFICATION="module-load-failure"
+    finish
+fi
+if [ ! -L /sys/bus/platform/devices/a0000000.nvdla/driver ]; then
+    echo "NVDLA platform device is not bound" >"$OUT/prerequisite.error"
+    STATUS=1
+    CLASSIFICATION="driver-bind-failure"
+    finish
+fi
+set -- /dev/dri/renderD*
+if [ ! -e "$1" ]; then
+    echo "NVDLA DRM render node is missing" >"$OUT/prerequisite.error"
+    STATUS=1
+    CLASSIFICATION="render-node-failure"
+    finish
+fi
+NODE="$1"
+
+if ! grep -q nvdla /proc/interrupts; then
+    echo "NVDLA IRQ registration is absent from /proc/interrupts" >"$OUT/prerequisite.error"
+    STATUS=1
+    CLASSIFICATION="irq-registration-failure"
+    finish
+fi
+
+if [ "$MODE" = "sdp" ]; then
+    WORKLOAD="$PAYLOAD_ROOT/sdp_regression_small"
+    if [ ! -f "$WORKLOAD/loadable.fbuf" ] || [ ! -f "$WORKLOAD/golden.dimg" ]; then
+        echo "SDP workload is incomplete" >"$OUT/prerequisite.error"
+        STATUS=1
+        CLASSIFICATION="payload-verification-failure"
+        finish
+    fi
+
+    mkdir -p "$OUT/runtime-output"
+    env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
+        nvdla_runtime -s >"$OUT/runtime-server.log" 2>&1 &
+    server_pid=$!
+    sleep 1
+
+    set +e
+    run_with_watchdog \
+        "$OUT/runtime-timeout.txt" \
+        "$OUT/runtime-client.stdout.log" \
+        "$OUT/runtime-client.stderr.log" \
+        nvdla-flatbuf-client \
+            --flatbuf "$WORKLOAD/loadable.fbuf" \
+            --out-dir "$OUT/runtime-output" \
+            --timeout "$RUNTIME_TIMEOUT"
+    CLIENT_STATUS=$?
+    set -e
+    printf '%s\n' "$CLIENT_STATUS" >"$OUT/runtime-client.exit-status"
+
+    if kill -0 "$server_pid" 2>/dev/null; then
+        sleep 1
+    fi
+    if kill -0 "$server_pid" 2>/dev/null; then
+        kill -TERM "$server_pid" 2>/dev/null || true
+    fi
+    if wait "$server_pid"; then
+        SERVER_STATUS=0
+    else
+        SERVER_STATUS=$?
+    fi
+    printf '%s\n' "$SERVER_STATUS" >"$OUT/runtime-server.exit-status"
+
+    dmesg >"$OUT/sdp-dmesg.log" 2>&1 || true
+    tail -n +"$((DMESG_LINES + 1))" "$OUT/sdp-dmesg.log" >"$OUT/sdp-dmesg-delta.log" 2>/dev/null || true
+    IRQ_NOW="$(irq_total)"
+    SDP_IRQ_DELTA=$((IRQ_NOW - IRQ_BEFORE))
+    printf '%s\n' "$SDP_IRQ_DELTA" >"$OUT/sdp-irq-delta.txt"
+
+    OUTPUT="$OUT/runtime-output/o_000000.dimg"
+    if [ "$CLIENT_STATUS" -eq 124 ]; then
+        STATUS=1
+        CLASSIFICATION="runtime-timeout"
+    elif [ "$CLIENT_STATUS" -ne 0 ]; then
+        STATUS=1
+        CLASSIFICATION="runtime-protocol-failure"
+    elif [ ! -f "$OUTPUT" ]; then
+        STATUS=1
+        CLASSIFICATION="missing-output"
+    elif [ "$SDP_IRQ_DELTA" -le 0 ]; then
+        STATUS=1
+        CLASSIFICATION="initiated-without-irq"
+    elif ! grep -q "Completed SDP operation" "$OUT/sdp-dmesg-delta.log"; then
+        STATUS=1
+        CLASSIFICATION="irq-without-completion"
+    elif cmp -s "$WORKLOAD/golden.dimg" "$OUTPUT"; then
+        STATUS=0
+        CLASSIFICATION="exact-pass"
+        PASS_COUNT=1
+    else
+        PAYLOAD_NONZERO="$(
+            od -An -tu1 -j 40 "$OUTPUT" 2>/dev/null \
+                | awk '{ for (field = 1; field <= NF; field++) if ($field != 0) count++ } END { print count + 0 }'
+        )"
+        printf '%s\n' "$PAYLOAD_NONZERO" >"$OUT/sdp-payload-nonzero-bytes.txt"
+        if [ "$PAYLOAD_NONZERO" -eq 0 ]; then
+            STATUS=0
+            CLASSIFICATION="diagnostic-pass-oracle-inconclusive"
+            PASS_COUNT=1
+        else
+            STATUS=1
+            CLASSIFICATION="unexpected-output-mismatch"
+        fi
+    fi
+    finish
+fi
+
+WORKLOAD="$PAYLOAD_ROOT/lenet_small"
+if [ ! -f "$WORKLOAD/loadable.nvdla" ] \
+    || [ ! -f "$WORKLOAD/input.pgm" ] \
+    || [ ! -f "$WORKLOAD/expected-output.txt" ]; then
+    echo "LeNet workload is incomplete" >"$OUT/prerequisite.error"
+    STATUS=1
+    CLASSIFICATION="payload-verification-failure"
+    finish
+fi
+
+EXPECTED_OUTPUT="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$WORKLOAD/expected-output.txt")"
+EXPECTED_OPERATIONS='Convolution 0
+SDP 1
+PDP 2
+Convolution 3
+SDP 4
+PDP 5
+Convolution 6
+SDP 7
+Convolution 8
+SDP 9'
+
+index=1
+while [ "$index" -le "$REPEAT" ]; do
+    REPEAT_OUT="$OUT/repeat-$index"
+    mkdir -p "$REPEAT_OUT/work"
+    repeat_dmesg_lines="$(dmesg 2>/dev/null | wc -l | tr -d ' ')"
+    repeat_irq_before="$(irq_total)"
+
+    set +e
+    (
+        cd "$REPEAT_OUT/work"
+        run_with_watchdog \
+            "$REPEAT_OUT/runtime-timeout.txt" \
+            "$REPEAT_OUT/runtime.stdout.log" \
+            "$REPEAT_OUT/runtime.stderr.log" \
+            env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
+                nvdla_runtime \
+                    --loadable "$WORKLOAD/loadable.nvdla" \
+                    --image "$WORKLOAD/input.pgm" \
+                    --rawdump
+    )
+    RUN_STATUS=$?
+    set -e
+    printf '%s\n' "$RUN_STATUS" >"$REPEAT_OUT/runtime.exit-status"
+
+    dmesg >"$REPEAT_OUT/dmesg-after.log" 2>&1 || true
+    tail -n +"$((repeat_dmesg_lines + 1))" "$REPEAT_OUT/dmesg-after.log" \
+        >"$REPEAT_OUT/dmesg-delta.log" 2>/dev/null || true
+    sed -n 's/.*Completed \([A-Za-z][A-Za-z]*\) operation index \([0-9][0-9]*\) ROI.*/\1 \2/p' \
+        "$REPEAT_OUT/dmesg-delta.log" >"$REPEAT_OUT/operations.txt"
+    printf '%s\n' "$EXPECTED_OPERATIONS" >"$REPEAT_OUT/expected-operations.txt"
+
+    repeat_irq_after="$(irq_total)"
+    repeat_irq_delta=$((repeat_irq_after - repeat_irq_before))
+    printf '%s\n' "$repeat_irq_before" >"$REPEAT_OUT/irq-before.txt"
+    printf '%s\n' "$repeat_irq_after" >"$REPEAT_OUT/irq-after.txt"
+    printf '%s\n' "$repeat_irq_delta" >"$REPEAT_OUT/irq-delta.txt"
+
+    OUTPUT="$REPEAT_OUT/work/output.dimg"
+    if [ -f "$OUTPUT" ]; then
+        cp "$OUTPUT" "$REPEAT_OUT/output.dimg"
+        ACTUAL_OUTPUT="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$OUTPUT")"
+        printf '%s\n' "$ACTUAL_OUTPUT" >"$REPEAT_OUT/output.txt"
+        sha256sum "$OUTPUT" >"$REPEAT_OUT/output.sha256"
+    else
+        ACTUAL_OUTPUT=""
+    fi
+
+    REPEAT_STATUS=0
+    REPEAT_CLASSIFICATION="pass"
+    if [ "$RUN_STATUS" -eq 124 ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="runtime-timeout"
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="runtime-failure"
+    elif [ "$repeat_irq_delta" -le 0 ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="initiated-without-irq"
+    elif ! cmp -s "$REPEAT_OUT/expected-operations.txt" "$REPEAT_OUT/operations.txt"; then
+        REPEAT_STATUS=1
+        if [ -s "$REPEAT_OUT/operations.txt" ]; then
+            REPEAT_CLASSIFICATION="partial-operation-sequence"
+        else
+            REPEAT_CLASSIFICATION="irq-without-completion"
+        fi
+    elif [ -z "$ACTUAL_OUTPUT" ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="missing-output"
+    elif [ "$ACTUAL_OUTPUT" != "$EXPECTED_OUTPUT" ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="output-mismatch"
+    fi
+
+    {
+        echo "index=$index"
+        echo "status=$REPEAT_STATUS"
+        echo "classification=$REPEAT_CLASSIFICATION"
+        echo "runtime_status=$RUN_STATUS"
+        echo "irq_before=$repeat_irq_before"
+        echo "irq_after=$repeat_irq_after"
+        echo "irq_delta=$repeat_irq_delta"
+        echo "actual_output=$ACTUAL_OUTPUT"
+        echo "expected_output=$EXPECTED_OUTPUT"
+    } >"$REPEAT_OUT/result.env"
+
+    if [ "$REPEAT_STATUS" -ne 0 ]; then
+        STATUS=1
+        CLASSIFICATION="$REPEAT_CLASSIFICATION"
+        FIRST_FAILURE="$index"
+        break
+    fi
+    PASS_COUNT="$index"
+    index=$((index + 1))
+done
+
+if [ "$STATUS" -eq 0 ]; then
+    if [ "$REPEAT" -eq 1 ]; then
+        CLASSIFICATION="exact-pass"
+    else
+        CLASSIFICATION="stability-pass"
+    fi
+fi
+finish

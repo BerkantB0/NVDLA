@@ -43,6 +43,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla-kmd-smoke",
             "usr/bin/nvdla-flatbuf-client",
             "usr/bin/nvdla-board-check",
+            "usr/bin/nvdla-board-workload",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
             "lib/modules/6.6.10/extra/opendla.ko",
@@ -57,7 +58,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             for name in sorted(names):
                 data = (
                     b"#!/bin/sh\nexit 0\n"
-                    if name == "usr/bin/nvdla-board-check"
+                    if name in {"usr/bin/nvdla-board-check", "usr/bin/nvdla-board-workload"}
                     else b"[Service]\nExecStart=-/sbin/agetty --autologin root ttyPS0\n"
                     if name == "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
                     else (
@@ -140,6 +141,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/bin/nvdla-board-check"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing collector from rootfs", result["errors"])
+
+    def test_rejects_missing_workload_runner(self) -> None:
+        result = self._audit({"usr/bin/nvdla-board-workload"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing workload_runner from rootfs", result["errors"])
 
     def test_rejects_missing_serial_autologin_override(self) -> None:
         result = self._audit({"etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"})
