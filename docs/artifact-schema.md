@@ -126,11 +126,21 @@ SD-bundle manifests record the three source and copied boot-file hashes plus a
 deterministic archive hash.
 
 Imported board archives use lanes `petalinux-board-preflight`,
-`petalinux-board-probe`, or `petalinux-board-smoke`. They record target status,
-archive hash, member list, bad kernel patterns, and the optional full serial
-log. Preflight requires the NVDLA DT resource and interrupt properties. Probe
-additionally requires a bound platform driver and `/dev/dri/renderD*`; a
+`petalinux-board-probe`, `petalinux-board-smoke`,
+`petalinux-board-runtime-sdp`, or `petalinux-board-lenet`. They record target
+status, archive hash, member list, bad kernel patterns, and the optional full
+serial log. Preflight requires the NVDLA DT resource and interrupt properties.
+Probe additionally requires a bound platform driver and `/dev/dri/renderD*`; a
 successful module insertion alone is not a pass. The importer rejects absolute
 paths, traversal paths, and links.
+
+Runtime imports also write `workload-analysis.json`. SDP analysis records
+server/client exit status, protocol completion, task initiation, IRQ delta, SDP
+completion, output hash, comparison, and whether tensor correctness is
+`pass`, `fail`, or `inconclusive`. LeNet analysis records every repeat's
+runtime status, IRQ delta, ordered operation completions, output/hash, first
+failure, next expected engine, total passes, and distinct output hashes. The
+host recreates these classifications from raw evidence rather than accepting
+the target's summary without checking it.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.

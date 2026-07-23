@@ -45,6 +45,7 @@ make petalinux-image
 make petalinux-rootfs-audit
 make petalinux-package
 make petalinux-sd-bundle
+make petalinux-board-payload
 ```
 
 `make petalinux-project` creates a ZynqMP project when needed and imports the
@@ -59,9 +60,10 @@ the runtime with PetaLinux's ARM64 compiler and sysroot. The image append adds
 both `opendla` and `nvdla-runtime` to `petalinux-image-minimal`.
 
 `make petalinux-board-tools` adds the non-submitting DRM/GEM smoke utility,
-target-side evidence collector, and a `ttyPS0` root-autologin override for the
-lab image. The override is deliberately serial-only and must be removed from a
-deployment image.
+libc-only runtime protocol client, staged workload runner, target-side evidence
+collector, and a `ttyPS0` root-autologin override for the lab image. The
+override is deliberately serial-only and must be removed from a deployment
+image.
 
 The resulting rootfs contains:
 
@@ -69,7 +71,9 @@ The resulting rootfs contains:
 /usr/bin/nvdla_runtime
 /usr/lib/libnvdla_runtime.so
 /usr/bin/nvdla-kmd-smoke
+/usr/bin/nvdla-flatbuf-client
 /usr/bin/nvdla-board-check
+/usr/bin/nvdla-board-workload
 /lib/modules/<kernel>/extra/opendla.ko
 ```
 
@@ -86,16 +90,19 @@ fragment, module hash/vermagic, runtime ELF metadata, rootfs audit, image hashes
 and pass/fail/block reason.
 
 The image does not autoload `opendla.ko` or start a runtime service. Model
-loadables and input/golden data remain separate generated test assets. After
-the board probe, IRQ, and GEM/DMA gates pass, copy or package the pinned
-`nv_small` LeNet assets and run `nvdla_runtime` manually against the discovered
-render node.
+loadables and input/golden data remain separate generated test assets.
+`make petalinux-board-payload` builds a deterministic `nvdla-tests` directory
+and archive containing the pinned SDP and `nv_small` LeNet workloads,
+manifests, and `SHA256SUMS`. Copy that directory to the SD FAT partition
+alongside, but separate from, the three boot files.
 
 `make petalinux-sd-bundle` creates a deterministic archive and a ready-to-copy
 directory containing `BOOT.BIN`, `boot.scr`, and `image.ub`; it never writes to
 removable media. Follow
 [the first-board runbook](zcu102-first-boot-runbook.md) for SD preparation,
 UART capture, controlled preflight/probe/smoke gates, and evidence retrieval.
+The same runbook defines the staged SDP, single-LeNet, 10-repeat, and
+100-repeat runtime gates.
 
 ## Fetching Sources
 

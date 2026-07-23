@@ -50,11 +50,13 @@ non-coherent DMA path; those remain board-level acceptance criteria.
   PetaLinux ARM64 toolchain and installed in `petalinux-image-minimal` alongside
   `opendla.ko`. A host-side rootfs audit verifies their architecture, dynamic
   dependency closure, hashes, and absence of RPATHs or host build paths.
-- The lab bring-up image includes `nvdla-kmd-smoke`, a target-side evidence
-  collector, serial-only root autologin, and a deterministic three-file SD
-  handoff. These are board-test facilities, not deployment policy.
-- Physical ZCU102 probe, DMA, interrupt, and inference validation is the next
-  integration stage. Host build success is not treated as hardware proof.
+- The lab bring-up image includes `nvdla-kmd-smoke`, a C runtime-protocol
+  client, staged workload runner, target-side evidence collector, serial-only
+  root autologin, and deterministic SD handoffs. These are board-test
+  facilities, not deployment policy.
+- Physical ZCU102 preflight, KMD probe, and GEM smoke have passed. Staged SDP,
+  single-LeNet, and repeat-stability gates remain; host build success and GEM
+  smoke are not treated as inference correctness.
 
 ## Repository Structure
 
@@ -121,12 +123,12 @@ make petalinux-image
 make petalinux-rootfs-audit
 make petalinux-package
 make petalinux-sd-bundle
+make petalinux-board-payload
 ```
 
-This installs the driver and runtime but deliberately does not autoload the
-module, start a runtime service, or include model assets. The first board boot
-therefore remains a controlled manual probe before LeNet is added as a separate
-test payload.
+This installs the driver, runtime, C diagnostic client, and staged runner but
+deliberately does not autoload the module or start a runtime service. Model
+assets remain in the separate, hash-verified `nvdla-tests` FAT payload.
 
 The `nvdla-board-tools` package in this repository also installs a deliberately
 configuration-specific direct-link profile: ZCU102 MAC
