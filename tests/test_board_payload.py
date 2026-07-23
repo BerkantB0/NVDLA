@@ -96,7 +96,11 @@ class BoardPayloadTests(unittest.TestCase):
             )
 
             self.assertEqual(first["archive"]["sha256"], second["archive"]["sha256"])
-            self.assertTrue((root / "first" / "nvdla-tests" / "SHA256SUMS").is_file())
+            sums_path = root / "first" / "nvdla-tests" / "SHA256SUMS"
+            self.assertTrue(sums_path.is_file())
+            for line in sums_path.read_text(encoding="ascii").splitlines():
+                digest = line.split()[0]
+                self.assertEqual(digest, digest.lower())
             self.assertEqual(
                 (root / "first" / "nvdla-tests" / "lenet_small" / "expected-output.txt")
                 .read_text()

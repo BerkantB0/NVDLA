@@ -197,7 +197,8 @@ def build_board_payload(
     write_json(out_dir / "PAYLOAD.json", payload_manifest)
 
     records = _relative_file_records(out_dir)
-    sums = "".join(f"{item['sha256']}  {item['path']}\n" for item in records)
+    # BusyBox sha256sum compares the hexadecimal field case-sensitively.
+    sums = "".join(f"{item['sha256'].lower()}  {item['path']}\n" for item in records)
     (out_dir / "SHA256SUMS").write_text(sums, encoding="ascii")
     _write_deterministic_tree(out_dir, archive_path)
 
