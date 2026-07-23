@@ -50,6 +50,9 @@ non-coherent DMA path; those remain board-level acceptance criteria.
   PetaLinux ARM64 toolchain and installed in `petalinux-image-minimal` alongside
   `opendla.ko`. A host-side rootfs audit verifies their architecture, dynamic
   dependency closure, hashes, and absence of RPATHs or host build paths.
+- The lab bring-up image includes `nvdla-kmd-smoke`, a target-side evidence
+  collector, serial-only root autologin, and a deterministic three-file SD
+  handoff. These are board-test facilities, not deployment policy.
 - Physical ZCU102 probe, DMA, interrupt, and inference validation is the next
   integration stage. Host build success is not treated as hardware proof.
 
@@ -113,9 +116,11 @@ make petalinux-project
 make petalinux-dts
 NVDLA_KMD_CONFIG=small make petalinux-kmod
 make petalinux-runtime
+make petalinux-board-tools
 make petalinux-image
 make petalinux-rootfs-audit
 make petalinux-package
+make petalinux-sd-bundle
 ```
 
 This installs the driver and runtime but deliberately does not autoload the
@@ -157,6 +162,7 @@ files, and pinned metadata belong in Git.
 - [Upstreamable patch workflow](docs/upstreamable-patch-workflow.md)
 - [PetaLinux compatibility analysis](docs/nvdla-petalinux-compatible-version-analysis.md)
 - [PetaLinux feasibility notes](docs/nvdla-petalinux-feasibility.md)
+- [ZCU102 first board bring-up](docs/zcu102-first-boot-runbook.md)
 
 Run `make help` for the complete set of supported build, test, audit, and report
 targets.

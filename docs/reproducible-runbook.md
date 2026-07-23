@@ -40,9 +40,11 @@ make petalinux-project
 make petalinux-dts
 NVDLA_KMD_CONFIG=small make petalinux-kmod
 make petalinux-runtime
+make petalinux-board-tools
 make petalinux-image
 make petalinux-rootfs-audit
 make petalinux-package
+make petalinux-sd-bundle
 ```
 
 `make petalinux-project` creates a ZynqMP project when needed and imports the
@@ -56,11 +58,18 @@ append, applies the same pinned NVDLA patch queue as the KMD recipe, and builds
 the runtime with PetaLinux's ARM64 compiler and sysroot. The image append adds
 both `opendla` and `nvdla-runtime` to `petalinux-image-minimal`.
 
+`make petalinux-board-tools` adds the non-submitting DRM/GEM smoke utility,
+target-side evidence collector, and a `ttyPS0` root-autologin override for the
+lab image. The override is deliberately serial-only and must be removed from a
+deployment image.
+
 The resulting rootfs contains:
 
 ```text
 /usr/bin/nvdla_runtime
 /usr/lib/libnvdla_runtime.so
+/usr/bin/nvdla-kmd-smoke
+/usr/bin/nvdla-board-check
 /lib/modules/<kernel>/extra/opendla.ko
 ```
 
@@ -81,6 +90,12 @@ loadables and input/golden data remain separate generated test assets. After
 the board probe, IRQ, and GEM/DMA gates pass, copy or package the pinned
 `nv_small` LeNet assets and run `nvdla_runtime` manually against the discovered
 render node.
+
+`make petalinux-sd-bundle` creates a deterministic archive and a ready-to-copy
+directory containing `BOOT.BIN`, `boot.scr`, and `image.ub`; it never writes to
+removable media. Follow
+[the first-board runbook](zcu102-first-boot-runbook.md) for SD preparation,
+UART capture, controlled preflight/probe/smoke gates, and evidence retrieval.
 
 ## Fetching Sources
 

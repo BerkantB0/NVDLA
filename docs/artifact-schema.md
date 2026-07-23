@@ -97,7 +97,8 @@ source-built VP binary, CMOD, DTB, and KMD hashes, the VP CMake
 
 PetaLinux manifests use lanes such as `petalinux-project`, `petalinux-dts`,
 `petalinux-kmod`, `petalinux-runtime`, `petalinux-image`,
-`petalinux-rootfs-audit`, and `petalinux-package`. They include the Ubuntu WSL
+`petalinux-board-tools`, `petalinux-rootfs-audit`, `petalinux-package`, and
+`petalinux-sd-bundle`. They include the Ubuntu WSL
 host facts, PetaLinux install path, default or explicit project path, settings
 log, XSA hash, patch-series hash, kernel version when discoverable, logs, and
 pass/fail/block reason. The DTS phase records the generated `nvdla-user.dtsi`
@@ -114,5 +115,15 @@ binary/library/module hashes. A missing component or dependency, wrong
 architecture, RPATH/RUNPATH, or embedded host build path makes this lane fail.
 The default project path is `$HOME/build/nvdla-peta/petalinux/zcu102-nvdla` so
 generated builds stay on WSL ext4 unless `PETALINUX_PROJECT` is overridden.
+
+Board-tool manifests record the recipe, RPM, smoke binary, collector, and patch
+hashes. Rootfs audit manifests additionally require the executable collector
+and explicit `ttyPS0` serial-autologin override. SD-bundle manifests record the
+three source and copied boot-file hashes plus a deterministic archive hash.
+
+Imported board archives use lanes `petalinux-board-preflight`,
+`petalinux-board-probe`, or `petalinux-board-smoke`. They record target status,
+archive hash, member list, bad kernel patterns, and the optional full serial
+log. The importer rejects absolute paths, traversal paths, and links.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.
