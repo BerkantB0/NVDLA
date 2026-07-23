@@ -104,6 +104,7 @@ Pass criteria:
 - Linux reaches the root shell without an exception or hang.
 - `/proc/device-tree/nvdla@a0000000` exists.
 - Its compatible string is `nvidia,nv_small`.
+- Its `reg`, `interrupt-parent`, `interrupts`, and `status` properties exist.
 - `opendla` is not loaded automatically.
 - Runtime, library, smoke utility, and collector hashes are captured.
 
@@ -127,11 +128,16 @@ Pass criteria:
 - The CSB resource is `0xa0000000..0xa000ffff`.
 - IRQ registration succeeds. The Linux virtual IRQ need not numerically equal
   the device-tree SPI value `89`.
+- The platform device is bound to the NVDLA driver.
 - `/dev/dri/renderD*` exists.
 - There is no Oops, BUG, WARNING, DMA-API report, SError, external abort, or
   scheduler/interrupt timeout.
 
 Do not run the GEM smoke test if probe fails.
+
+`modprobe` returning zero is not sufficient by itself: a platform module can
+load successfully even when probing its device fails. The gate therefore
+requires both the driver-binding symlink and a DRM render node.
 
 ## Gate 3: DRM/GEM Smoke
 

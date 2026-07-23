@@ -124,6 +124,9 @@ three source and copied boot-file hashes plus a deterministic archive hash.
 Imported board archives use lanes `petalinux-board-preflight`,
 `petalinux-board-probe`, or `petalinux-board-smoke`. They record target status,
 archive hash, member list, bad kernel patterns, and the optional full serial
-log. The importer rejects absolute paths, traversal paths, and links.
+log. Preflight requires the NVDLA DT resource and interrupt properties. Probe
+additionally requires a bound platform driver and `/dev/dri/renderD*`; a
+successful module insertion alone is not a pass. The importer rejects absolute
+paths, traversal paths, and links.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.

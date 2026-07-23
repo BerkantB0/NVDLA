@@ -62,11 +62,19 @@ capture runtime-hashes.txt sha256sum \
     /usr/bin/nvdla-board-check
 
 DT_NODE="/proc/device-tree/nvdla@a0000000"
+PLATFORM_DEVICE="/sys/bus/platform/devices/a0000000.nvdla"
 if [ -d "$DT_NODE" ]; then
     capture_shell dt-compatible.txt "tr '\\000' '\\n' <'$DT_NODE/compatible'"
     capture dt-reg.hex od -An -tx1 "$DT_NODE/reg"
+    capture dt-interrupt-parent.hex od -An -tx1 "$DT_NODE/interrupt-parent"
     capture dt-interrupts.hex od -An -tx1 "$DT_NODE/interrupts"
     capture dt-status.txt cat "$DT_NODE/status"
+    for property in compatible reg interrupt-parent interrupts status; do
+        if [ ! -f "$DT_NODE/$property" ]; then
+            echo "missing $DT_NODE/$property" >>"$OUT/device-tree.error"
+            STATUS=1
+        fi
+    done
 else
     echo "missing $DT_NODE" >"$OUT/device-tree.error"
     STATUS=1
@@ -82,6 +90,18 @@ fi
 
 capture modules-after.txt lsmod
 capture dev-dri-after.txt ls -la /dev/dri
+
+if [ "$MODE" = "probe" ] || [ "$MODE" = "smoke" ]; then
+    if [ ! -L "$PLATFORM_DEVICE/driver" ]; then
+        echo "NVDLA platform device did not bind to a driver" >"$OUT/probe.error"
+        STATUS=1
+    fi
+    set -- /dev/dri/renderD*
+    if [ ! -e "$1" ]; then
+        echo "NVDLA probe did not create a DRM render node" >>"$OUT/probe.error"
+        STATUS=1
+    fi
+fi
 
 if [ "$MODE" = "smoke" ] && [ "$STATUS" -eq 0 ]; then
     if nvdla-kmd-smoke >"$OUT/kmd-smoke.stdout.log" 2>"$OUT/kmd-smoke.stderr.log"; then
@@ -109,6 +129,7 @@ fi
     echo "status=$STATUS"
     echo "timestamp_utc=$STAMP"
     echo "dt_node=$DT_NODE"
+    echo "platform_device=$PLATFORM_DEVICE"
 } >"$OUT/result.env"
 
 rm -f "$ARCHIVE" "$LATEST"
