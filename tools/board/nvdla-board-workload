@@ -172,6 +172,8 @@ else
     CLASSIFICATION="payload-verification-failure"
     finish
 fi
+cp "$PAYLOAD_ROOT/PAYLOAD.json" "$OUT/payload-manifest.json"
+cp "$PAYLOAD_ROOT/SHA256SUMS" "$OUT/payload-sha256s.txt"
 
 if modprobe opendla >"$OUT/module-load.log" 2>&1; then
     :
@@ -212,6 +214,8 @@ if [ "$MODE" = "sdp" ]; then
     fi
 
     mkdir -p "$OUT/runtime-output"
+    cp "$WORKLOAD/manifest.json" "$OUT/workload-manifest.json"
+    sha256sum "$WORKLOAD/loadable.fbuf" "$WORKLOAD/golden.dimg" >"$OUT/workload-input-sha256.txt"
     env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
         nvdla_runtime -s >"$OUT/runtime-server.log" 2>&1 &
     server_pid=$!
@@ -266,10 +270,12 @@ if [ "$MODE" = "sdp" ]; then
         STATUS=1
         CLASSIFICATION="irq-without-completion"
     elif cmp -s "$WORKLOAD/golden.dimg" "$OUTPUT"; then
+        echo "exact" >"$OUT/sdp-compare-status.txt"
         STATUS=0
         CLASSIFICATION="exact-pass"
         PASS_COUNT=1
     else
+        echo "mismatch" >"$OUT/sdp-compare-status.txt"
         PAYLOAD_NONZERO="$(
             od -An -tu1 -j 40 "$OUTPUT" 2>/dev/null \
                 | awk '{ for (field = 1; field <= NF; field++) if ($field != 0) count++ } END { print count + 0 }'
@@ -296,6 +302,9 @@ if [ ! -f "$WORKLOAD/loadable.nvdla" ] \
     CLASSIFICATION="payload-verification-failure"
     finish
 fi
+cp "$WORKLOAD/manifest.json" "$OUT/workload-manifest.json"
+sha256sum "$WORKLOAD/loadable.nvdla" "$WORKLOAD/input.pgm" "$WORKLOAD/expected-output.txt" \
+    >"$OUT/workload-input-sha256.txt"
 
 EXPECTED_OUTPUT="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$WORKLOAD/expected-output.txt")"
 EXPECTED_OPERATIONS='Convolution 0
