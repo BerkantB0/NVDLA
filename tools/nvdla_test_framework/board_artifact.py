@@ -191,8 +191,25 @@ def _analyze_sdp(root: Path, result: dict[str, str]) -> dict[str, Any]:
     payload_nonzero = _read_int(root / "sdp-payload-nonzero-bytes.txt")
     initiated = "Exit: dla_initiate_processors status=0" in dmesg
     completed = "Completed SDP operation" in dmesg
+    prepare_entered = "Enter: dla_prepare_operation" in dmesg
+    prepare_returned = "Exit: dla_prepare_operation" in dmesg
     protocol_passed = "[OK] Test PASSED!" in client
     timed_out = (root / "runtime-timeout.txt").is_file() or client_status == 124
+
+    if completed:
+        progress_stage = "sdp-completed"
+    elif initiated:
+        progress_stage = "processors-initiated"
+    elif prepare_returned:
+        progress_stage = "sdp-operation-prepared"
+    elif prepare_entered:
+        progress_stage = "sdp-prepare-no-return"
+    elif "Prepare SDP operation" in dmesg:
+        progress_stage = "sdp-submit-entered"
+    elif "Enter: dla_initiate_processors" in dmesg:
+        progress_stage = "processor-initiation-entered"
+    else:
+        progress_stage = "no-kernel-submission-marker"
 
     if timed_out:
         classification = "runtime-timeout"
@@ -230,6 +247,14 @@ def _analyze_sdp(root: Path, result: dict[str, str]) -> dict[str, Any]:
         "server_status": server_status,
         "timed_out": timed_out,
         "task_initiated": initiated,
+        "progress_stage": progress_stage,
+        "prepare_operation_entered": prepare_entered,
+        "prepare_operation_returned": prepare_returned,
+        "suspected_boundary": (
+            "SDP S_POINTER or SDP_RDMA S_POINTER CSB read"
+            if progress_stage == "sdp-prepare-no-return"
+            else None
+        ),
         "irq_delta": irq_delta,
         "sdp_completed": completed,
         "protocol_passed": protocol_passed,
@@ -258,6 +283,7 @@ def analyze_board_workload(
     analysis["target_status"] = int(result.get("status", "1"))
     analysis["target_classification"] = result.get("classification")
     analysis["bad_kernel_patterns"] = bad_patterns or []
+    analysis["progress_classification"] = analysis["classification"]
     if analysis["target_status"] != 0 or analysis["bad_kernel_patterns"]:
         analysis["status"] = "fail"
         if analysis["bad_kernel_patterns"]:

@@ -16,7 +16,7 @@ if [ -z "$PAYLOAD_ROOT" ] || [ ! -d "$PAYLOAD_ROOT" ]; then
 fi
 
 REPEAT="${REPEAT:-1}"
-RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-120}"
+RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-10}"
 WATCHDOG_GRACE="${WATCHDOG_GRACE:-5}"
 case "$REPEAT:$RUNTIME_TIMEOUT:$WATCHDOG_GRACE" in
     *[!0-9:]*|0:*|*:0:*|*:*:0)
@@ -42,7 +42,7 @@ CLASSIFICATION="not-run"
 PASS_COUNT=0
 FIRST_FAILURE=0
 NODE=""
-BAD_PATTERN='Oops|BUG:|WARNING:|DMA-API|scheduler timeout|interrupt timeout|SError|External abort'
+BAD_PATTERN='Oops|BUG:|WARNING:|DMA-API|scheduler timeout|interrupt timeout|Timeout waiting for hardware|detected stalls|rcu.*stall|SError|External abort'
 
 mkdir -p "$OUT"
 
@@ -105,6 +105,67 @@ run_with_watchdog() {
     return "$command_status"
 }
 
+process_state() {
+    pid="$1"
+    if [ ! -r "/proc/$pid/stat" ]; then
+        echo "exited"
+        return
+    fi
+    if state="$(awk '{ print $3 }' "/proc/$pid/stat" 2>/dev/null)"; then
+        echo "${state:-exited}"
+    else
+        echo "exited"
+    fi
+}
+
+reap_stopped_server() {
+    state="$(process_state "$server_pid")"
+    case "$state" in
+        exited|Z)
+            if wait "$server_pid"; then
+                SERVER_STATUS=0
+            else
+                SERVER_STATUS=$?
+            fi
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+stop_server_bounded() {
+    SERVER_STATUS=125
+
+    sleep 1
+    if reap_stopped_server; then
+        return
+    fi
+
+    kill -TERM "$server_pid" 2>/dev/null || true
+    elapsed=0
+    while [ "$elapsed" -lt "$WATCHDOG_GRACE" ]; do
+        sleep 1
+        if reap_stopped_server; then
+            return
+        fi
+        elapsed=$((elapsed + 1))
+    done
+
+    kill -KILL "$server_pid" 2>/dev/null || true
+    sleep 1
+    if reap_stopped_server; then
+        return
+    fi
+
+    state="$(process_state "$server_pid")"
+    SERVER_STATUS=124
+    {
+        echo "runtime server did not leave kernel context after TERM/KILL"
+        echo "pid=$server_pid"
+        echo "state=$state"
+    } >"$OUT/runtime-server-unreaped.txt"
+}
+
 finish() {
     dmesg >"$OUT/dmesg-after.log" 2>&1 || true
     delta_start=$((DMESG_LINES + 1))
@@ -113,7 +174,7 @@ finish() {
     IRQ_AFTER="$(irq_total)"
     IRQ_DELTA=$((IRQ_AFTER - IRQ_BEFORE))
 
-    if grep -E "$BAD_PATTERN" "$OUT/dmesg-delta.log" >"$OUT/bad-kernel-patterns.txt"; then
+    if grep -Ei "$BAD_PATTERN" "$OUT/dmesg-delta.log" >"$OUT/bad-kernel-patterns.txt"; then
         STATUS=1
         CLASSIFICATION="kernel-log-failure"
     else
@@ -234,17 +295,7 @@ if [ "$MODE" = "sdp" ]; then
     set -e
     printf '%s\n' "$CLIENT_STATUS" >"$OUT/runtime-client.exit-status"
 
-    if kill -0 "$server_pid" 2>/dev/null; then
-        sleep 1
-    fi
-    if kill -0 "$server_pid" 2>/dev/null; then
-        kill -TERM "$server_pid" 2>/dev/null || true
-    fi
-    if wait "$server_pid"; then
-        SERVER_STATUS=0
-    else
-        SERVER_STATUS=$?
-    fi
+    stop_server_bounded
     printf '%s\n' "$SERVER_STATUS" >"$OUT/runtime-server.exit-status"
 
     dmesg >"$OUT/sdp-dmesg.log" 2>&1 || true

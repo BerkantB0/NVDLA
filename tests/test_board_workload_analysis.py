@@ -134,3 +134,30 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
             self.assertEqual(result["status"], "pass")
             self.assertEqual(result["correctness_status"], "inconclusive")
             self.assertEqual(result["classification"], "diagnostic-pass-oracle-inconclusive")
+
+    def test_identifies_sdp_prepare_csb_read_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "runtime-client.exit-status").write_text("124\n")
+            (root / "runtime-server.exit-status").write_text("124\n")
+            (root / "runtime-timeout.txt").write_text("runtime exceeded 10s\n")
+            (root / "sdp-dmesg-delta.log").write_text(
+                "Enter: dla_initiate_processors\n"
+                "Prepare SDP operation index 0 ROI 0 dep_count 0\n"
+                "Enter: dla_prepare_operation\n"
+            )
+            (root / "sdp-irq-delta.txt").write_text("0\n")
+
+            result = analyze_board_workload(
+                root,
+                {"mode": "runtime-sdp", "status": "1"},
+                ["rcu: INFO: rcu_sched detected stalls on CPUs/tasks:"],
+            )
+            self.assertEqual(result["status"], "fail")
+            self.assertEqual(result["classification"], "kernel-log-failure")
+            self.assertEqual(result["progress_classification"], "runtime-timeout")
+            self.assertEqual(result["progress_stage"], "sdp-prepare-no-return")
+            self.assertEqual(
+                result["suspected_boundary"],
+                "SDP S_POINTER or SDP_RDMA S_POINTER CSB read",
+            )

@@ -298,14 +298,14 @@ Retrieve the archive and power-cycle after the gate.
 Only after a clean single run, use a fresh boot for 10 repeats:
 
 ```sh
-REPEAT=10 RUNTIME_TIMEOUT=120 \
+REPEAT=10 RUNTIME_TIMEOUT=10 \
   nvdla-board-workload lenet /mnt/sdboot/nvdla-tests
 ```
 
 Only after all ten pass, use another fresh boot for 100 repeats:
 
 ```sh
-REPEAT=100 RUNTIME_TIMEOUT=120 \
+REPEAT=100 RUNTIME_TIMEOUT=10 \
   nvdla-board-workload lenet /mnt/sdboot/nvdla-tests
 ```
 
@@ -330,6 +330,31 @@ The archive importer classifies the first failing stage:
 - completed operations with wrong output;
 - repeat-only state retention or cleanup failure;
 - kernel-log failure.
+
+### First SDP Board Observation
+
+The first physical-board SDP attempt on 2026-07-24 passed payload validation,
+driver probe, and task parsing, then logged:
+
+```text
+Prepare SDP operation index 0 ROI 0 dep_count 0
+Enter: dla_prepare_operation
+```
+
+It never logged the corresponding `Exit: dla_prepare_operation`, successful
+processor initiation, or an NVDLA completion. CPU 0 subsequently stalled in
+`nvdla_submit`; RCU and the MMC controller then reported interrupt timeouts.
+Those MMC errors are treated as secondary effects of the kernel stall, not as
+evidence that the workload file was read incorrectly.
+
+In the KMD path, the next accesses in `utils_get_free_group()` are the
+`SDP_S_POINTER` and `SDP_RDMA_S_POINTER` CSB reads at offsets `0x9004` and
+`0x8004`. The trace therefore narrows the suspected boundary to those reads,
+but does not yet prove which access failed. The XSA advertises a complete
+64-KiB APB aperture, although that metadata does not prove that the internal
+wrapper returns a response for every NVDLA block offset. Do not run LeNet until a
+failure-only diagnostic module has identified the exact last CSB access and
+the FPGA wrapper's response behavior has been checked.
 
 Import a UART-retrieved archive from the host with:
 

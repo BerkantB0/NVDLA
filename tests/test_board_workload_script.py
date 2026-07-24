@@ -18,6 +18,11 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("diagnostic-pass-oracle-inconclusive", text)
         self.assertIn("partial-operation-sequence", text)
         self.assertIn('FIRST_FAILURE="$index"', text)
+        self.assertIn('RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-10}"', text)
+        self.assertIn("stop_server_bounded", text)
+        self.assertIn("runtime-server-unreaped.txt", text)
+        self.assertIn("detected stalls", text)
+        self.assertIn("Timeout waiting for hardware", text)
         self.assertNotIn("/dev/mem", text)
         self.assertNotIn("rmmod", text)
 
