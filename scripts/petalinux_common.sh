@@ -207,6 +207,7 @@ manifest = {
     },
     "driver": {
         "kmd_config": os.environ.get("NVDLA_KMD_CONFIG") or os.environ.get("NVDLA_HW_CONFIG") or None,
+        "diagnostic": os.environ.get("NVDLA_KMD_DIAGNOSTIC") == "1",
         "module_path": module_path,
         "module_sha256": sha256(module_path),
         "module_vermagic": os.environ.get("MODULE_VERMAGIC") or None,

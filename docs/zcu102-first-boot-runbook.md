@@ -356,6 +356,88 @@ wrapper returns a response for every NVDLA block offset. Do not run LeNet until 
 failure-only diagnostic module has identified the exact last CSB access and
 the FPGA wrapper's response behavior has been checked.
 
+Build that module in Ubuntu-22.04 WSL:
+
+```sh
+make petalinux-kmod-diagnostic
+```
+
+The target writes `artifacts/<run-id>-petalinux-kmod-diagnostic/` containing
+`opendla-diagnostic.ko` and a manifest with `driver.diagnostic: true`. It does
+not add the module to the production rootfs. Copy it to the SD FAT partition
+separately.
+
+Use the hardened diagnostic image and a fresh boot. Do not run the normal probe
+first because it would load the production module:
+
+```sh
+grep -q '^opendla ' /proc/modules && echo "ERROR: opendla already loaded"
+sha256sum /run/media/ROOT-mmcblk0p1/opendla-diagnostic.ko
+insmod /run/media/ROOT-mmcblk0p1/opendla-diagnostic.ko
+modinfo /run/media/ROOT-mmcblk0p1/opendla-diagnostic.ko | grep -E 'filename|vermagic'
+nvdla-board-workload sdp /run/media/ROOT-mmcblk0p1/nvdla-tests
+```
+
+The diagnostic module has the internal name `opendla`, so the runner's normal
+`modprobe opendla` prerequisite becomes a no-op. The last unmatched message:
+
+```text
+nvdla-trace csb-read begin offset=0x........
+```
+
+identifies the access that did not return. The hardened runner uses a 10-second
+watchdog and does not block indefinitely while reaping a runtime process stuck
+inside the kernel. If it prints an artifact path, retrieve it and then
+power-cycle. If no artifact appears or an RCU stall begins, preserve UART and
+power-cycle immediately.
+
+The first diagnostic run on 2026-07-24 ended with:
+
+```text
+nvdla-trace csb-read begin offset=0x00009004
+```
+
+There was no matching `end` message. This identifies an unreturned read of
+`SDP_S_POINTER` at physical address `0xA0009004`. The failure occurs before
+SDP register programming, accelerator DMA, or a completion interrupt, so it
+does not currently implicate cache coherency or output comparison.
+
+This is also the first device-register read proven by the Linux test sequence.
+The probe's `0 . 12 . 5` message is the compiled firmware version, and
+`reset engine done` only clears KMD scheduler state; GEM smoke does not access
+NVDLA registers. The result therefore identifies the exact failed address but
+does not yet distinguish a general CSB clock/reset/response failure from an
+SDP-specific decode failure. The same small-config KMD access completes in the
+verified VP.
+
+The wrapper shown in the FPGA report translates APB addresses with
+`csb2nvdla_addr = paddr[17:2]`, which maps `0xA0009004` to the expected NVDLA
+word address `0x2401`. It holds `pready` low for a read until
+`nvdla2csb_valid` returns. The XSA proves that the external aperture covers the
+address, but its module reference does not contain the internal wrapper RTL or
+prove which handshake signal stopped.
+
+Inspect the exact implemented design with an ILA before issuing more
+potentially blocking software reads. Trigger on a read of APB offset `0x9004`
+and capture:
+
+```text
+paddr psel penable pwrite pready
+csb2nvdla_addr csb2nvdla_valid csb2nvdla_ready
+nvdla2csb_valid nvdla2csb_data
+csb_clk csb_rstn m_axi_clk rstn
+```
+
+The expected internal address is `0x2401`. A missing APB request points to the
+AXI/APB path. A CSB request that is not accepted points to the CSB-master
+clock/reset or request path. An accepted request with no
+`nvdla2csb_valid` response points to the downstream register routing,
+clock/reset, or response path. The report's original bare-metal sanity test
+read CSC offset `0x4024`, and its SDP test programmed the accelerator and
+observed memory traffic; reproducing those tests on the exact current
+bitstream is a useful control if the original Vivado project is available.
+Do not run LeNet on this bitstream until ordinary CSB reads return.
+
 Import a UART-retrieved archive from the host with:
 
 ```sh

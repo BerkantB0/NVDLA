@@ -8,6 +8,7 @@ from nvdla_test_framework.board_artifact import (
     analyze_board_workload,
     parse_completed_operations,
     parse_interrupt_total,
+    parse_unreturned_csb_read,
 )
 from nvdla_test_framework.board_payload import EXPECTED_LENET_OPERATIONS, EXPECTED_LENET_OUTPUT
 
@@ -32,6 +33,22 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
         self.assertEqual(
             parse_completed_operations(_operation_log(EXPECTED_LENET_OPERATIONS)),
             EXPECTED_LENET_OPERATIONS,
+        )
+
+    def test_identifies_unreturned_csb_read(self) -> None:
+        text = (
+            "nvdla-trace csb-read begin offset=0x0000000c\n"
+            "nvdla-trace csb-read end offset=0x0000000c value=0x000c0005\n"
+            "nvdla-trace csb-read begin offset=0x00009004\n"
+            "rcu: INFO: rcu_sched detected stalls on CPUs/tasks:\n"
+        )
+        self.assertEqual(
+            parse_unreturned_csb_read(text),
+            {
+                "offset": "0x00009004",
+                "physical_address": "0xa0009004",
+                "register": "SDP_S_POINTER",
+            },
         )
 
     def _lenet_root(
@@ -145,6 +162,7 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
                 "Enter: dla_initiate_processors\n"
                 "Prepare SDP operation index 0 ROI 0 dep_count 0\n"
                 "Enter: dla_prepare_operation\n"
+                "nvdla-trace csb-read begin offset=0x00009004\n"
             )
             (root / "sdp-irq-delta.txt").write_text("0\n")
 
@@ -159,5 +177,13 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
             self.assertEqual(result["progress_stage"], "sdp-prepare-no-return")
             self.assertEqual(
                 result["suspected_boundary"],
-                "SDP S_POINTER or SDP_RDMA S_POINTER CSB read",
+                "SDP_S_POINTER CSB read",
+            )
+            self.assertEqual(
+                result["unreturned_csb_read"],
+                {
+                    "offset": "0x00009004",
+                    "physical_address": "0xa0009004",
+                    "register": "SDP_S_POINTER",
+                },
             )

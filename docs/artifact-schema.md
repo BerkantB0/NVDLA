@@ -116,6 +116,12 @@ architecture, RPATH/RUNPATH, or embedded host build path makes this lane fail.
 The default project path is `$HOME/build/nvdla-peta/petalinux/zcu102-nvdla` so
 generated builds stay on WSL ext4 unless `PETALINUX_PROJECT` is overridden.
 
+The separate `petalinux-kmod-diagnostic` lane sets
+`driver.diagnostic: true`, hashes the production and local debug patch queues,
+and archives a standalone `opendla-diagnostic.ko`. That module is deliberately
+absent from the production rootfs and cannot be used as production correctness
+evidence.
+
 Board-tool manifests record the recipe, RPM, smoke binary, collector, and patch
 hashes. Rootfs audit manifests additionally require the executable collector
 and explicit `ttyPS0` serial-autologin override. For this ZCU102 direct-link
@@ -137,10 +143,12 @@ paths, traversal paths, and links.
 Runtime imports also write `workload-analysis.json`. SDP analysis records
 server/client exit status, protocol completion, task initiation, IRQ delta, SDP
 completion, output hash, comparison, and whether tensor correctness is
-`pass`, `fail`, or `inconclusive`. LeNet analysis records every repeat's
-runtime status, IRQ delta, ordered operation completions, output/hash, first
-failure, next expected engine, total passes, and distinct output hashes. The
-host recreates these classifications from raw evidence rather than accepting
-the target's summary without checking it.
+`pass`, `fail`, or `inconclusive`. Diagnostic traces additionally record an
+unreturned CSB read's register offset, physical address, and symbolic register
+name when a `begin` marker has no matching `end` marker. LeNet analysis records
+every repeat's runtime status, IRQ delta, ordered operation completions,
+output/hash, first failure, next expected engine, total passes, and distinct
+output hashes. The host recreates these classifications from raw evidence
+rather than accepting the target's summary without checking it.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.

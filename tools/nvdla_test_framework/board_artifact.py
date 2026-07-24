@@ -11,6 +11,12 @@ from .board_payload import EXPECTED_LENET_OPERATIONS, EXPECTED_LENET_OUTPUT
 from .common import sha256_file, write_json
 
 
+NVDLA_CSB_REGISTERS = {
+    0x8004: "SDP_RDMA_S_POINTER",
+    0x9004: "SDP_S_POINTER",
+}
+
+
 def _parse_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -59,6 +65,30 @@ def parse_completed_operations(text: str) -> list[dict[str, int | str]]:
             text,
         )
     ]
+
+
+def parse_unreturned_csb_read(text: str) -> dict[str, int | str] | None:
+    pending: list[int] = []
+    for match in re.finditer(
+        r"nvdla-trace csb-read (begin|end) offset=0x([0-9a-fA-F]{8})",
+        text,
+    ):
+        action = match.group(1)
+        offset = int(match.group(2), 16)
+        if action == "begin":
+            pending.append(offset)
+        elif pending and pending[-1] == offset:
+            pending.pop()
+
+    if not pending:
+        return None
+
+    offset = pending[-1]
+    return {
+        "offset": f"0x{offset:08x}",
+        "physical_address": f"0x{0xA0000000 + offset:08x}",
+        "register": NVDLA_CSB_REGISTERS.get(offset, "unknown"),
+    }
 
 
 def _normal_output(text: str) -> str:
@@ -195,6 +225,7 @@ def _analyze_sdp(root: Path, result: dict[str, str]) -> dict[str, Any]:
     prepare_returned = "Exit: dla_prepare_operation" in dmesg
     protocol_passed = "[OK] Test PASSED!" in client
     timed_out = (root / "runtime-timeout.txt").is_file() or client_status == 124
+    unreturned_csb_read = parse_unreturned_csb_read(dmesg)
 
     if completed:
         progress_stage = "sdp-completed"
@@ -251,10 +282,13 @@ def _analyze_sdp(root: Path, result: dict[str, str]) -> dict[str, Any]:
         "prepare_operation_entered": prepare_entered,
         "prepare_operation_returned": prepare_returned,
         "suspected_boundary": (
-            "SDP S_POINTER or SDP_RDMA S_POINTER CSB read"
+            f"{unreturned_csb_read['register']} CSB read"
+            if unreturned_csb_read
+            else "SDP S_POINTER or SDP_RDMA S_POINTER CSB read"
             if progress_stage == "sdp-prepare-no-return"
             else None
         ),
+        "unreturned_csb_read": unreturned_csb_read,
         "irq_delta": irq_delta,
         "sdp_completed": completed,
         "protocol_passed": protocol_passed,

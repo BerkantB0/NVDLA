@@ -13,7 +13,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
-        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect \
+        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect \
         test report clean
 
 help:
@@ -68,6 +68,7 @@ help:
 	  '  make petalinux-project Create/verify the Ubuntu-22.04 PetaLinux project and XSA import' \
 	  '  make petalinux-dts   Install the XSA-derived NVDLA device-tree fragment' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
+	  '  make petalinux-kmod-diagnostic Build a standalone failure-only CSB trace module' \
 	  '  make petalinux-runtime Build and package the NVDLA userspace runtime' \
 	  '  make petalinux-board-tools Build and package controlled board bring-up tools' \
 	  '  make petalinux-image Build the PetaLinux bootable image artifacts' \
@@ -247,6 +248,9 @@ petalinux-dts:
 
 petalinux-kmod:
 	@scripts/petalinux_kmod.sh
+
+petalinux-kmod-diagnostic:
+	@bash scripts/petalinux_kmod_diagnostic.sh
 
 petalinux-runtime:
 	@scripts/petalinux_runtime.sh
