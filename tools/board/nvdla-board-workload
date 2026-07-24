@@ -59,7 +59,7 @@ capture() {
 
 irq_total() {
     awk '
-        /nvdla/ {
+        tolower($0) ~ /nvdla/ {
             for (field = 2; field <= NF; field++) {
                 if ($field ~ /^[0-9]+$/)
                     total += $field
@@ -243,7 +243,14 @@ else
     CLASSIFICATION="module-load-failure"
     finish
 fi
-if [ ! -L /sys/bus/platform/devices/a0000000.nvdla/driver ]; then
+PLATFORM_DEVICE=""
+for device in /sys/bus/platform/devices/a0000000.*; do
+    if [ -e "$device" ]; then
+        PLATFORM_DEVICE="$device"
+        break
+    fi
+done
+if [ -z "$PLATFORM_DEVICE" ] || [ ! -L "$PLATFORM_DEVICE/driver" ]; then
     echo "NVDLA platform device is not bound" >"$OUT/prerequisite.error"
     STATUS=1
     CLASSIFICATION="driver-bind-failure"
@@ -258,7 +265,7 @@ if [ ! -e "$1" ]; then
 fi
 NODE="$1"
 
-if ! grep -q nvdla /proc/interrupts; then
+if ! grep -qi nvdla /proc/interrupts; then
     echo "NVDLA IRQ registration is absent from /proc/interrupts" >"$OUT/prerequisite.error"
     STATUS=1
     CLASSIFICATION="irq-registration-failure"

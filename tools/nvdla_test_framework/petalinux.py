@@ -58,18 +58,18 @@ def generate_nvdla_dtsi(lock_path: Path, xsa_path: Path, out_path: Path, audit_p
     if coherent:
         raise ValueError(f"XSA reports nonzero coherency parameters: {audit['coherency']['nonzero']!r}")
 
-    text = f"""/ {{
-    nvdla_0: nvdla@{base:x} {{
-        compatible = "nvidia,nv_small";
-        reg = <{base_hi} {base_lo} {size_hi} {size_lo}>;
-        interrupt-parent = <&gic>;
-        interrupts = <{irq_type} {irq_hwirq} {irq_flags}>;
-        status = "okay";
-        /*
-         * No coherent-DMA property: the audited XSA routes DBB through
-         * {audit["memory"]["dbb_slave_interfaces"][0]} with coherency disabled.
-         */
-    }};
+    wrapper_label = audit["wrapper"]["instance"]
+    text = f"""/*
+ * Refine the XSA-generated node rather than duplicating its register range.
+ * This preserves its clocks, clock names, interrupt, and register properties.
+ */
+&{wrapper_label} {{
+    compatible = "nvidia,nv_small";
+    status = "okay";
+    /*
+     * No coherent-DMA property: the audited XSA routes DBB through
+     * {audit["memory"]["dbb_slave_interfaces"][0]} with coherency disabled.
+     */
 }};
 """
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +92,14 @@ def generate_nvdla_dtsi(lock_path: Path, xsa_path: Path, out_path: Path, audit_p
             "interrupt_source_port": irq_port,
             "dma_coherent": False,
             "dbb_slave_interfaces": audit["memory"]["dbb_slave_interfaces"],
+            "generated_node_label": wrapper_label,
+            "preserved_properties": [
+                "reg",
+                "interrupt-parent",
+                "interrupts",
+                "clock-names",
+                "clocks",
+            ],
         },
         "output": str(out_path),
     }
@@ -108,6 +116,7 @@ def run_petalinux_dts(lock_path: Path, xsa_path: Path, out_path: Path, audit_pat
         return 1
     print("PetaLinux DTS fragment generated")
     print(f"  output: {result['output']}")
+    print(f"  override: &{result['node']['generated_node_label']}")
     print(f"  reg: <{' '.join(result['node']['reg'])}>")
     print(f"  interrupts: <{' '.join(str(cell) for cell in result['node']['interrupts'])}>")
     return 0

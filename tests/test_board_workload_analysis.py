@@ -27,6 +27,13 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
             " 52:          1          2          3          4  GICv3 121 Level a0000000.nvdla\n"
         )
         self.assertEqual(parse_interrupt_total(text), 10)
+
+    def test_parses_generated_wrapper_interrupt_name(self) -> None:
+        text = (
+            " 59:          0          1          0          0  "
+            "GICv2 121 Level a0000000.xilNvDlaWrapper\n"
+        )
+        self.assertEqual(parse_interrupt_total(text), 1)
         self.assertIsNone(parse_interrupt_total(text, "missing"))
 
     def test_parses_expected_lenet_operations(self) -> None:

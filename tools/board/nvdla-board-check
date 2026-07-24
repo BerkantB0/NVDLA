@@ -69,22 +69,40 @@ capture runtime-hashes.txt sha256sum \
     /usr/bin/nvdla-board-workload \
     /usr/bin/nvdla-board-check
 
-DT_NODE="/proc/device-tree/nvdla@a0000000"
-PLATFORM_DEVICE="/sys/bus/platform/devices/a0000000.nvdla"
+DT_NODE=""
+DT_ROOT="/sys/firmware/devicetree/base"
+if [ ! -d "$DT_ROOT" ]; then
+    DT_ROOT="/proc/device-tree"
+fi
+for compatible in $(find "$DT_ROOT" -type f -name compatible 2>/dev/null); do
+    if tr '\000' '\n' <"$compatible" | grep -qx "nvidia,nv_small"; then
+        DT_NODE="${compatible%/compatible}"
+        break
+    fi
+done
+PLATFORM_DEVICE=""
+for device in /sys/bus/platform/devices/a0000000.*; do
+    if [ -e "$device" ]; then
+        PLATFORM_DEVICE="$device"
+        break
+    fi
+done
 if [ -d "$DT_NODE" ]; then
     capture_shell dt-compatible.txt "tr '\\000' '\\n' <'$DT_NODE/compatible'"
     capture dt-reg.hex od -An -tx1 "$DT_NODE/reg"
     capture dt-interrupt-parent.hex od -An -tx1 "$DT_NODE/interrupt-parent"
     capture dt-interrupts.hex od -An -tx1 "$DT_NODE/interrupts"
+    capture_shell dt-clock-names.txt "tr '\\000' '\\n' <'$DT_NODE/clock-names'"
+    capture dt-clocks.hex od -An -tx1 "$DT_NODE/clocks"
     capture dt-status.txt cat "$DT_NODE/status"
-    for property in compatible reg interrupt-parent interrupts status; do
+    for property in compatible reg interrupt-parent interrupts clock-names clocks status; do
         if [ ! -f "$DT_NODE/$property" ]; then
             echo "missing $DT_NODE/$property" >>"$OUT/device-tree.error"
             STATUS=1
         fi
     done
 else
-    echo "missing $DT_NODE" >"$OUT/device-tree.error"
+    echo "missing device-tree node compatible with nvidia,nv_small" >"$OUT/device-tree.error"
     STATUS=1
 fi
 
@@ -100,7 +118,7 @@ capture modules-after.txt lsmod
 capture dev-dri-after.txt ls -la /dev/dri
 
 if [ "$MODE" = "probe" ] || [ "$MODE" = "smoke" ]; then
-    if [ ! -L "$PLATFORM_DEVICE/driver" ]; then
+    if [ -z "$PLATFORM_DEVICE" ] || [ ! -L "$PLATFORM_DEVICE/driver" ]; then
         echo "NVDLA platform device did not bind to a driver" >"$OUT/probe.error"
         STATUS=1
     fi

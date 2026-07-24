@@ -38,11 +38,18 @@ class PetaLinuxDtsTests(unittest.TestCase):
             text = out.read_text(encoding="utf-8")
             self.assertTrue(audit.is_file())
 
+            self.assertIn("&xilNvDlaWrapper_0 {", text)
             self.assertIn('compatible = "nvidia,nv_small";', text)
-            self.assertIn("reg = <0x0 0xa0000000 0x0 0x00010000>;", text)
-            self.assertIn("interrupt-parent = <&gic>;", text)
-            self.assertIn("interrupts = <0 89 4>;", text)
+            self.assertNotIn("nvdla@a0000000", text)
+            self.assertNotIn("reg =", text)
+            self.assertNotIn("interrupts =", text)
             self.assertNotIn("dma-coherent", text)
+            self.assertEqual(result["node"]["generated_node_label"], "xilNvDlaWrapper_0")
+            self.assertIn("clocks", result["node"]["preserved_properties"])
+            self.assertEqual(
+                result["node"]["reg"],
+                ["0x0", "0xa0000000", "0x0", "0x00010000"],
+            )
             self.assertEqual(result["node"]["interrupt_source_port"], "pl_ps_irq0")
             self.assertEqual(result["node"]["interrupt_parent"], "gic")
             self.assertEqual(result["node"]["interrupts"], [0, 89, 4])
