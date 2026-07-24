@@ -1,13 +1,23 @@
-From 1108ea181eef268d1f09193462bdd1b7e6c2ee3f Mon Sep 17 00:00:00 2001
+From e2f2dca70fb3eabda81b525df6ecfc499d201636 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Thu, 9 Jul 2026 21:29:51 +0100
-Subject: [PATCH 10/11] kmd: avoid removed DRM PRIME fd helpers
+Subject: [PATCH 10/12] kmd: avoid removed DRM PRIME fd helpers
 
-Linux 6.6 keeps PRIME fd and handle ioctls in DRM core, but drm_gem_prime_fd_to_handle and drm_gem_prime_handle_to_fd are no longer exported driver helpers. Referencing them from the NVDLA driver breaks out-of-tree module builds on PetaLinux 2024.1.
+Linux 6.6 keeps PRIME fd and handle ioctls in DRM core, but
+drm_gem_prime_fd_to_handle and drm_gem_prime_handle_to_fd are no longer
+exported driver helpers. Referencing them from the NVDLA driver breaks
+out-of-tree module builds on PetaLinux 2024.1.
 
-Use dma_buf_get with drm_gem_prime_import for the internal submit-time fd to GEM lookup on modern kernels, and keep the legacy callback assignments only for older kernels where the helpers are still public. This preserves the userspace ABI because UMD still exports GEM handles to PRIME fds and submits those fds unchanged.
+Use dma_buf_get with drm_gem_prime_import for the internal submit-time fd
+to GEM lookup on modern kernels, and keep the legacy callback assignments
+only for older kernels where the helpers are still public. This preserves
+the userspace ABI because UMD still exports GEM handles to PRIME fds and
+submits those fds unchanged.
 
-Tested by building the NVDLA KMD against the PetaLinux 2024.1 Linux 6.6 kernel headers.
+Tested by building the NVDLA KMD against the PetaLinux 2024.1 Linux 6.6
+kernel headers.
+
+Signed-off-by: Codex <codex@local>
 ---
  kmd/port/linux/nvdla_gem.c | 21 ++++++++++++++++++++-
  1 file changed, 20 insertions(+), 1 deletion(-)
@@ -72,4 +82,5 @@ index 6d2acfa..f4ac497 100644
  
  #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
 -- 
-2.34.1
+2.43.0
+

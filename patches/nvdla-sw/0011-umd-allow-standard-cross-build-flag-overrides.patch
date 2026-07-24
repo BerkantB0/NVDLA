@@ -1,7 +1,7 @@
-From e3384b848dc936dc5b881c2c7b9d5045311b4a73 Mon Sep 17 00:00:00 2001
+From d2569bc0d97a01bea694addbce96cba0348883f9 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Mon, 13 Jul 2026 23:53:52 +0100
-Subject: [PATCH 11/11] umd: allow standard cross-build flag overrides
+Subject: [PATCH 11/12] umd: allow standard cross-build flag overrides
 
 The UMD makefiles derive every compiler and linker invocation from
 TOOLCHAIN_PREFIX and hardcode a working-directory RPATH. Embedded build
@@ -131,4 +131,5 @@ index 24c56d0..8e1d180 100644
 +NVDLA_CXXFLAGS ?=
 +NVDLA_LDFLAGS ?=
 -- 
-2.54.0.windows.1
+2.43.0
+

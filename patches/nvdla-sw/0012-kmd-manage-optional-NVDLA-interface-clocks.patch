@@ -1,0 +1,164 @@
+From af47417dc3b22582d8245f9145c9590e8483b998 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Fri, 24 Jul 2026 02:42:27 +0100
+Subject: [PATCH 12/12] kmd: manage optional NVDLA interface clocks
+
+Platform firmware can leave the NVDLA interface clocks running, which hid
+their ownership from the original driver. Modern Linux disables unclaimed
+clocks after boot; subsequent CSB reads then wait indefinitely for an APB
+response.
+
+Acquire the optional csb_clk and m_axi_clk resources, enable them for the
+lifetime of a bound device, and unwind them on probe failure or removal.
+Platforms without clock descriptions retain the existing always-on
+behavior.
+
+Tested by building the small-config KMD against the pinned Linux 6.6 kernel
+used by the modern NVDLA VP lane.
+
+Signed-off-by: Codex <codex@local>
+---
+ kmd/port/linux/include/nvdla_linux.h  |  6 +++
+ kmd/port/linux/nvdla_core_callbacks.c | 69 ++++++++++++++++++++++++++-
+ 2 files changed, 74 insertions(+), 1 deletion(-)
+
+diff --git a/kmd/port/linux/include/nvdla_linux.h b/kmd/port/linux/include/nvdla_linux.h
+index 2fc543d..07a8150 100644
+--- a/kmd/port/linux/include/nvdla_linux.h
++++ b/kmd/port/linux/include/nvdla_linux.h
+@@ -41,6 +41,8 @@
+ #include <linux/platform_device.h>
+ #include <linux/spinlock.h>
+ 
++struct clk;
++
+ /**
+  * @brief			Task information submitted from user space
+  *
+@@ -80,6 +82,8 @@ struct nvdla_config
+  * irq				Interrupt number associated with this device
+  * ref				Reference count for device
+  * base				IO mapped base address for device
++ * csb_clk			Optional CSB interface clock
++ * m_axi_clk			Optional memory AXI interface clock
+  * nvdla_lock			Spinlock used for synchronization
+  * drm				DRM device instance
+  * task				Pointer to task in execution
+@@ -92,6 +96,8 @@ struct nvdla_device {
+ 	int32_t irq;
+ 	struct kref ref;
+ 	void __iomem *base;
++	struct clk *csb_clk;
++	struct clk *m_axi_clk;
+ 	spinlock_t nvdla_lock;
+ 	struct drm_device *drm;
+ 	struct nvdla_task *task;
+diff --git a/kmd/port/linux/nvdla_core_callbacks.c b/kmd/port/linux/nvdla_core_callbacks.c
+index 3a88b8c..7ab9710 100644
+--- a/kmd/port/linux/nvdla_core_callbacks.c
++++ b/kmd/port/linux/nvdla_core_callbacks.c
+@@ -32,6 +32,7 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#include <linux/clk.h>
+ #include <linux/dma-buf.h>
+ #include <linux/dma-mapping.h>
+ #include <linux/fs.h>
+@@ -81,6 +82,65 @@ static struct nvdla_config nvdla_config_large = {
+ 	.weight_compress_support = false,
+ };
+ 
++static int nvdla_get_optional_clock(struct device *dev, const char *name,
++				    struct clk **clock)
++{
++	int err;
++
++	*clock = devm_clk_get(dev, name);
++	if (!IS_ERR(*clock))
++		return 0;
++
++	err = PTR_ERR(*clock);
++	*clock = NULL;
++
++	if (err == -ENOENT)
++		return 0;
++
++	dev_err(dev, "failed to get %s clock: %d\n", name, err);
++	return err;
++}
++
++static void nvdla_disable_clocks(struct nvdla_device *nvdla_dev)
++{
++	clk_disable_unprepare(nvdla_dev->m_axi_clk);
++	clk_disable_unprepare(nvdla_dev->csb_clk);
++}
++
++static int nvdla_enable_clocks(struct nvdla_device *nvdla_dev)
++{
++	struct device *dev = &nvdla_dev->pdev->dev;
++	int err;
++
++	err = nvdla_get_optional_clock(dev, "csb_clk", &nvdla_dev->csb_clk);
++	if (err)
++		return err;
++
++	err = nvdla_get_optional_clock(dev, "m_axi_clk",
++				       &nvdla_dev->m_axi_clk);
++	if (err)
++		return err;
++
++	err = clk_prepare_enable(nvdla_dev->csb_clk);
++	if (err) {
++		dev_err(dev, "failed to enable csb_clk: %d\n", err);
++		return err;
++	}
++
++	err = clk_prepare_enable(nvdla_dev->m_axi_clk);
++	if (err) {
++		dev_err(dev, "failed to enable m_axi_clk: %d\n", err);
++		clk_disable_unprepare(nvdla_dev->csb_clk);
++		return err;
++	}
++
++	dev_info(dev, "interface clocks: csb=%s m_axi=%s\n",
++		 nvdla_dev->csb_clk ? "enabled" : "not described",
++		 nvdla_dev->m_axi_clk ? "enabled" : "not described");
++
++	return 0;
++}
++
+ 
+ void dla_debug(const char *str, ...)
+ {
+@@ -461,12 +521,18 @@ static int32_t nvdla_probe(struct platform_device *pdev)
+ 	if (err)
+ 		return err;
+ 
++	err = nvdla_enable_clocks(nvdla_dev);
++	if (err)
++		return err;
++
+ 	dla_register_driver(&nvdla_dev->engine_context, (void *)nvdla_dev);
+ 	dla_clear_task(nvdla_dev->engine_context);
+ 
+ 	err = nvdla_drm_probe(nvdla_dev);
+-	if (err)
++	if (err) {
+ 		dev_err(&pdev->dev, "failed to register drm device\n");
++		nvdla_disable_clocks(nvdla_dev);
++	}
+ 
+ 	return err;
+ }
+@@ -476,6 +542,7 @@ static int32_t __exit nvdla_remove(struct platform_device *pdev)
+ 	struct nvdla_device *nvdla_dev = dev_get_drvdata(&pdev->dev);
+ 
+ 	nvdla_drm_remove(nvdla_dev);
++	nvdla_disable_clocks(nvdla_dev);
+ 
+ 	return 0;
+ }
+-- 
+2.43.0
+
