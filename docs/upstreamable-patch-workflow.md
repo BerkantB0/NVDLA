@@ -26,6 +26,8 @@ make patch-format
 - Do not edit `.external/sources/nvdla-sw`; it is the pristine upstream base.
 - Do not put PetaLinux paths, XSA addresses, or ZCU102-specific assumptions in
   upstreamable patches.
+- Platform resources such as clocks must remain optional and be acquired
+  through standard Linux APIs; clock IDs and board wiring stay in device tree.
 - Keep ioctl structs and numbers unchanged unless a test proves an ABI change is
   unavoidable.
 - Put local-only integration in this repository: recipes, VP scripts, DTS

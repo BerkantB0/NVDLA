@@ -50,9 +50,12 @@ make petalinux-board-payload
 
 `make petalinux-project` creates a ZynqMP project when needed and imports the
 checked-in `NVDLA_FPGA_wrapper.xsa`. `make petalinux-dts` installs a local
-`nvdla-user.dtsi` fragment included from `system-user.dtsi`; it uses
-`compatible = "nvidia,nv_small"`, CSB `0xA0000000` size `0x10000`, interrupt
-`<0 89 4>`, and leaves coherent-DMA absent for the audited HP0 path.
+`nvdla-user.dtsi` fragment included from `system-user.dtsi`. The fragment
+refines the XSA-generated `&xilNvDlaWrapper_0` node with
+`compatible = "nvidia,nv_small"` instead of creating a duplicate node. This
+preserves CSB `0xA0000000` size `0x10000`, interrupt `<0 89 4>`, and the
+generated `csb_clk`/`m_axi_clk` references. It leaves coherent-DMA absent for
+the audited HP0 path.
 
 `make petalinux-runtime` installs the tracked BitBake runtime recipe and image
 append, applies the same pinned NVDLA patch queue as the KMD recipe, and builds

@@ -402,13 +402,12 @@ There was no matching `end` message. This identifies an unreturned read of
 SDP register programming, accelerator DMA, or a completion interrupt, so it
 does not currently implicate cache coherency or output comparison.
 
-This is also the first device-register read proven by the Linux test sequence.
+This was also the first device-register read proven by the Linux test sequence.
 The probe's `0 . 12 . 5` message is the compiled firmware version, and
 `reset engine done` only clears KMD scheduler state; GEM smoke does not access
 NVDLA registers. The result therefore identifies the exact failed address but
-does not yet distinguish a general CSB clock/reset/response failure from an
-SDP-specific decode failure. The same small-config KMD access completes in the
-verified VP.
+did not by itself distinguish a general CSB clock/reset/response failure from
+an SDP-specific decode failure.
 
 The wrapper shown in the FPGA report translates APB addresses with
 `csb2nvdla_addr = paddr[17:2]`, which maps `0xA0009004` to the expected NVDLA
@@ -417,9 +416,46 @@ word address `0x2401`. It holds `pready` low for a read until
 address, but its module reference does not contain the internal wrapper RTL or
 prove which handshake signal stopped.
 
-Inspect the exact implemented design with an ILA before issuing more
-potentially blocking software reads. Trigger on a read of APB offset `0x9004`
-and capture:
+Three read-only U-Boot controls were then run after separate power cycles:
+
+```text
+md.l a0000000 1  -> 00010001
+md.l a0004000 1  -> 00000000
+md.l a0009004 1  -> 00000000
+```
+
+These results prove that CFGROM, CSC, and the exact failing SDP register
+respond in the implemented bitstream before Linux takes ownership. A Linux
+boot with the temporary `clk_ignore_unused` argument returned the same three
+values and allowed every traced CSB read during SDP preparation to finish.
+
+The generated `pl.dtsi` describes the wrapper's `csb_clk` and `m_axi_clk` as
+ZynqMP clock 71. The old local DTS created a second NVDLA node without those
+properties, while the KMD did not request clocks. Linux could therefore
+disable the shared PL clock as unused. The permanent fix has two parts:
+
+- the local DTS refines `&xilNvDlaWrapper_0`, preserving XSA-generated register,
+  interrupt, and clock properties;
+- patch `0012` acquires and enables optional `csb_clk` and `m_axi_clk`
+  resources for the lifetime of the KMD device.
+
+`clk_ignore_unused` is diagnostic evidence only. The corrected image must pass
+ordinary CSB access without that kernel argument.
+
+With clocks preserved, the SDP diagnostic advanced through preparation,
+programming, and enable, but timed out with the runtime server in uninterruptible
+kernel sleep. The NVDLA interrupt remained `0 -> 0`; no output was produced and
+no bad kernel pattern was recorded. The retrieved archive is
+`nvdla-board-runtime-sdp-20221108T140057Z.tar.gz`, SHA256
+`29055F9A3FC5B527C3C1DD2DE3988627CC64F05945D1FEEF4FDED3C3B64D250F`.
+The target timestamp is incorrect because the board clock was unset.
+
+This is a second-stage failure, after CSB operation programming. It is
+consistent with absent DBB progress, an engine-side stall, or an interrupt path
+problem; it is not evidence that `0xA0009004` is invalid. The next production
+image should first validate the permanent clock fix, then run LeNet on a fresh
+boot as the primary functional oracle. If LeNet also enables an engine without
+an interrupt, inspect the implemented design with an ILA and capture:
 
 ```text
 paddr psel penable pwrite pready
@@ -428,15 +464,11 @@ nvdla2csb_valid nvdla2csb_data
 csb_clk csb_rstn m_axi_clk rstn
 ```
 
-The expected internal address is `0x2401`. A missing APB request points to the
-AXI/APB path. A CSB request that is not accepted points to the CSB-master
-clock/reset or request path. An accepted request with no
-`nvdla2csb_valid` response points to the downstream register routing,
-clock/reset, or response path. The report's original bare-metal sanity test
-read CSC offset `0x4024`, and its SDP test programmed the accelerator and
-observed memory traffic; reproducing those tests on the exact current
-bitstream is a useful control if the original Vivado project is available.
-Do not run LeNet on this bitstream until ordinary CSB reads return.
+For the completion failure, also capture DBB AXI address/valid/ready/response
+signals and `dla_intr`. The report's original bare-metal sanity test read CSC
+offset `0x4024`, and its SDP test programmed the accelerator and observed
+memory traffic; reproducing those tests on the exact current bitstream remains
+a useful hardware control.
 
 Import a UART-retrieved archive from the host with:
 
