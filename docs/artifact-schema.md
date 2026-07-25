@@ -133,7 +133,8 @@ deterministic archive hash.
 
 Imported board archives use lanes `petalinux-board-preflight`,
 `petalinux-board-probe`, `petalinux-board-smoke`,
-`petalinux-board-runtime-sdp`, or `petalinux-board-lenet`. They record target
+`petalinux-board-runtime-sdp`, `petalinux-board-lenet`, or
+`petalinux-board-resnet50`. They record target
 status, archive hash, member list, bad kernel patterns, and the optional full
 serial log. Preflight requires the NVDLA DT resource and interrupt properties.
 Probe additionally requires a bound platform driver and `/dev/dri/renderD*`; a
@@ -150,5 +151,11 @@ every repeat's runtime status, IRQ delta, ordered operation completions,
 output/hash, first failure, next expected engine, total passes, and distinct
 output hashes. The host recreates these classifications from raw evidence
 rather than accepting the target's summary without checking it.
+
+ResNet-50 analysis records reported HWLs completed and total, completed
+operation count, output element count, output SHA-256, and zero-based top-five
+indices. `execution-pass-oracle-pending` has host status `pass` but
+`correctness_status: "inconclusive"`; only comparison with an independent
+`nv_small` VP golden promotes it to `exact-pass`.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.

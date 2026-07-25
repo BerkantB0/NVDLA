@@ -126,6 +126,16 @@ make petalinux-sd-bundle
 make petalinux-board-payload
 ```
 
+The board payload also includes a pinned, NVDLA-supported Caffe ResNet-50
+workload compiled for `nv_small`. Build it independently with:
+
+```sh
+make vp-resnet50-small-workload
+```
+
+See [docs/resnet50-board-gate.md](docs/resnet50-board-gate.md) for model
+provenance, staged pass criteria, and the board command.
+
 This installs the driver, runtime, C diagnostic client, and staged runner but
 deliberately does not autoload the module or start a runtime service. Model
 assets remain in the separate, hash-verified `nvdla-tests` FAT payload.

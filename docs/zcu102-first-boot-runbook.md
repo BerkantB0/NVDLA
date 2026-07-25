@@ -319,6 +319,32 @@ The module and programmable logic are deliberately not reset between repeats.
 This exposes stale state, interrupt clearing, scheduler cleanup, and retained
 accelerator-state defects. The runner stops on the first failure.
 
+## Gate 8: ResNet-50 Execution
+
+After the exact LeNet gate passes, use a fresh boot to exercise a much larger
+network:
+
+```sh
+nvdla-board-workload resnet50 /mnt/sdboot/nvdla-tests
+```
+
+On the current auto-mounted FAT partition this is normally:
+
+```sh
+nvdla-board-workload resnet50 \
+  /run/media/ROOT-mmcblk0p1/nvdla-tests
+```
+
+The default ResNet-50 watchdog is 180 seconds. The runner requires runtime exit
+zero, a positive IRQ delta, completed accelerator operations, all reported HWLs
+complete, and exactly 1000 signed integer outputs. Preserve the reported
+archive before power cycling.
+
+Until an independent source-built `nv_small` VP output has been pinned, a
+clean result is classified `execution-pass-oracle-pending`, not exact tensor
+correctness. See [resnet50-board-gate.md](resnet50-board-gate.md) for the model
+selection and correctness policy.
+
 ## Failure Handling
 
 Do not run a later gate after a timeout or failure. Retrieve its archive, save
