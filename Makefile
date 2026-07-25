@@ -10,7 +10,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload lenet-compare \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload vp-resnet50-small-golden vp-resnet50-small-golden-start vp-resnet50-small-golden-status lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
         petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect \
@@ -58,6 +58,9 @@ help:
 	  '  make vp-lenet-small-gate Run the primary nv_small LeNet correctness gate' \
 	  '  make vp-lenet-small-stability Run 100-repeat nv_small LeNet stability gate' \
 	  '  make vp-resnet50-small-workload Build pinned nv_small INT8 ResNet-50 workload' \
+	  '  make vp-resnet50-small-golden Run ResNet-50 on source-built nv_small VP' \
+	  '  make vp-resnet50-small-golden-start Start detached ResNet-50 VP golden run' \
+	  '  make vp-resnet50-small-golden-status Inspect detached VP progress/result' \
 	  '  VP_HW_CONFIG=small VP_RUNNER=source-docker LANE=modern make vp-test' \
 	  '  make lenet-compare   Compare stock and modern LeNet artifacts' \
 	  '  make vp-small-config-audit Record nv_small VP/KMD configuration evidence' \
@@ -208,6 +211,20 @@ vp-resnet50-small-workload: sources-resnet50 sources
 		--sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}" \
 		--nvdla-sw "$${NVDLA_SW_SOURCE:-$${SOURCES_DIR:-$(CURDIR)/.external/sources}/nvdla-sw}" \
 		--out artifacts/workloads/resnet50_small
+
+vp-resnet50-small-golden: vp-resnet50-small-workload
+	@WORKLOAD_KIND=resnet50 \
+		VP_HW_CONFIG=small \
+		VP_RUNNER=source-docker \
+		VP_TIMEOUT="$${VP_TIMEOUT:-604800}" \
+		VP_TRACE=0 \
+		scripts/run_modern_lenet_full_control.sh
+
+vp-resnet50-small-golden-start:
+	@scripts/vp_resnet50_background.sh start
+
+vp-resnet50-small-golden-status:
+	@scripts/vp_resnet50_background.sh status
 
 lenet-compare:
 	@$(PYTHON) -m nvdla_test_framework lenet-compare --stock-dir "$${STOCK_ARTIFACT:-artifacts/20260703T115149Z-vp-stock-lenet}" $${MODERN_ARTIFACT:+--modern-dir "$${MODERN_ARTIFACT}"} $${COMPARE_OUT:+--out "$${COMPARE_OUT}"}

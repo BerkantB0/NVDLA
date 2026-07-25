@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$HOME/build/nvdla-peta/vp-modern}"
 SOURCES_DIR="${SOURCES_DIR:-$ROOT/.external/sources}"
 LENET_DIR="${LENET_DIR:-$ROOT/artifacts/20260703T115149Z-vp-stock-lenet}"
+WORKLOAD_KIND="${WORKLOAD_KIND:-lenet}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nvdla/vp:latest}"
 VP_TIMEOUT="${VP_TIMEOUT:-900}"
 VP_HW_CONFIG="${VP_HW_CONFIG:-full}"
@@ -44,6 +45,25 @@ case "$VP_HW_CONFIG" in
         ;;
 esac
 
+case "$WORKLOAD_KIND" in
+    lenet)
+        ;;
+    resnet50)
+        if [[ "$VP_HW_CONFIG" != "small" ]]; then
+            echo "ResNet-50 golden generation requires VP_HW_CONFIG=small" >&2
+            exit 2
+        fi
+        RESNET50_DIR="${RESNET50_DIR:-$ROOT/artifacts/workloads/resnet50_small}"
+        RUN_SUFFIX="vp-modern-resnet50-small"
+        MODE_NAME="resnet50_small_golden"
+        DEFAULT_LOADABLE="$RESNET50_DIR/resnet50.nv_small.nvdla"
+        ;;
+    *)
+        echo "unsupported WORKLOAD_KIND=$WORKLOAD_KIND; expected lenet or resnet50" >&2
+        exit 2
+        ;;
+esac
+
 if [[ "$VP_TRACE" == "1" ]]; then
     if [[ "$VP_HW_CONFIG" != "small" ]]; then
         echo "VP_TRACE currently supports only VP_HW_CONFIG=small" >&2
@@ -68,9 +88,17 @@ VP_LIBRARY_DIR="${VP_LIBRARY_DIR:-$WORK_DIR/vp-small/install/lib}"
 VP_CMOD_LIBRARY_DIR="${VP_CMOD_LIBRARY_DIR:-$WORK_DIR/vp-small/hw/outdir/nv_small/cmod/release/lib}"
 VP_LD_LIBRARY_PATH="${VP_LD_LIBRARY_PATH:-$VP_LIBRARY_DIR:$VP_CMOD_LIBRARY_DIR:$SYSTEMC_PREFIX/lib-linux64:$SYSTEMC_PREFIX/lib}"
 
-LOADABLE="${LENET_LOADABLE:-$DEFAULT_LOADABLE}"
-IMAGE="$LENET_DIR/seven.pgm"
-EXPECTED_OUTPUT="${EXPECTED_OUTPUT:-0 2 0 0 0 0 0 124 0 0}"
+if [[ "$WORKLOAD_KIND" == "resnet50" ]]; then
+    LOADABLE="${MODEL_LOADABLE:-$DEFAULT_LOADABLE}"
+    IMAGE="${MODEL_IMAGE:-$RESNET50_DIR/cat.center-crop-224.jpg}"
+    EXPECTED_OUTPUT="${EXPECTED_OUTPUT:-}"
+    EXPECTED_ELEMENTS="${EXPECTED_ELEMENTS:-1000}"
+else
+    LOADABLE="${LENET_LOADABLE:-$DEFAULT_LOADABLE}"
+    IMAGE="${MODEL_IMAGE:-$LENET_DIR/seven.pgm}"
+    EXPECTED_OUTPUT="${EXPECTED_OUTPUT:-0 2 0 0 0 0 0 124 0 0}"
+    EXPECTED_ELEMENTS="${EXPECTED_ELEMENTS:-10}"
+fi
 
 require_file() {
     local path="$1"
@@ -181,7 +209,7 @@ if [[ "$VP_RUNNER" == "docker" || "$VP_RUNNER" == "source-docker" ]]; then
     DOCKER_IMAGE_ID="$("$DOCKER_BIN_RESOLVED" image inspect --format '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
 fi
 
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$RUN_SUFFIX"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$RUN_SUFFIX}"
 OUT="$ROOT/artifacts/$RUN_ID"
 PAYLOAD="$OUT/payload"
 mkdir -p "$PAYLOAD"
@@ -199,7 +227,9 @@ cp "$KMOD" "$PAYLOAD/opendla.ko"
 cp "$RUNTIME_BIN" "$PAYLOAD/nvdla_runtime"
 cp "$RUNTIME_LIB" "$PAYLOAD/libnvdla_runtime.so"
 cp "$LOADABLE" "$PAYLOAD/loadable.nvdla"
-cp "$IMAGE" "$PAYLOAD/seven.pgm"
+PAYLOAD_IMAGE_NAME="$(basename "$IMAGE")"
+cp "$IMAGE" "$PAYLOAD/$PAYLOAD_IMAGE_NAME"
+printf '%s\n' "$PAYLOAD_IMAGE_NAME" >"$PAYLOAD/image-name"
 printf '%s\n' "$REPEAT" >"$PAYLOAD/repeat-count"
 if [[ -n "$RCU_CPU_STALL_TIMEOUT" ]]; then
     printf '%s\n' "$RCU_CPU_STALL_TIMEOUT" >"$PAYLOAD/rcu-cpu-stall-timeout"
@@ -318,6 +348,7 @@ if [ -z "$NODE" ]; then
     NODE="$(ls /dev/dri/renderD* 2>/dev/null | head -n 1)"
 fi
 echo "__NVDLA_RENDER_NODE__=$NODE"
+IMAGE_NAME="$(cat /mnt/r/image-name)"
 
 RUNTIME_STATUS=0
 i=1
@@ -327,7 +358,7 @@ while [ "$i" -le "$repeat" ]; do
         rm -f output.dimg output-lenet.dimg output-lenet.txt
         NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/mnt/r /mnt/r/nvdla_runtime \
             --loadable /mnt/r/loadable.nvdla \
-            --image /mnt/r/seven.pgm \
+            --image "/mnt/r/$IMAGE_NAME" \
             --rawdump >/tmp/runtime.$i.log 2>&1
         RUN_STATUS=$?
         if [ -f /tmp/output.dimg ]; then
@@ -459,6 +490,52 @@ OUTPUT_NORMALIZED=""
 if [[ -f "$OUTPUT_FILE" ]]; then
     OUTPUT_NORMALIZED="$(tr -s '[:space:]' ' ' <"$OUTPUT_FILE" | sed 's/^ //; s/ $//')"
 fi
+OUTPUT_ELEMENTS=0
+OUTPUT_VALID=false
+if [[ -f "$OUTPUT_FILE" ]]; then
+    set +e
+    OUTPUT_ELEMENTS="$(awk '
+        {
+            for (field = 1; field <= NF; field++) {
+                count++
+                if ($field !~ /^-?[0-9]+$/)
+                    invalid++
+            }
+        }
+        END {
+            print count + 0
+            exit(invalid != 0)
+        }
+    ' "$OUTPUT_FILE")"
+    OUTPUT_FORMAT_STATUS=$?
+    set -e
+    if [[ "$OUTPUT_FORMAT_STATUS" -eq 0 ]]; then
+        OUTPUT_VALID=true
+    fi
+fi
+HWL_PROGRESS=""
+HWL_COMPLETED=0
+HWL_TOTAL=0
+if [[ -f "$OUT/dmesg.log" ]]; then
+    HWL_PROGRESS="$(awk '
+        /HWLs done, totally/ {
+            for (field = 1; field <= NF; field++) {
+                if ($field == "HWLs" && field > 1)
+                    completed = $(field - 1)
+                if ($field == "layers" && field > 1)
+                    total = $(field - 1)
+            }
+        }
+        END {
+            if (completed ~ /^[0-9]+$/ && total ~ /^[0-9]+$/)
+                print completed, total
+        }
+    ' "$OUT/dmesg.log")"
+    if [[ -n "$HWL_PROGRESS" ]]; then
+        HWL_COMPLETED="${HWL_PROGRESS%% *}"
+        HWL_TOTAL="${HWL_PROGRESS##* }"
+    fi
+fi
 
 TRACE_STATUS=0
 REGISTER_HEADER=""
@@ -483,9 +560,9 @@ if [[ "$VP_TRACE" == "1" ]]; then
     fi
 fi
 
-BAD_PATTERNS="Oops|BUG|WARNING|DMA-API|scheduler timeout|interrupt timeout|rcu_sched detected stalls|RCU grace-period|TLM_ADDRESS_ERROR_RESPONSE|invalid configuration"
+BAD_PATTERNS="Oops|BUG|WARNING|DMA-API|scheduler timeout|interrupt timeout|rcu_sched detected stalls|RCU grace-period|TLM_ADDRESS_ERROR_RESPONSE|invalid configuration|Unknown image type"
 BAD_PATTERN_INPUTS=()
-for candidate in "$OUT/dmesg.log" "$OUT/serial.log"; do
+for candidate in "$OUT/dmesg.log" "$OUT/serial.log" "$OUT/runtime-output/runtime.log"; do
     [[ -f "$candidate" ]] && BAD_PATTERN_INPUTS+=("$candidate")
 done
 if [[ "$VP_TRACE" == "1" && -f "$OUT/systemc.log" ]]; then
@@ -501,11 +578,29 @@ VP_EXIT_ACCEPTED=false
 if [[ "$VP_PROCESS_STATUS" -eq 0 || "$VP_TEARDOWN_ONLY" == true ]]; then
     VP_EXIT_ACCEPTED=true
 fi
-if [[ "$RUN_STATUS" -eq 0 && "$VP_EXIT_ACCEPTED" == true && "$TRACE_STATUS" -eq 0 \
+if [[ "$WORKLOAD_KIND" == "resnet50" ]]; then
+    if [[ "$RUN_STATUS" -eq 0 && "$VP_EXIT_ACCEPTED" == true && "$TRACE_STATUS" -eq 0 \
+        && "$OUTPUT_VALID" == true && "$OUTPUT_ELEMENTS" -eq "$EXPECTED_ELEMENTS" \
+        && "$HWL_COMPLETED" -gt 0 && "$HWL_COMPLETED" -eq "$HWL_TOTAL" \
+        && ! -s "$OUT/bad-patterns.log" ]]; then
+        STATUS="pass"
+        CLASSIFICATION="golden-candidate"
+    else
+        STATUS="fail"
+        CLASSIFICATION="execution-failure"
+    fi
+elif [[ "$RUN_STATUS" -eq 0 && "$VP_EXIT_ACCEPTED" == true && "$TRACE_STATUS" -eq 0 \
     && "$OUTPUT_NORMALIZED" == "$EXPECTED_OUTPUT" && ! -s "$OUT/bad-patterns.log" ]]; then
     STATUS="pass"
+    CLASSIFICATION="exact-pass"
 else
     STATUS="fail"
+    CLASSIFICATION="execution-failure"
+fi
+
+MANIFEST_ACTUAL_OUTPUT="$OUTPUT_NORMALIZED"
+if [[ "$WORKLOAD_KIND" == "resnet50" ]]; then
+    MANIFEST_ACTUAL_OUTPUT=""
 fi
 
 cat >"$OUT/manifest.json" <<EOF
@@ -514,7 +609,9 @@ cat >"$OUT/manifest.json" <<EOF
   "run_id": "$RUN_ID",
   "lane": "vp-modern",
   "mode": "$MODE_NAME",
+  "workload_kind": "$WORKLOAD_KIND",
   "status": "$STATUS",
+  "classification": "$CLASSIFICATION",
   "vp_hw_config": "$VP_HW_CONFIG",
   "vp_runner": "$VP_RUNNER",
   "docker_status": $RUN_STATUS,
@@ -530,7 +627,17 @@ cat >"$OUT/manifest.json" <<EOF
   },
   "repeat_count": $REPEAT,
   "expected_output": "$EXPECTED_OUTPUT",
-  "actual_output": "$OUTPUT_NORMALIZED",
+  "actual_output": "$MANIFEST_ACTUAL_OUTPUT",
+  "output": {
+    "sha256": "$(if [[ -f "$OUT/runtime-output/output.dimg" ]]; then hash_file "$OUT/runtime-output/output.dimg"; fi)",
+    "elements": $OUTPUT_ELEMENTS,
+    "expected_elements": $EXPECTED_ELEMENTS,
+    "integer_format": $OUTPUT_VALID
+  },
+  "hwl_progress": {
+    "completed": $HWL_COMPLETED,
+    "total": $HWL_TOTAL
+  },
   "vp_ram": {
     "base": "$VP_RAM_BASE",
     "high": "$VP_RAM_HIGH"
@@ -605,12 +712,15 @@ cat >"$OUT/manifest.json" <<EOF
 EOF
 
 PYTHON_BIN="${PYTHON:-python3}"
-set +e
-(cd /tmp && PYTHONPATH="$ROOT/tools:${PYTHONPATH:-}" "$PYTHON_BIN" -m nvdla_test_framework lenet-analyze \
-    --artifact "$OUT" \
-    --expected-output "$EXPECTED_OUTPUT")
-ANALYSIS_STATUS=$?
-set -e
+ANALYSIS_STATUS=0
+if [[ "$WORKLOAD_KIND" == "lenet" ]]; then
+    set +e
+    (cd /tmp && PYTHONPATH="$ROOT/tools:${PYTHONPATH:-}" "$PYTHON_BIN" -m nvdla_test_framework lenet-analyze \
+        --artifact "$OUT" \
+        --expected-output "$EXPECTED_OUTPUT")
+    ANALYSIS_STATUS=$?
+    set -e
+fi
 if [[ "$ANALYSIS_STATUS" -ne 0 || "$STATUS" != "pass" ]]; then
     STATUS="fail"
 else
@@ -620,8 +730,11 @@ fi
 if [[ "$VP_TRACE" == "1" ]]; then
     printf '%s\n' "$OUT" >"$ROOT/artifacts/latest-vp-trace-modern-small.txt"
 fi
+if [[ "$WORKLOAD_KIND" == "resnet50" ]]; then
+    printf '%s\n' "$OUT" >"$ROOT/artifacts/latest-vp-resnet50-small.txt"
+fi
 
-echo "VP modern LeNet $VP_HW_CONFIG status: $STATUS"
+echo "VP modern $WORKLOAD_KIND $VP_HW_CONFIG status: $STATUS"
 echo "Artifacts: $OUT"
 if [[ "$STATUS" == "pass" ]]; then
     exit 0

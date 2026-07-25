@@ -109,3 +109,33 @@ If the VP run is too slow, retain the board result as
 `execution-pass-oracle-pending`. Its IRQ, operation, HWL progress, output shape,
 hash, and top-five evidence are still useful for locating failures, but must
 not be described as tensor correctness.
+
+### Background VP run
+
+Start the independent source-built `nv_small` VP run from Ubuntu-24.04 WSL:
+
+```sh
+export SOURCES_DIR=$HOME/src/nvdla-peta-sources
+make vp-resnet50-small-golden-start
+```
+
+This uses the already generated `artifacts/workloads/resnet50_small` payload.
+Run `make vp-resnet50-small-workload` separately only when regenerating it.
+
+The command detaches after recording a PID and run directory. It disables
+SystemC transaction tracing and applies a seven-day outer timeout. Check it
+later with:
+
+```sh
+make vp-resnet50-small-golden-status
+```
+
+Status reports whether the process is still running, the latest
+`HWLs done, totally ... layers` line, and the final manifest/output hash when
+available. The complete serial stream is written incrementally to
+`serial.log`, while `background.log` records launcher diagnostics.
+
+A successful run is classified `golden-candidate`. Before adding its
+`output.dimg` to the SD payload, verify that the manifest records 1000 integer
+elements, complete HWL progress, no bad kernel/VP patterns, and the expected
+input hashes.
