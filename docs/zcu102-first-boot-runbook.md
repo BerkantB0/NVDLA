@@ -302,6 +302,12 @@ REPEAT=10 RUNTIME_TIMEOUT=10 \
   nvdla-board-workload lenet /mnt/sdboot/nvdla-tests
 ```
 
+The runner writes a unique marker to `/dev/kmsg` before each repeat and extracts
+that repeat's completion sequence from the marker. This avoids false partial
+sequence results when verbose KMD logging causes the finite kernel ring buffer
+to discard older lines. If `/dev/kmsg` is unavailable, the runner falls back to
+the original line-count boundary.
+
 Only after all ten pass, use another fresh boot for 100 repeats:
 
 ```sh

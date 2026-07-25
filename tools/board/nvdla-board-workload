@@ -381,6 +381,13 @@ while [ "$index" -le "$REPEAT" ]; do
     REPEAT_OUT="$OUT/repeat-$index"
     mkdir -p "$REPEAT_OUT/work"
     repeat_dmesg_lines="$(dmesg 2>/dev/null | wc -l | tr -d ' ')"
+    repeat_marker="nvdla-board-workload: lenet repeat-$index begin"
+    repeat_marker_written=0
+    if [ -w /dev/kmsg ]; then
+        if printf '<6>%s\n' "$repeat_marker" >/dev/kmsg 2>/dev/null; then
+            repeat_marker_written=1
+        fi
+    fi
     repeat_irq_before="$(irq_total)"
 
     set +e
@@ -401,8 +408,16 @@ while [ "$index" -le "$REPEAT" ]; do
     printf '%s\n' "$RUN_STATUS" >"$REPEAT_OUT/runtime.exit-status"
 
     dmesg >"$REPEAT_OUT/dmesg-after.log" 2>&1 || true
-    tail -n +"$((repeat_dmesg_lines + 1))" "$REPEAT_OUT/dmesg-after.log" \
-        >"$REPEAT_OUT/dmesg-delta.log" 2>/dev/null || true
+    if [ "$repeat_marker_written" -eq 1 ] \
+        && grep -Fq "$repeat_marker" "$REPEAT_OUT/dmesg-after.log"; then
+        awk -v marker="$repeat_marker" '
+            index($0, marker) { capture = 1; next }
+            capture { print }
+        ' "$REPEAT_OUT/dmesg-after.log" >"$REPEAT_OUT/dmesg-delta.log"
+    else
+        tail -n +"$((repeat_dmesg_lines + 1))" "$REPEAT_OUT/dmesg-after.log" \
+            >"$REPEAT_OUT/dmesg-delta.log" 2>/dev/null || true
+    fi
     sed -n 's/.*Completed \([A-Za-z][A-Za-z]*\) operation index \([0-9][0-9]*\) ROI.*/\1 \2/p' \
         "$REPEAT_OUT/dmesg-delta.log" >"$REPEAT_OUT/operations.txt"
     printf '%s\n' "$EXPECTED_OPERATIONS" >"$REPEAT_OUT/expected-operations.txt"
