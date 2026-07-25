@@ -6,11 +6,11 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 \
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability lenet-compare \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
         petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect \
@@ -35,6 +35,7 @@ help:
 	  '  make sources-heavy   Also fetch pinned linux-xlnx and Buildroot' \
 	  '  make sources-vp      Fetch pinned nvdla/vp and nvdla/hw sources' \
 	  '  make sources-lenet   Fetch pinned LeNet/MNIST source files' \
+	  '  make sources-resnet50 Fetch pinned Caffe ResNet-50 source files' \
 	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
 	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
 	  '  make patch-format    Regenerate patches from the patched worktree commits' \
@@ -56,6 +57,7 @@ help:
 	  '  make vp-lenet-small-workload Generate pinned nv_small LeNet workload' \
 	  '  make vp-lenet-small-gate Run the primary nv_small LeNet correctness gate' \
 	  '  make vp-lenet-small-stability Run 100-repeat nv_small LeNet stability gate' \
+	  '  make vp-resnet50-small-workload Build pinned nv_small INT8 ResNet-50 workload' \
 	  '  VP_HW_CONFIG=small VP_RUNNER=source-docker LANE=modern make vp-test' \
 	  '  make lenet-compare   Compare stock and modern LeNet artifacts' \
 	  '  make vp-small-config-audit Record nv_small VP/KMD configuration evidence' \
@@ -105,6 +107,9 @@ sources-vp:
 
 sources-lenet:
 	@$(PYTHON) -m nvdla_test_framework lenet-sources --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}"
+
+sources-resnet50:
+	@$(PYTHON) -m nvdla_test_framework resnet50-sources --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}"
 
 patch-prepare:
 	@scripts/nvdla_patch_queue.sh prepare
@@ -197,6 +202,13 @@ vp-lenet-small-gate: vp-lenet-small-workload
 vp-lenet-small-stability:
 	@REPEAT=100 VP_TIMEOUT=7200 $(MAKE) vp-lenet-small-gate
 
+vp-resnet50-small-workload: sources-resnet50 sources
+	@$(PYTHON) -m nvdla_test_framework resnet50-workload \
+		--lock repro.lock.json \
+		--sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}" \
+		--nvdla-sw "$${NVDLA_SW_SOURCE:-$${SOURCES_DIR:-$(CURDIR)/.external/sources}/nvdla-sw}" \
+		--out artifacts/workloads/resnet50_small
+
 lenet-compare:
 	@$(PYTHON) -m nvdla_test_framework lenet-compare --stock-dir "$${STOCK_ARTIFACT:-artifacts/20260703T115149Z-vp-stock-lenet}" $${MODERN_ARTIFACT:+--modern-dir "$${MODERN_ARTIFACT}"} $${COMPARE_OUT:+--out "$${COMPARE_OUT}"}
 
@@ -270,7 +282,7 @@ petalinux-package:
 petalinux-sd-bundle:
 	@scripts/petalinux_sd_bundle.sh
 
-petalinux-board-payload: workloads vp-lenet-small-workload
+petalinux-board-payload: workloads vp-lenet-small-workload vp-resnet50-small-workload
 	@scripts/petalinux_board_payload.sh
 
 petalinux-board-collect:

@@ -19,6 +19,7 @@ from .petalinux import run_petalinux_dts
 from .petalinux_rootfs import run_petalinux_rootfs_audit
 from .petalinux_sd import run_petalinux_sd_bundle
 from .report import write_report
+from .resnet50 import build_resnet50_small_workload, fetch_resnet50_sources
 from .stock import run_stock_sdp_control
 from .trace import DEFAULT_CSB_BASE, run_trace_compare, run_trace_parse
 from .vp_audit import run_vp_small_config_audit
@@ -82,6 +83,16 @@ def main(argv: list[str] | None = None) -> int:
     lenet_workload.add_argument("--lock", required=True, type=Path)
     lenet_workload.add_argument("--sources-dir", required=True, type=Path)
     lenet_workload.add_argument("--out", required=True, type=Path)
+
+    resnet_sources = sub.add_parser("resnet50-sources", help="Fetch pinned Caffe ResNet-50 source files")
+    resnet_sources.add_argument("--lock", required=True, type=Path)
+    resnet_sources.add_argument("--sources-dir", required=True, type=Path)
+
+    resnet_workload = sub.add_parser("resnet50-workload", help="Build pinned nv_small INT8 ResNet-50 workload")
+    resnet_workload.add_argument("--lock", required=True, type=Path)
+    resnet_workload.add_argument("--sources-dir", required=True, type=Path)
+    resnet_workload.add_argument("--nvdla-sw", required=True, type=Path)
+    resnet_workload.add_argument("--out", required=True, type=Path)
 
     audit = sub.add_parser("vp-small-config-audit", help="Record nv_small VP/KMD configuration evidence")
     audit.add_argument("--lock", required=True, type=Path)
@@ -175,6 +186,15 @@ def main(argv: list[str] | None = None) -> int:
         return fetch_lenet_sources(args.lock, args.sources_dir)
     if args.command == "lenet-workload":
         return build_lenet_small_workload(args.lock, args.sources_dir, args.out)
+    if args.command == "resnet50-sources":
+        return fetch_resnet50_sources(args.lock, args.sources_dir)
+    if args.command == "resnet50-workload":
+        return build_resnet50_small_workload(
+            args.lock,
+            args.sources_dir,
+            args.nvdla_sw,
+            args.out,
+        )
     if args.command == "vp-small-config-audit":
         return run_vp_small_config_audit(args.lock, args.work_dir, args.artifacts)
     if args.command == "sdp-small-diagnostic":

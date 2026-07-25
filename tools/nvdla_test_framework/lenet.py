@@ -6,7 +6,15 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .common import read_json, run_command, sha256_file, write_json
+from .common import (
+    docker_backend,
+    docker_mount_path,
+    read_json,
+    repo_root,
+    run_command,
+    sha256_file,
+    write_json,
+)
 from .vp import _bad_patterns
 
 
@@ -23,16 +31,6 @@ def _read_text(path: Path) -> str:
 
 def _normalize_output(text: str) -> str:
     return " ".join(text.split())
-
-
-def _docker_image_id(image: str) -> str | None:
-    try:
-        cp = run_command(["docker", "image", "inspect", image, "--format", "{{.Id}}"], timeout=30)
-    except OSError:
-        return None
-    if cp.returncode != 0:
-        return None
-    return cp.stdout.strip() or None
 
 
 def _lenet_lock(lock_path: Path) -> dict[str, Any]:
@@ -105,11 +103,13 @@ def build_lenet_small_workload(lock_path: Path, sources_dir: Path, out_dir: Path
 
     lock = read_json(lock_path)
     image = lock["docker"]["vp_latest"]["image"]
-    image_id = _docker_image_id(image)
-    if image_id is None:
-        raise RuntimeError(f"Docker image is not available or inspect failed: {image}")
+    docker_prefix, docker_backend_name, image_id = docker_backend(image)
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    stage = repo_root() / ".work" / "lenet-compiler-input"
+    stage.mkdir(parents=True, exist_ok=True)
+    for item in spec["files"]:
+        shutil.copy2(source / item["name"], stage / item["name"])
     compiler = spec["compiler"]
     compiler_candidates = [
         "/usr/local/nvdla/nvdla_compiler",
@@ -153,13 +153,13 @@ def build_lenet_small_workload(lock_path: Path, sources_dir: Path, out_dir: Path
 
     # The stock VP image keeps nvdla_compiler executable only by root, so use
     # the image default user for this reproducible compiler step.
-    docker_cmd = ["docker", "run", "--rm", "-e", "HOME=/tmp"]
+    docker_cmd = [*docker_prefix, "run", "--rm", "-e", "HOME=/tmp"]
     docker_cmd.extend(
         [
             "-v",
-            f"{source.resolve()}:/src:ro",
+            f"{docker_mount_path(stage, docker_backend_name)}:/src:ro",
             "-v",
-            f"{out_dir.resolve()}:/work",
+            f"{docker_mount_path(out_dir, docker_backend_name)}:/work",
             "-w",
             "/work",
             image,
@@ -208,6 +208,7 @@ def build_lenet_small_workload(lock_path: Path, sources_dir: Path, out_dir: Path
         "compiler": {
             "docker_image": image,
             "docker_image_id": image_id,
+            "docker_backend": docker_backend_name,
             "path": compiler_path,
             "discovery_candidates": compiler_candidates,
             "command": command_text,

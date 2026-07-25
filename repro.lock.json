@@ -100,6 +100,61 @@
           "nvidia,nv_small"
         ]
       }
+    },
+    "resnet50_imagenet": {
+      "source_dir": "resnet50-msra",
+      "model_revision": {
+        "repository": "https://github.com/KaimingHe/deep-residual-networks.git",
+        "commit": "a7026cb6d478e131b765b898c312e25f9f6dc031"
+      },
+      "files": [
+        {
+          "name": "ResNet-50-deploy.prototxt",
+          "url": "https://raw.githubusercontent.com/KaimingHe/deep-residual-networks/a7026cb6d478e131b765b898c312e25f9f6dc031/prototxt/ResNet-50-deploy.prototxt",
+          "sha256": "2F8FB64F68C6BCDA94EB2640F80AED94EFB91664122E72A6B7587012CC57DEDC"
+        },
+        {
+          "name": "ResNet-50-model.caffemodel",
+          "url": "https://www.deepdetect.com/downloads/platform/pretrained/caffe/resnet_50/ResNet-50-model.caffemodel",
+          "sha1": "B7C79CCC21AD0479CDDC0DD78B1D20C4D722908D",
+          "sha256": "44EE2B08816CEDE2B7AAA047888DF07DCAB52F73399AA1C8BEF05A17BFDD4888"
+        },
+        {
+          "name": "cat.jpg",
+          "url": "https://raw.githubusercontent.com/BVLC/caffe/b590f1d27eb5cbd9bc7b9157d447706407c68682/examples/images/cat.jpg",
+          "sha256": "59B67BCE343D435CB8F79B6ABEFC6EECC79924ABCDA6E7C7E39F8173BB932BC1"
+        }
+      ],
+      "calibration": {
+        "nvdla_sw_path": "umd/utils/calibdata/resnet50.json",
+        "sha256": "53A9A9D78DF9874CC904671DE79AECB767ED175A0D99387A344DE45B54CF6807"
+      },
+      "preprocess": {
+        "resize_short_side": 256,
+        "crop_width": 224,
+        "crop_height": 224,
+        "format": "JPEG",
+        "quality": 95,
+        "subsampling": 0,
+        "pillow_version": "9.0.1",
+        "expected_output_sha256": "5CEAAF00AAD81BC993F9AE254836A12B37C5B52754776D18A0B3F67A29D74FE8"
+      },
+      "compiler": {
+        "profile": "fast-math",
+        "cprecision": "int8",
+        "configtarget": "nv_small",
+        "quantizationMode": "per-kernel",
+        "informat": "nchw"
+      },
+      "expected_loadable_sha256": "1BE9C27E7D9069547A65B96368955815DC917F82E4CFFC1483435F1425C25A34",
+      "expected_output_protobuf_sha256": "55995DCF3F1A8301E3588825FE0C4970CB5FF460208FFFB35361D5C4260176FE",
+      "output_elements": 1000,
+      "target": {
+        "config": "nv_small",
+        "compatible": [
+          "nvidia,nv_small"
+        ]
+      }
     }
   },
   "petalinux": {

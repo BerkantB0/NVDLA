@@ -14,8 +14,10 @@ class BoardPayloadTests(unittest.TestCase):
         workloads = root / "workloads"
         sdp = workloads / "sdp_regression_small"
         lenet = workloads / "lenet_small"
+        resnet = workloads / "resnet50_small"
         (sdp / "golden").mkdir(parents=True)
         lenet.mkdir(parents=True)
+        resnet.mkdir(parents=True)
 
         (sdp / "loadable.fbuf").write_bytes(b"flatbuffer")
         (sdp / "golden" / "o_000000.dimg").write_bytes(b"dimg-golden")
@@ -76,6 +78,47 @@ class BoardPayloadTests(unittest.TestCase):
                 "expected_output": EXPECTED_LENET_OUTPUT,
             },
         )
+
+        (resnet / "model.nvdla").write_bytes(b"resnet-loadable")
+        (resnet / "input.jpg").write_bytes(b"jpeg-input")
+        write_json(
+            resnet / "generated-manifest.json",
+            {
+                "schema_version": 1,
+                "name": "resnet50_small",
+                "kind": "compiled_caffe_resnet50_imagenet",
+                "target": {"config": "nv_small", "compatible": ["nvidia,nv_small"]},
+                "model_revision": {"repository": "model", "commit": "revision"},
+                "source": {
+                    "files": [{"name": "model", "sha256": "source"}],
+                    "calibration": {"path": "resnet50.json", "sha256": "calibration"},
+                },
+                "compiler": {
+                    "docker_image": "nvdla/vp:latest",
+                    "docker_image_id": "sha256:image",
+                    "path": "/usr/local/nvdla/nvdla_compiler",
+                    "profile": "fast-math",
+                    "cprecision": "int8",
+                    "configtarget": "nv_small",
+                    "quantizationMode": "per-kernel",
+                    "informat": "nchw",
+                },
+                "loadable": {
+                    "path": "model.nvdla",
+                    "sha256": sha256_file(resnet / "model.nvdla"),
+                },
+                "image": {
+                    "path": "input.jpg",
+                    "sha256": sha256_file(resnet / "input.jpg"),
+                    "preprocess": {"output_size": [224, 224]},
+                },
+                "output_elements": 1000,
+                "oracle": {
+                    "nvdla_exact": {"status": "pending"},
+                    "fp32_context": {"status": "context-only", "top5": []},
+                },
+            },
+        )
         return workloads
 
     def test_builds_deterministic_payload(self) -> None:
@@ -107,6 +150,25 @@ class BoardPayloadTests(unittest.TestCase):
                 .strip(),
                 EXPECTED_LENET_OUTPUT,
             )
+            payload = json.loads(
+                (root / "first" / "nvdla-tests" / "PAYLOAD.json").read_text()
+            )
+            self.assertEqual(payload["schema_version"], 2)
+            self.assertIn("resnet50", payload["workloads"])
+            self.assertTrue(
+                (root / "first" / "nvdla-tests" / "resnet50_small" / "loadable.nvdla").is_file()
+            )
+            sdp_manifest = json.loads(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "sdp_regression_small"
+                    / "manifest.json"
+                ).read_text()
+            )
+            self.assertEqual(sdp_manifest["source"]["nvdla_sw_base_sha"], "base")
+            self.assertNotIn("nvdla_sw_sha", sdp_manifest["source"])
 
     def test_rejects_source_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

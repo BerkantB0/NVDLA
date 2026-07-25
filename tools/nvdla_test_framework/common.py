@@ -56,3 +56,30 @@ def is_wsl() -> bool:
         return False
     return "microsoft" in text or bool(os.environ.get("WSL_DISTRO_NAME"))
 
+
+def docker_backend(image: str) -> tuple[list[str], str, str]:
+    candidates = [(["docker"], "native")]
+    if is_wsl():
+        candidates.append((["cmd.exe", "/c", "docker"], "windows-docker-from-wsl"))
+    for prefix, name in candidates:
+        try:
+            result = run_command(
+                [*prefix, "image", "inspect", image, "--format", "{{.Id}}"],
+                timeout=30,
+            )
+        except OSError:
+            continue
+        image_id = result.stdout.strip()
+        if result.returncode == 0 and image_id:
+            return prefix, name, image_id
+    raise RuntimeError(f"Docker image is unavailable or cannot be inspected: {image}")
+
+
+def docker_mount_path(path: Path, backend: str) -> str:
+    resolved = path.resolve()
+    if backend != "windows-docker-from-wsl":
+        return str(resolved)
+    result = run_command(["wslpath", "-w", str(resolved)], timeout=10)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(f"could not convert WSL path for Docker: {resolved}")
+    return result.stdout.strip()

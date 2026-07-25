@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
-from .common import read_json, run_command, sha256_file, write_json
+from .common import docker_backend, read_json, sha256_file, write_json
 
 
 def _docker_image_id(image: str) -> str | None:
-    if not shutil.which("docker"):
+    try:
+        _, _, image_id = docker_backend(image)
+    except RuntimeError:
         return None
-    cp = run_command(["docker", "image", "inspect", image, "--format", "{{.Id}}"], timeout=15)
-    if cp.returncode != 0:
-        return None
-    return cp.stdout.strip()
+    return image_id
 
 
 def _petalinux_metadata(install_dir: Path) -> dict[str, str]:
@@ -90,4 +88,3 @@ def run_lock_check(lock_path: Path, xsa_path: Path, out_path: Path | None) -> in
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-

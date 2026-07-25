@@ -86,13 +86,17 @@ def build_board_payload(
 
     sdp_source = workloads_dir / "sdp_regression_small"
     lenet_source = workloads_dir / "lenet_small"
+    resnet_source = workloads_dir / "resnet50_small"
     sdp_manifest = read_json(sdp_source / "generated-manifest.json")
     lenet_manifest = read_json(lenet_source / "generated-manifest.json")
+    resnet_manifest = read_json(resnet_source / "generated-manifest.json")
 
     if sdp_manifest.get("target", {}).get("config") != "nv_small":
         raise ValueError("SDP workload is not tagged nv_small")
     if lenet_manifest.get("target", {}).get("config") != "nv_small":
         raise ValueError("LeNet workload is not tagged nv_small")
+    if resnet_manifest.get("target", {}).get("config") != "nv_small":
+        raise ValueError("ResNet-50 workload is not tagged nv_small")
 
     expected_output = " ".join(str(lenet_manifest.get("expected_output", "")).split())
     if expected_output != EXPECTED_LENET_OUTPUT:
@@ -103,6 +107,7 @@ def build_board_payload(
     out_dir.mkdir(parents=True, exist_ok=True)
     sdp_out = out_dir / "sdp_regression_small"
     lenet_out = out_dir / "lenet_small"
+    resnet_out = out_dir / "resnet50_small"
 
     sdp_loadable = sdp_manifest["loadable"]
     sdp_golden = sdp_manifest["golden_outputs"][0]
@@ -125,7 +130,7 @@ def build_board_payload(
         "target": sdp_manifest["target"],
         "upstream_base_sha": sdp_manifest["upstream_base_sha"],
         "source": {
-            "nvdla_sw_sha": sdp_manifest.get("source", {}).get("nvdla_sw_sha"),
+            "nvdla_sw_base_sha": sdp_manifest["upstream_base_sha"],
             "loadable": sdp_manifest.get("source", {}).get("loadable"),
             "golden": sdp_manifest.get("source", {}).get("golden"),
         },
@@ -178,8 +183,63 @@ def build_board_payload(
     }
     write_json(lenet_out / "manifest.json", lenet_payload_manifest)
 
-    payload_manifest = {
+    resnet_loadable = resnet_manifest["loadable"]
+    resnet_image = resnet_manifest["image"]
+    resnet_files = {
+        "loadable": _copy_verified(
+            resnet_source / resnet_loadable["path"],
+            resnet_out / "loadable.nvdla",
+            resnet_loadable["sha256"],
+        ),
+        "image": _copy_verified(
+            resnet_source / resnet_image["path"],
+            resnet_out / "input.jpg",
+            resnet_image["sha256"],
+        ),
+    }
+    resnet_payload_manifest = {
         "schema_version": 1,
+        "name": "resnet50_small",
+        "kind": resnet_manifest["kind"],
+        "target": resnet_manifest["target"],
+        "model_revision": resnet_manifest["model_revision"],
+        "source": {
+            "files": resnet_manifest.get("source", {}).get("files", []),
+            "calibration": resnet_manifest.get("source", {}).get("calibration"),
+        },
+        "compiler": {
+            key: resnet_manifest.get("compiler", {}).get(key)
+            for key in (
+                "docker_image",
+                "docker_image_id",
+                "path",
+                "profile",
+                "cprecision",
+                "configtarget",
+                "quantizationMode",
+                "informat",
+            )
+        },
+        "loadable": {**resnet_files["loadable"], "path": "loadable.nvdla"},
+        "image": {
+            **resnet_files["image"],
+            "path": "input.jpg",
+            "preprocess": resnet_image.get("preprocess"),
+        },
+        "output_elements": resnet_manifest["output_elements"],
+        "oracle": resnet_manifest["oracle"],
+        "pass_policy": {
+            "execution": (
+                "runtime exit zero, positive IRQ delta, all reported HWLs complete, "
+                "and exactly 1000 integer output elements"
+            ),
+            "tensor_correctness": "pending independent source-built nv_small VP golden",
+        },
+    }
+    write_json(resnet_out / "manifest.json", resnet_payload_manifest)
+
+    payload_manifest = {
+        "schema_version": 2,
         "board": "zcu102",
         "hardware_config": "nv_small",
         "delivery": "sd-fat-read-only",
@@ -191,6 +251,10 @@ def build_board_payload(
             "lenet": {
                 "path": "lenet_small",
                 "manifest_sha256": sha256_file(lenet_out / "manifest.json"),
+            },
+            "resnet50": {
+                "path": "resnet50_small",
+                "manifest_sha256": sha256_file(resnet_out / "manifest.json"),
             },
         },
     }
@@ -209,6 +273,7 @@ def build_board_payload(
             "workloads_dir": str(workloads_dir),
             "sdp_manifest": str(sdp_source / "generated-manifest.json"),
             "lenet_manifest": str(lenet_source / "generated-manifest.json"),
+            "resnet50_manifest": str(resnet_source / "generated-manifest.json"),
         },
         "payload_dir": str(out_dir),
         "files": _relative_file_records(out_dir),
