@@ -67,6 +67,19 @@ def parse_completed_operations(text: str) -> list[dict[str, int | str]]:
     ]
 
 
+def parse_hwl_progress(text: str) -> dict[str, int] | None:
+    matches = list(
+        re.finditer(r"(\d+)\s+HWLs done,\s+totally\s+(\d+)\s+layers", text)
+    )
+    if not matches:
+        return None
+    match = matches[-1]
+    return {
+        "completed": int(match.group(1)),
+        "total": int(match.group(2)),
+    }
+
+
 def parse_unreturned_csb_read(text: str) -> dict[str, int | str] | None:
     pending: list[int] = []
     for match in re.finditer(
@@ -299,6 +312,138 @@ def _analyze_sdp(root: Path, result: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def _classify_resnet50_repeat(path: Path, index: int) -> dict[str, Any]:
+    result_env = _parse_env(path / "result.env") if (path / "result.env").is_file() else {}
+    runtime_status = _read_int(path / "runtime.exit-status")
+    dmesg = _read_text(path / "dmesg-delta.log")
+    operations = parse_completed_operations(dmesg)
+    hwl = parse_hwl_progress(dmesg)
+    irq_delta = _read_int(path / "irq-delta.txt")
+    output_path = path / "output.dimg"
+    output_text = _read_text(path / "output.txt")
+    tokens = output_text.split()
+    integer_output = bool(tokens) and all(re.fullmatch(r"-?\d+", token) for token in tokens)
+    expected_elements = int(result_env.get("expected_elements", "1000"))
+    top5 = []
+    for line in _read_text(path / "top5.txt").splitlines():
+        fields = line.split()
+        if len(fields) == 3 and all(re.fullmatch(r"-?\d+", field) for field in fields):
+            top5.append(
+                {
+                    "rank": int(fields[0]),
+                    "index": int(fields[1]),
+                    "value": int(fields[2]),
+                }
+            )
+    initiated = "Exit: dla_initiate_processors status=0" in dmesg
+    timed_out = (path / "runtime-timeout.txt").is_file() or runtime_status == 124
+    target_classification = result_env.get("classification")
+
+    if timed_out:
+        classification = "runtime-timeout"
+    elif runtime_status in {126, 127}:
+        classification = "runtime-start-failure"
+    elif runtime_status not in {0, None} and not initiated:
+        classification = "task-initiation-failure"
+    elif irq_delta is None or irq_delta <= 0:
+        classification = "initiated-without-irq" if initiated else "task-initiation-failure"
+    elif not operations:
+        classification = "irq-without-completion"
+    elif hwl is None or hwl["completed"] != hwl["total"]:
+        classification = "partial-hwl-sequence"
+    elif not output_path.is_file():
+        classification = "missing-output"
+    elif not integer_output:
+        classification = "invalid-output-format"
+    elif len(tokens) != expected_elements:
+        classification = "output-shape-mismatch"
+    elif target_classification == "output-mismatch":
+        classification = "output-mismatch"
+    elif target_classification in {
+        "execution-pass-oracle-pending",
+        "pass",
+    }:
+        classification = "execution-pass-oracle-pending"
+    else:
+        classification = target_classification or "execution-pass-oracle-pending"
+
+    passed = classification in {"exact-pass", "execution-pass-oracle-pending"}
+    return {
+        "index": index,
+        "status": "pass" if passed else "fail",
+        "classification": classification,
+        "correctness_status": (
+            "pass"
+            if classification == "exact-pass"
+            else "inconclusive"
+            if classification == "execution-pass-oracle-pending"
+            else "fail"
+        ),
+        "target_classification": target_classification,
+        "runtime_status": runtime_status,
+        "timed_out": timed_out,
+        "task_initiated": initiated,
+        "irq_delta": irq_delta,
+        "operation_count": len(operations),
+        "last_completed": operations[-1] if operations else None,
+        "hwl_progress": hwl,
+        "output_elements": len(tokens),
+        "expected_output_elements": expected_elements,
+        "integer_output": integer_output,
+        "top5": top5,
+        "output_sha256": sha256_file(output_path) if output_path.is_file() else None,
+    }
+
+
+def _analyze_resnet50(root: Path, result: dict[str, str]) -> dict[str, Any]:
+    requested = int(result.get("repeat_requested", "1"))
+    repeats = []
+    for index in range(1, requested + 1):
+        path = root / f"repeat-{index}"
+        if path.is_dir():
+            repeats.append(_classify_resnet50_repeat(path, index))
+        else:
+            repeats.append(
+                {
+                    "index": index,
+                    "status": "fail",
+                    "classification": "missing-repeat-evidence",
+                    "correctness_status": "fail",
+                }
+            )
+    first_failure = next((item for item in repeats if item["status"] != "pass"), None)
+    classifications = {item["classification"] for item in repeats}
+    exact = not first_failure and classifications == {"exact-pass"}
+    classification = (
+        first_failure["classification"]
+        if first_failure
+        else "exact-pass"
+        if exact and requested == 1
+        else "stability-pass"
+        if exact
+        else "execution-pass-oracle-pending"
+        if requested == 1
+        else "execution-stability-pass-oracle-pending"
+    )
+    return {
+        "kind": "resnet50",
+        "status": "fail" if first_failure else "pass",
+        "classification": classification,
+        "correctness_status": "pass" if exact else "inconclusive" if not first_failure else "fail",
+        "repeat_requested": requested,
+        "pass_count": sum(item["status"] == "pass" for item in repeats),
+        "first_failure": first_failure,
+        "repeat_results": repeats,
+        "distinct_output_hashes": sorted(
+            {
+                item["output_sha256"]
+                for item in repeats
+                if item.get("output_sha256") is not None
+            }
+        ),
+    }
+
+
 def analyze_board_workload(
     root: Path,
     result: dict[str, str],
@@ -309,6 +454,8 @@ def analyze_board_workload(
         analysis = _analyze_sdp(root, result)
     elif mode == "lenet":
         analysis = _analyze_lenet(root, result)
+    elif mode == "resnet50":
+        analysis = _analyze_resnet50(root, result)
     else:
         return None
 

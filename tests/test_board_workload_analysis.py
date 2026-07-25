@@ -7,6 +7,8 @@ from pathlib import Path
 from nvdla_test_framework.board_artifact import (
     analyze_board_workload,
     parse_completed_operations,
+    parse_hwl_progress,
+    parse_hwl_progress,
     parse_interrupt_total,
     parse_unreturned_csb_read,
 )
@@ -40,6 +42,24 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
         self.assertEqual(
             parse_completed_operations(_operation_log(EXPECTED_LENET_OPERATIONS)),
             EXPECTED_LENET_OPERATIONS,
+        )
+
+    def test_parses_last_resnet_hwl_progress(self) -> None:
+        self.assertEqual(
+            parse_hwl_progress(
+                "10 HWLs done, totally 229 layers\n"
+                "229 HWLs done, totally 229 layers\n"
+            ),
+            {"completed": 229, "total": 229},
+        )
+
+    def test_parses_last_resnet_hwl_progress(self) -> None:
+        self.assertEqual(
+            parse_hwl_progress(
+                "10 HWLs done, totally 229 layers\n"
+                "229 HWLs done, totally 229 layers\n"
+            ),
+            {"completed": 229, "total": 229},
         )
 
     def test_identifies_unreturned_csb_read(self) -> None:
@@ -194,3 +214,54 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
                     "register": "SDP_S_POINTER",
                 },
             )
+
+    def test_classifies_resnet_execution_with_pending_oracle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repeat = root / "repeat-1"
+            repeat.mkdir()
+            (repeat / "result.env").write_text(
+                "classification=execution-pass-oracle-pending\n"
+                "expected_elements=1000\n"
+            )
+            (repeat / "runtime.exit-status").write_text("0\n")
+            (repeat / "irq-delta.txt").write_text("229\n")
+            (repeat / "dmesg-delta.log").write_text(
+                "Exit: dla_initiate_processors status=0\n"
+                "Completed Convolution operation index 0 ROI 0\n"
+                "229 HWLs done, totally 229 layers\n"
+            )
+            output = " ".join(str(index % 127) for index in range(1000))
+            (repeat / "output.txt").write_text(output + "\n")
+            (repeat / "output.dimg").write_text(output + "\n")
+            (repeat / "top5.txt").write_text("1 126 126\n2 253 126\n")
+
+            result = analyze_board_workload(
+                root,
+                {"mode": "resnet50", "status": "0", "repeat_requested": "1"},
+            )
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["classification"], "execution-pass-oracle-pending")
+            self.assertEqual(result["correctness_status"], "inconclusive")
+            self.assertEqual(result["repeat_results"][0]["output_elements"], 1000)
+
+    def test_rejects_partial_resnet_hwl_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repeat = root / "repeat-1"
+            repeat.mkdir()
+            (repeat / "result.env").write_text("expected_elements=1000\n")
+            (repeat / "runtime.exit-status").write_text("0\n")
+            (repeat / "irq-delta.txt").write_text("10\n")
+            (repeat / "dmesg-delta.log").write_text(
+                "Exit: dla_initiate_processors status=0\n"
+                "Completed Convolution operation index 0 ROI 0\n"
+                "20 HWLs done, totally 229 layers\n"
+            )
+
+            result = analyze_board_workload(
+                root,
+                {"mode": "resnet50", "status": "1", "repeat_requested": "1"},
+            )
+            self.assertEqual(result["status"], "fail")
+            self.assertEqual(result["classification"], "partial-hwl-sequence")

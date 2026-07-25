@@ -4,9 +4,9 @@ set -eu
 MODE="${1:-}"
 PAYLOAD_ROOT="${2:-}"
 case "$MODE" in
-    sdp|lenet) ;;
+    sdp|lenet|resnet50) ;;
     *)
-        echo "usage: nvdla-board-workload {sdp|lenet} PAYLOAD_ROOT [output-directory]" >&2
+        echo "usage: nvdla-board-workload {sdp|lenet|resnet50} PAYLOAD_ROOT [output-directory]" >&2
         exit 2
         ;;
 esac
@@ -16,7 +16,13 @@ if [ -z "$PAYLOAD_ROOT" ] || [ ! -d "$PAYLOAD_ROOT" ]; then
 fi
 
 REPEAT="${REPEAT:-1}"
-RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-10}"
+if [ -z "${RUNTIME_TIMEOUT+x}" ]; then
+    if [ "$MODE" = "resnet50" ]; then
+        RUNTIME_TIMEOUT=180
+    else
+        RUNTIME_TIMEOUT=10
+    fi
+fi
 WATCHDOG_GRACE="${WATCHDOG_GRACE:-5}"
 case "$REPEAT:$RUNTIME_TIMEOUT:$WATCHDOG_GRACE" in
     *[!0-9:]*|0:*|*:0:*|*:*:0)
@@ -351,21 +357,24 @@ if [ "$MODE" = "sdp" ]; then
     finish
 fi
 
-WORKLOAD="$PAYLOAD_ROOT/lenet_small"
-if [ ! -f "$WORKLOAD/loadable.nvdla" ] \
-    || [ ! -f "$WORKLOAD/input.pgm" ] \
-    || [ ! -f "$WORKLOAD/expected-output.txt" ]; then
-    echo "LeNet workload is incomplete" >"$OUT/prerequisite.error"
-    STATUS=1
-    CLASSIFICATION="payload-verification-failure"
-    finish
-fi
-cp "$WORKLOAD/manifest.json" "$OUT/workload-manifest.json"
-sha256sum "$WORKLOAD/loadable.nvdla" "$WORKLOAD/input.pgm" "$WORKLOAD/expected-output.txt" \
-    >"$OUT/workload-input-sha256.txt"
-
-EXPECTED_OUTPUT="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$WORKLOAD/expected-output.txt")"
-EXPECTED_OPERATIONS='Convolution 0
+EXPECTED_OUTPUT=""
+EXPECTED_ELEMENTS=0
+EXPECTED_OPERATIONS=""
+GOLDEN_OUTPUT=""
+case "$MODE" in
+    lenet)
+        WORKLOAD="$PAYLOAD_ROOT/lenet_small"
+        INPUT="$WORKLOAD/input.pgm"
+        if [ ! -f "$WORKLOAD/loadable.nvdla" ] \
+            || [ ! -f "$INPUT" ] \
+            || [ ! -f "$WORKLOAD/expected-output.txt" ]; then
+            echo "LeNet workload is incomplete" >"$OUT/prerequisite.error"
+            STATUS=1
+            CLASSIFICATION="payload-verification-failure"
+            finish
+        fi
+        EXPECTED_OUTPUT="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$WORKLOAD/expected-output.txt")"
+        EXPECTED_OPERATIONS='Convolution 0
 SDP 1
 PDP 2
 Convolution 3
@@ -375,13 +384,40 @@ Convolution 6
 SDP 7
 Convolution 8
 SDP 9'
+        cp "$WORKLOAD/manifest.json" "$OUT/workload-manifest.json"
+        sha256sum "$WORKLOAD/loadable.nvdla" "$INPUT" "$WORKLOAD/expected-output.txt" \
+            >"$OUT/workload-input-sha256.txt"
+        ;;
+    resnet50)
+        WORKLOAD="$PAYLOAD_ROOT/resnet50_small"
+        INPUT="$WORKLOAD/input.jpg"
+        if [ ! -f "$WORKLOAD/loadable.nvdla" ] \
+            || [ ! -f "$INPUT" ] \
+            || [ ! -f "$WORKLOAD/manifest.json" ]; then
+            echo "ResNet-50 workload is incomplete" >"$OUT/prerequisite.error"
+            STATUS=1
+            CLASSIFICATION="payload-verification-failure"
+            finish
+        fi
+        EXPECTED_ELEMENTS="$(
+            sed -n 's/.*"output_elements":[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+                "$WORKLOAD/manifest.json" | head -n 1
+        )"
+        EXPECTED_ELEMENTS="${EXPECTED_ELEMENTS:-1000}"
+        if [ -f "$WORKLOAD/golden-output.dimg" ]; then
+            GOLDEN_OUTPUT="$WORKLOAD/golden-output.dimg"
+        fi
+        cp "$WORKLOAD/manifest.json" "$OUT/workload-manifest.json"
+        sha256sum "$WORKLOAD/loadable.nvdla" "$INPUT" >"$OUT/workload-input-sha256.txt"
+        ;;
+esac
 
 index=1
 while [ "$index" -le "$REPEAT" ]; do
     REPEAT_OUT="$OUT/repeat-$index"
     mkdir -p "$REPEAT_OUT/work"
     repeat_dmesg_lines="$(dmesg 2>/dev/null | wc -l | tr -d ' ')"
-    repeat_marker="nvdla-board-workload: lenet repeat-$index begin"
+    repeat_marker="nvdla-board-workload: $MODE repeat-$index begin"
     repeat_marker_written=0
     if [ -w /dev/kmsg ]; then
         if printf '<6>%s\n' "$repeat_marker" >/dev/kmsg 2>/dev/null; then
@@ -400,7 +436,7 @@ while [ "$index" -le "$REPEAT" ]; do
             env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
                 nvdla_runtime \
                     --loadable "$WORKLOAD/loadable.nvdla" \
-                    --image "$WORKLOAD/input.pgm" \
+                    --image "$INPUT" \
                     --rawdump
     )
     RUN_STATUS=$?
@@ -420,7 +456,9 @@ while [ "$index" -le "$REPEAT" ]; do
     fi
     sed -n 's/.*Completed \([A-Za-z][A-Za-z]*\) operation index \([0-9][0-9]*\) ROI.*/\1 \2/p' \
         "$REPEAT_OUT/dmesg-delta.log" >"$REPEAT_OUT/operations.txt"
-    printf '%s\n' "$EXPECTED_OPERATIONS" >"$REPEAT_OUT/expected-operations.txt"
+    if [ "$MODE" = "lenet" ]; then
+        printf '%s\n' "$EXPECTED_OPERATIONS" >"$REPEAT_OUT/expected-operations.txt"
+    fi
 
     repeat_irq_after="$(irq_total)"
     repeat_irq_delta=$((repeat_irq_after - repeat_irq_before))
@@ -438,6 +476,78 @@ while [ "$index" -le "$REPEAT" ]; do
         ACTUAL_OUTPUT=""
     fi
 
+    OUTPUT_VALID=0
+    OUTPUT_ELEMENTS=0
+    HWL_COMPLETED=0
+    HWL_TOTAL=0
+    if [ "$MODE" = "resnet50" ]; then
+        if [ -f "$OUTPUT" ]; then
+            if awk '
+                {
+                    for (field = 1; field <= NF; field++) {
+                        count++
+                        if ($field !~ /^-?[0-9]+$/)
+                            invalid++
+                    }
+                }
+                END {
+                    print count + 0
+                    exit(invalid != 0)
+                }
+            ' "$OUTPUT" >"$REPEAT_OUT/output-elements.txt"; then
+                OUTPUT_VALID=1
+            fi
+            OUTPUT_ELEMENTS="$(cat "$REPEAT_OUT/output-elements.txt")"
+            awk '
+                {
+                    for (field = 1; field <= NF; field++) {
+                        value = $field + 0
+                        index = count++
+                        for (rank = 1; rank <= 5; rank++) {
+                            if (!(rank in best) || value > best[rank]) {
+                                for (move = 5; move > rank; move--) {
+                                    best[move] = best[move - 1]
+                                    best_index[move] = best_index[move - 1]
+                                }
+                                best[rank] = value
+                                best_index[rank] = index
+                                break
+                            }
+                        }
+                    }
+                }
+                END {
+                    for (rank = 1; rank <= 5 && rank in best; rank++)
+                        print rank, best_index[rank], best[rank]
+                }
+            ' "$OUTPUT" >"$REPEAT_OUT/top5.txt"
+        fi
+        HWL_PROGRESS="$(
+            awk '
+                /HWLs done, totally/ {
+                    for (field = 1; field <= NF; field++) {
+                        if ($field == "HWLs")
+                            completed = $(field - 1)
+                        if ($field == "layers" || $field == "layers.")
+                            total = $(field - 1)
+                    }
+                    gsub(/[^0-9]/, "", completed)
+                    gsub(/[^0-9]/, "", total)
+                }
+                END {
+                    if (completed != "" && total != "")
+                        print completed, total
+                }
+            ' "$REPEAT_OUT/dmesg-delta.log"
+        )"
+        if [ -n "$HWL_PROGRESS" ]; then
+            HWL_COMPLETED="${HWL_PROGRESS%% *}"
+            HWL_TOTAL="${HWL_PROGRESS##* }"
+        fi
+        printf '%s\n' "$HWL_COMPLETED" >"$REPEAT_OUT/hwl-completed.txt"
+        printf '%s\n' "$HWL_TOTAL" >"$REPEAT_OUT/hwl-total.txt"
+    fi
+
     REPEAT_STATUS=0
     REPEAT_CLASSIFICATION="pass"
     if [ "$RUN_STATUS" -eq 124 ]; then
@@ -449,7 +559,8 @@ while [ "$index" -le "$REPEAT" ]; do
     elif [ "$repeat_irq_delta" -le 0 ]; then
         REPEAT_STATUS=1
         REPEAT_CLASSIFICATION="initiated-without-irq"
-    elif ! cmp -s "$REPEAT_OUT/expected-operations.txt" "$REPEAT_OUT/operations.txt"; then
+    elif [ "$MODE" = "lenet" ] \
+        && ! cmp -s "$REPEAT_OUT/expected-operations.txt" "$REPEAT_OUT/operations.txt"; then
         REPEAT_STATUS=1
         if [ -s "$REPEAT_OUT/operations.txt" ]; then
             REPEAT_CLASSIFICATION="partial-operation-sequence"
@@ -459,9 +570,31 @@ while [ "$index" -le "$REPEAT" ]; do
     elif [ -z "$ACTUAL_OUTPUT" ]; then
         REPEAT_STATUS=1
         REPEAT_CLASSIFICATION="missing-output"
-    elif [ "$ACTUAL_OUTPUT" != "$EXPECTED_OUTPUT" ]; then
+    elif [ "$MODE" = "lenet" ] && [ "$ACTUAL_OUTPUT" != "$EXPECTED_OUTPUT" ]; then
         REPEAT_STATUS=1
         REPEAT_CLASSIFICATION="output-mismatch"
+    elif [ "$MODE" = "resnet50" ] && [ ! -s "$REPEAT_OUT/operations.txt" ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="irq-without-completion"
+    elif [ "$MODE" = "resnet50" ] \
+        && { [ "$HWL_COMPLETED" -le 0 ] || [ "$HWL_COMPLETED" -ne "$HWL_TOTAL" ]; }; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="partial-hwl-sequence"
+    elif [ "$MODE" = "resnet50" ] && [ "$OUTPUT_VALID" -ne 1 ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="invalid-output-format"
+    elif [ "$MODE" = "resnet50" ] && [ "$OUTPUT_ELEMENTS" -ne "$EXPECTED_ELEMENTS" ]; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="output-shape-mismatch"
+    elif [ "$MODE" = "resnet50" ] \
+        && [ -n "$GOLDEN_OUTPUT" ] \
+        && ! cmp -s "$GOLDEN_OUTPUT" "$OUTPUT"; then
+        REPEAT_STATUS=1
+        REPEAT_CLASSIFICATION="output-mismatch"
+    elif [ "$MODE" = "resnet50" ] && [ -n "$GOLDEN_OUTPUT" ]; then
+        REPEAT_CLASSIFICATION="exact-pass"
+    elif [ "$MODE" = "resnet50" ] && [ -z "$GOLDEN_OUTPUT" ]; then
+        REPEAT_CLASSIFICATION="execution-pass-oracle-pending"
     fi
 
     {
@@ -474,6 +607,10 @@ while [ "$index" -le "$REPEAT" ]; do
         echo "irq_delta=$repeat_irq_delta"
         echo "actual_output=$ACTUAL_OUTPUT"
         echo "expected_output=$EXPECTED_OUTPUT"
+        echo "output_elements=$OUTPUT_ELEMENTS"
+        echo "expected_elements=$EXPECTED_ELEMENTS"
+        echo "hwl_completed=$HWL_COMPLETED"
+        echo "hwl_total=$HWL_TOTAL"
     } >"$REPEAT_OUT/result.env"
 
     if [ "$REPEAT_STATUS" -ne 0 ]; then
@@ -487,7 +624,13 @@ while [ "$index" -le "$REPEAT" ]; do
 done
 
 if [ "$STATUS" -eq 0 ]; then
-    if [ "$REPEAT" -eq 1 ]; then
+    if [ "$MODE" = "resnet50" ] && [ -z "$GOLDEN_OUTPUT" ]; then
+        if [ "$REPEAT" -eq 1 ]; then
+            CLASSIFICATION="execution-pass-oracle-pending"
+        else
+            CLASSIFICATION="execution-stability-pass-oracle-pending"
+        fi
+    elif [ "$REPEAT" -eq 1 ]; then
         CLASSIFICATION="exact-pass"
     else
         CLASSIFICATION="stability-pass"
