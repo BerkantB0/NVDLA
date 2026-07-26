@@ -344,7 +344,11 @@ def _classify_resnet50_repeat(path: Path, index: int) -> dict[str, Any]:
             {"rank": rank, "index": class_index, "value": value}
             for rank, (class_index, value) in enumerate(ranked[:5], start=1)
         ]
-    initiated = "Exit: dla_initiate_processors status=0" in dmesg
+    initiated = (
+        "Exit: dla_initiate_processors status=0" in dmesg
+        or bool(operations)
+        or hwl is not None
+    )
     timed_out = (path / "runtime-timeout.txt").is_file() or runtime_status == 124
     target_classification = result_env.get("classification")
 

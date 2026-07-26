@@ -244,6 +244,7 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
             self.assertEqual(result["classification"], "execution-pass-oracle-pending")
             self.assertEqual(result["correctness_status"], "inconclusive")
             self.assertEqual(result["repeat_results"][0]["output_elements"], 1000)
+            self.assertTrue(result["repeat_results"][0]["task_initiated"])
 
     def test_recovers_resnet_top5_after_target_postprocessing_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -272,6 +273,7 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
             repeat_result = result["repeat_results"][0]
             self.assertEqual(repeat_result["status"], "pass")
             self.assertEqual(repeat_result["classification"], "execution-pass-oracle-pending")
+            self.assertTrue(repeat_result["task_initiated"])
             self.assertEqual(
                 repeat_result["top5"][:2],
                 [
