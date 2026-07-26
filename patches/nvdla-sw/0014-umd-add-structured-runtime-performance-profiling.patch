@@ -1,0 +1,470 @@
+From 3efd7e7f39bb566ceaede5d14a5f7e17abec0196 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 26 Jul 2026 17:17:51 +0100
+Subject: [PATCH 14/14] umd: add structured runtime performance profiling
+
+Add opt-in CLOCK_MONOTONIC_RAW profiling for runtime setup, buffer preparation, blocking submissions, output extraction, and teardown. Reuse one loaded model and bound buffer set for warm-up and measured submissions, and verify that every output remains byte-identical.
+
+Metrics are buffered in memory and written as JSON only after measured work and runtime teardown complete. Existing single-run behavior remains the default.
+
+Signed-off-by: Codex <codex@local>
+---
+ umd/apps/runtime/RuntimeTest.cpp | 180 +++++++++++++++++++++++++++++--
+ umd/apps/runtime/RuntimeTest.h   |  60 ++++++++++-
+ umd/apps/runtime/main.cpp        |  50 +++++++++
+ 3 files changed, 278 insertions(+), 12 deletions(-)
+
+diff --git a/umd/apps/runtime/RuntimeTest.cpp b/umd/apps/runtime/RuntimeTest.cpp
+index 9ae98c3..f4b5845 100644
+--- a/umd/apps/runtime/RuntimeTest.cpp
++++ b/umd/apps/runtime/RuntimeTest.cpp
+@@ -44,12 +44,100 @@
+ #include "dlatypes.h"
+ 
+ #include <cstdio> // snprintf, fopen
++#include <cstring>
+ #include <string>
++#include <vector>
+ 
+ #define OUTPUT_DIMG "output.dimg"
+ 
+ using namespace half_float;
+ 
++static NvU64 monotonicRawNs()
++{
++    struct timespec value;
++    clock_gettime(CLOCK_MONOTONIC_RAW, &value);
++    return (NvU64)value.tv_sec * 1000000000ULL + (NvU64)value.tv_nsec;
++}
++
++static NvU64 elapsedNs(NvU64 before)
++{
++    return monotonicRawNs() - before;
++}
++
++static bool writePerformanceProfile(const TestAppArgs* appArgs,
++                                    const TestInfo* i)
++{
++    FILE* output;
++    const PerformanceProfile& profile = i->profile;
++
++    if (appArgs->profilePath.empty())
++        return true;
++
++    output = fopen(appArgs->profilePath.c_str(), "w");
++    if (!output)
++        return false;
++
++    fprintf(output,
++            "{\n"
++            "  \"schema_version\": 1,\n"
++            "  \"clock\": \"CLOCK_MONOTONIC_RAW\",\n"
++            "  \"clock_resolution_ns\": %llu,\n"
++            "  \"warmup_iterations\": %u,\n"
++            "  \"measured_iterations\": %u,\n"
++            "  \"outputs_consistent\": %s,\n"
++            "  \"status\": %d,\n"
++            "  \"phases_ns\": {\n"
++            "    \"runtime_create\": %llu,\n"
++            "    \"loadable_read\": %llu,\n"
++            "    \"runtime_load\": %llu,\n"
++            "    \"emu_init\": %llu,\n"
++            "    \"input_setup\": %llu,\n"
++            "    \"output_setup\": %llu,\n"
++            "    \"output_write\": %llu,\n"
++            "    \"buffer_cleanup\": %llu,\n"
++            "    \"emu_stop\": %llu,\n"
++            "    \"runtime_unload\": %llu,\n"
++            "    \"runtime_destroy\": %llu,\n"
++            "    \"test_total\": %llu,\n"
++            "    \"process_total\": %llu\n"
++            "  },\n"
++            "  \"samples\": [\n",
++            (unsigned long long)profile.clockResolutionNs,
++            appArgs->warmupIterations,
++            appArgs->measuredIterations,
++            profile.outputsConsistent ? "true" : "false",
++            profile.status,
++            (unsigned long long)profile.runtimeCreateNs,
++            (unsigned long long)profile.loadableReadNs,
++            (unsigned long long)profile.runtimeLoadNs,
++            (unsigned long long)profile.emuInitNs,
++            (unsigned long long)profile.inputSetupNs,
++            (unsigned long long)profile.outputSetupNs,
++            (unsigned long long)profile.outputWriteNs,
++            (unsigned long long)profile.bufferCleanupNs,
++            (unsigned long long)profile.emuStopNs,
++            (unsigned long long)profile.runtimeUnloadNs,
++            (unsigned long long)profile.runtimeDestroyNs,
++            (unsigned long long)profile.testTotalNs,
++            (unsigned long long)profile.processTotalNs);
++
++    for (size_t index = 0; index < profile.samples.size(); ++index)
++    {
++        const PerformanceSample& sample = profile.samples[index];
++        fprintf(output,
++                "    {\"index\": %u, \"warmup\": %s, "
++                "\"submit_ns\": %llu, \"output_extract_ns\": %llu}%s\n",
++                sample.index,
++                sample.warmup ? "true" : "false",
++                (unsigned long long)sample.submitNs,
++                (unsigned long long)sample.outputExtractNs,
++                index + 1 == profile.samples.size() ? "" : ",");
++    }
++    fprintf(output, "  ]\n}\n");
++
++    return fclose(output) == 0;
++}
++
+ static TestImageTypes getImageType(std::string imageFileName)
+ {
+     TestImageTypes it = IMAGE_TYPE_UNKNOWN;
+@@ -379,7 +467,11 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+     NvDlaError e = NvDlaSuccess;
+     void* pInputBuffer = NULL;
+     void* pOutputBuffer = NULL;
+-    struct timespec before, after;
++    NvU32 totalIterations =
++        appArgs->warmupIterations + appArgs->measuredIterations;
++    std::vector<NvU8> referenceOutput;
++    NvU64 phaseStart;
++    NvU64 testStart;
+ 
+     nvdla::IRuntime* runtime = i->runtime;
+     if (!runtime)
+@@ -388,29 +480,67 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+     i->inputImage = new NvDlaImage();
+     i->outputImage = new NvDlaImage();
+ 
++    testStart = monotonicRawNs();
++    phaseStart = monotonicRawNs();
+     PROPAGATE_ERROR_FAIL(setupInputBuffer(appArgs, i, &pInputBuffer));
++    i->profile.inputSetupNs = elapsedNs(phaseStart);
+ 
++    phaseStart = monotonicRawNs();
+     PROPAGATE_ERROR_FAIL(setupOutputBuffer(appArgs, i, &pOutputBuffer));
++    i->profile.outputSetupNs = elapsedNs(phaseStart);
+     NvDlaDebugPrintf("submitting tasks...\n");
+-    clock_gettime(CLOCK_MONOTONIC, &before);
+-    if (!runtime->submit())
+-        ORIGINATE_ERROR(NvDlaError_BadParameter, "runtime->submit() failed");
+-
+-    clock_gettime(CLOCK_MONOTONIC, &after);
+-    NvDlaDebugPrintf("execution time = %f s\n",
+-                     get_elapsed_time_seconds(&before, &after));
+-
+-    PROPAGATE_ERROR_FAIL(DlaBuffer2DIMG(&pOutputBuffer, i->outputImage));
++    for (NvU32 index = 0; index < totalIterations; ++index)
++    {
++        PerformanceSample sample;
++        sample.index = index + 1;
++        sample.warmup = index < appArgs->warmupIterations;
++
++        phaseStart = monotonicRawNs();
++        if (!runtime->submit())
++            ORIGINATE_ERROR(NvDlaError_BadParameter,
++                            "runtime->submit() failed");
++        sample.submitNs = elapsedNs(phaseStart);
++
++        phaseStart = monotonicRawNs();
++        PROPAGATE_ERROR_FAIL(DlaBuffer2DIMG(&pOutputBuffer,
++                                            i->outputImage));
++        sample.outputExtractNs = elapsedNs(phaseStart);
++
++        const NvU8* outputBytes =
++            static_cast<const NvU8*>(i->outputImage->m_pData);
++        if (referenceOutput.empty())
++        {
++            referenceOutput.assign(outputBytes,
++                                   outputBytes +
++                                   i->outputImage->m_meta.size);
++        }
++        else if (referenceOutput.size() != i->outputImage->m_meta.size ||
++                 memcmp(&referenceOutput[0],
++                        outputBytes,
++                        referenceOutput.size()) != 0)
++        {
++            i->profile.outputsConsistent = false;
++        }
++
++        i->profile.samples.push_back(sample);
++        if (appArgs->profilePath.empty())
++            NvDlaDebugPrintf("execution time = %f s\n",
++                             sample.submitNs / 1000000000.0);
++    }
+ 
+     //i->outputImage->printBuffer(true);   /* Print the output buffer */
+ 
+     /* Dump output dimg to a file */
++    phaseStart = monotonicRawNs();
+     PROPAGATE_ERROR_FAIL(DIMG2DIMGFile(i->outputImage,
+                                         OUTPUT_DIMG,
+                                         true,
+                                         appArgs->rawOutputDump));
++    i->profile.outputWriteNs = elapsedNs(phaseStart);
++    i->profile.testTotalNs = elapsedNs(testStart);
+ 
+ fail:
++    phaseStart = monotonicRawNs();
+     cleanupOutputBuffer(appArgs, i);
+     /* Do not clear outputImage if in server mode */
+     if (!i->dlaServerRunning && i->outputImage != NULL) {
+@@ -423,6 +553,7 @@ fail:
+         delete i->inputImage;
+         i->inputImage = NULL;
+     }
++    i->profile.bufferCleanupNs = elapsedNs(phaseStart);
+ 
+     return e;
+ }
+@@ -430,33 +561,55 @@ fail:
+ NvDlaError run(const TestAppArgs* appArgs, TestInfo* i)
+ {
+     NvDlaError e = NvDlaSuccess;
++    NvU64 phaseStart;
++    NvU64 processStart = monotonicRawNs();
++    struct timespec resolution;
++
++    if (clock_getres(CLOCK_MONOTONIC_RAW, &resolution) == 0)
++        i->profile.clockResolutionNs =
++            (NvU64)resolution.tv_sec * 1000000000ULL +
++            (NvU64)resolution.tv_nsec;
+ 
+     /* Create runtime instance */
+     NvDlaDebugPrintf("creating new runtime context...\n");
++    phaseStart = monotonicRawNs();
+     i->runtime = nvdla::createRuntime();
++    i->profile.runtimeCreateNs = elapsedNs(phaseStart);
+     if (i->runtime == NULL)
+         ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "createRuntime() failed");
+ 
+     if (!i->dlaServerRunning)
++    {
++        phaseStart = monotonicRawNs();
+         PROPAGATE_ERROR_FAIL(readLoadable(appArgs, i));
++        i->profile.loadableReadNs = elapsedNs(phaseStart);
++    }
+ 
+     /* Load loadable */
++    phaseStart = monotonicRawNs();
+     PROPAGATE_ERROR_FAIL(loadLoadable(appArgs, i));
++    i->profile.runtimeLoadNs = elapsedNs(phaseStart);
+ 
+     /* Start emulator */
++    phaseStart = monotonicRawNs();
+     if (!i->runtime->initEMU())
+         ORIGINATE_ERROR(NvDlaError_DeviceNotFound, "runtime->initEMU() failed");
++    i->profile.emuInitNs = elapsedNs(phaseStart);
+ 
+     /* Run test */
+     PROPAGATE_ERROR_FAIL(runTest(appArgs, i));
+ 
+ fail:
+     /* Stop emulator */
++    phaseStart = monotonicRawNs();
+     if (i->runtime != NULL)
+         i->runtime->stopEMU();
++    i->profile.emuStopNs = elapsedNs(phaseStart);
+ 
+     /* Unload loadables */
++    phaseStart = monotonicRawNs();
+     unloadLoadable(appArgs, i);
++    i->profile.runtimeUnloadNs = elapsedNs(phaseStart);
+ 
+     /* Free if allocated in read Loadable */
+     if (!i->dlaServerRunning && i->pData != NULL) {
+@@ -465,7 +618,14 @@ fail:
+     }
+ 
+     /* Destroy runtime */
++    phaseStart = monotonicRawNs();
+     nvdla::destroyRuntime(i->runtime);
++    i->profile.runtimeDestroyNs = elapsedNs(phaseStart);
++    i->profile.status = e;
++    i->profile.processTotalNs = elapsedNs(processStart);
++
++    if (!writePerformanceProfile(appArgs, i) && e == NvDlaSuccess)
++        e = NvDlaError_FileOperationFailed;
+ 
+     return e;
+ }
+diff --git a/umd/apps/runtime/RuntimeTest.h b/umd/apps/runtime/RuntimeTest.h
+index 28bab6c..76737f5 100644
+--- a/umd/apps/runtime/RuntimeTest.h
++++ b/umd/apps/runtime/RuntimeTest.h
+@@ -39,6 +39,54 @@
+ #include <string>
+ #include <vector>
+ 
++struct PerformanceSample
++{
++    NvU32 index;
++    bool warmup;
++    NvU64 submitNs;
++    NvU64 outputExtractNs;
++};
++
++struct PerformanceProfile
++{
++    PerformanceProfile() :
++        clockResolutionNs(0),
++        runtimeCreateNs(0),
++        loadableReadNs(0),
++        runtimeLoadNs(0),
++        emuInitNs(0),
++        inputSetupNs(0),
++        outputSetupNs(0),
++        outputWriteNs(0),
++        bufferCleanupNs(0),
++        emuStopNs(0),
++        runtimeUnloadNs(0),
++        runtimeDestroyNs(0),
++        testTotalNs(0),
++        processTotalNs(0),
++        outputsConsistent(true),
++        status(NvDlaSuccess)
++    {}
++
++    NvU64 clockResolutionNs;
++    NvU64 runtimeCreateNs;
++    NvU64 loadableReadNs;
++    NvU64 runtimeLoadNs;
++    NvU64 emuInitNs;
++    NvU64 inputSetupNs;
++    NvU64 outputSetupNs;
++    NvU64 outputWriteNs;
++    NvU64 bufferCleanupNs;
++    NvU64 emuStopNs;
++    NvU64 runtimeUnloadNs;
++    NvU64 runtimeDestroyNs;
++    NvU64 testTotalNs;
++    NvU64 processTotalNs;
++    bool outputsConsistent;
++    NvDlaError status;
++    std::vector<PerformanceSample> samples;
++};
++
+ struct TestAppArgs
+ {
+     std::string inputPath;
+@@ -48,6 +96,9 @@ struct TestAppArgs
+     NvU8 normalize_value;
+     float mean[4];
+     bool rawOutputDump;
++    std::string profilePath;
++    NvU32 warmupIterations;
++    NvU32 measuredIterations;
+ 
+     TestAppArgs() :
+         inputPath("./"),
+@@ -56,7 +107,10 @@ struct TestAppArgs
+         serverPort(6666),
+         normalize_value(1),
+         mean{0.0, 0.0, 0.0, 0.0},
+-        rawOutputDump(false)
++        rawOutputDump(false),
++        profilePath(""),
++        warmupIterations(0),
++        measuredIterations(1)
+     {}
+ };
+ 
+@@ -74,7 +128,8 @@ struct TestInfo
+         numInputs(0),
+         numOutputs(0),
+         inputImage(NULL),
+-        outputImage(NULL)
++        outputImage(NULL),
++        profile()
+     {}
+     // runtime
+     nvdla::IRuntime* runtime;
+@@ -89,6 +144,7 @@ struct TestInfo
+     NvU32 numOutputs;
+     NvDlaImage* inputImage;
+     NvDlaImage* outputImage;
++    PerformanceProfile profile;
+ };
+ 
+ // Test
+diff --git a/umd/apps/runtime/main.cpp b/umd/apps/runtime/main.cpp
+index b3091c1..9849901 100644
+--- a/umd/apps/runtime/main.cpp
++++ b/umd/apps/runtime/main.cpp
+@@ -35,9 +35,27 @@
+ #include <cstring>
+ #include <iostream>
+ #include <cstdlib> // system
++#include <cerrno>
++#include <climits>
+ 
+ static TestAppArgs defaultTestAppArgs = TestAppArgs();
+ 
++static bool parseIterationCount(const char* value, bool allowZero,
++                                NvU32* result)
++{
++    char* end = NULL;
++    unsigned long parsed;
++
++    errno = 0;
++    parsed = std::strtoul(value, &end, 10);
++    if (errno || !end || *end || parsed > UINT_MAX ||
++        (!allowZero && parsed == 0))
++        return false;
++
++    *result = (NvU32)parsed;
++    return true;
++}
++
+ static NvDlaError testSetup(const TestAppArgs* appArgs, TestInfo* i)
+ {
+     NvDlaError e = NvDlaSuccess;
+@@ -193,6 +211,35 @@ int main(int argc, char* argv[])
+         {
+             testAppArgs.rawOutputDump = true;
+         }
++        else if (std::strcmp(arg, "--profile-json") == 0)
++        {
++            if (ii+1 >= argc)
++            {
++                showHelp = true;
++                break;
++            }
++            testAppArgs.profilePath = std::string(argv[++ii]);
++        }
++        else if (std::strcmp(arg, "--warmup") == 0)
++        {
++            if (ii+1 >= argc ||
++                !parseIterationCount(argv[++ii], true,
++                                     &testAppArgs.warmupIterations))
++            {
++                showHelp = true;
++                break;
++            }
++        }
++        else if (std::strcmp(arg, "--iterations") == 0)
++        {
++            if (ii+1 >= argc ||
++                !parseIterationCount(argv[++ii], false,
++                                     &testAppArgs.measuredIterations))
++            {
++                showHelp = true;
++                break;
++            }
++        }
+         else // unknown
+         {
+             // Unknown argument
+@@ -220,6 +267,9 @@ int main(int argc, char* argv[])
+         NvDlaDebugPrintf("    --normalize <value>   normalize value for input image\n");
+         NvDlaDebugPrintf("    --mean <value>        comma separated mean value for input image\n");
+         NvDlaDebugPrintf("    --rawdump             dump raw dimg data\n");
++        NvDlaDebugPrintf("    --profile-json <file> write structured performance data\n");
++        NvDlaDebugPrintf("    --warmup <count>      unreported warm-up submissions\n");
++        NvDlaDebugPrintf("    --iterations <count>  measured submissions (default: 1)\n");
+ 
+         if (unknownArg || missingArg)
+             return EXIT_FAILURE;
+-- 
+2.43.0
+
