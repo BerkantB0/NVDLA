@@ -219,6 +219,20 @@ def build_lenet_small_workload(lock_path: Path, sources_dir: Path, out_dir: Path
             "sha256": loadable_sha,
             "size_bytes": loadable.stat().st_size,
         },
+        "complexity": {
+            "loadable_size_bytes": loadable.stat().st_size,
+            "input_shape_nchw": [1, 1, 28, 28],
+            "output_elements": 10,
+            "hwl_count": 10,
+            "operation_counts": {
+                "Convolution": 4,
+                "SDP": 4,
+                "PDP": 2,
+                "CDP": 0,
+                "Rubik": 0,
+                "BDMA": 0,
+            },
+        },
         "output_protobuf": {
             "path": "output.protobuf",
             "sha256": sha256_file(out_dir / "output.protobuf"),

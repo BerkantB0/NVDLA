@@ -23,6 +23,7 @@ EXPECTED_LENET_OPERATIONS = [
     {"processor": "Convolution", "index": 8},
     {"processor": "SDP", "index": 9},
 ]
+EXPECTED_ENGINES = ("Convolution", "SDP", "PDP", "CDP", "Rubik", "BDMA")
 
 
 def _verify(path: Path, expected: str) -> None:
@@ -42,6 +43,36 @@ def _copy_verified(source: Path, destination: Path, expected: str) -> dict[str, 
         "sha256": sha256_file(destination),
         "size_bytes": destination.stat().st_size,
     }
+
+
+def _validated_complexity(
+    manifest: dict[str, Any],
+    *,
+    expected_shape: list[int],
+    expected_output_elements: int,
+) -> dict[str, Any]:
+    complexity = manifest.get("complexity")
+    if not isinstance(complexity, dict):
+        raise ValueError(f"{manifest.get('name')} has no workload complexity metadata")
+    counts = complexity.get("operation_counts")
+    if not isinstance(counts, dict) or set(counts) != set(EXPECTED_ENGINES):
+        raise ValueError(
+            f"{manifest.get('name')} has incomplete operation-count metadata"
+        )
+    hwl_count = complexity.get("hwl_count")
+    if not isinstance(hwl_count, int) or hwl_count <= 0:
+        raise ValueError(f"{manifest.get('name')} has invalid HWL count")
+    if sum(counts.values()) != hwl_count:
+        raise ValueError(
+            f"{manifest.get('name')} operation counts do not equal its HWL count"
+        )
+    if complexity.get("input_shape_nchw") != expected_shape:
+        raise ValueError(f"{manifest.get('name')} has unexpected input dimensions")
+    if complexity.get("output_elements") != expected_output_elements:
+        raise ValueError(f"{manifest.get('name')} has unexpected output size")
+    if complexity.get("loadable_size_bytes") != manifest["loadable"].get("size_bytes"):
+        raise ValueError(f"{manifest.get('name')} has inconsistent loadable size")
+    return complexity
 
 
 def _write_deterministic_tree(source: Path, archive_path: Path) -> None:
@@ -108,6 +139,16 @@ def build_board_payload(
         raise ValueError(
             f"unexpected LeNet output vector: expected {EXPECTED_LENET_OUTPUT!r}, got {expected_output!r}"
         )
+    lenet_complexity = _validated_complexity(
+        lenet_manifest,
+        expected_shape=[1, 1, 28, 28],
+        expected_output_elements=10,
+    )
+    resnet_complexity = _validated_complexity(
+        resnet_manifest,
+        expected_shape=[1, 3, 224, 224],
+        expected_output_elements=1000,
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     sdp_out = out_dir / "sdp_regression_small"
@@ -184,6 +225,7 @@ def build_board_payload(
         "image": {**lenet_files["image"], "path": "input.pgm"},
         "expected_output": expected_output,
         "expected_operations": EXPECTED_LENET_OPERATIONS,
+        "complexity": lenet_complexity,
         "tolerance": {"type": "exact"},
     }
     write_json(lenet_out / "manifest.json", lenet_payload_manifest)
@@ -241,6 +283,7 @@ def build_board_payload(
             "preprocess": resnet_image.get("preprocess"),
         },
         "output_elements": resnet_manifest["output_elements"],
+        "complexity": resnet_complexity,
         "oracle": {
             **resnet_manifest["oracle"],
             "nvdla_exact": {

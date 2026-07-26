@@ -70,6 +70,21 @@ class BoardPayloadTests(unittest.TestCase):
                 "loadable": {
                     "path": "model.nvdla",
                     "sha256": sha256_file(lenet / "model.nvdla"),
+                    "size_bytes": (lenet / "model.nvdla").stat().st_size,
+                },
+                "complexity": {
+                    "loadable_size_bytes": (lenet / "model.nvdla").stat().st_size,
+                    "input_shape_nchw": [1, 1, 28, 28],
+                    "output_elements": 10,
+                    "hwl_count": 10,
+                    "operation_counts": {
+                        "Convolution": 4,
+                        "SDP": 4,
+                        "PDP": 2,
+                        "CDP": 0,
+                        "Rubik": 0,
+                        "BDMA": 0,
+                    },
                 },
                 "image": {
                     "path": "seven.pgm",
@@ -107,6 +122,21 @@ class BoardPayloadTests(unittest.TestCase):
                 "loadable": {
                     "path": "model.nvdla",
                     "sha256": sha256_file(resnet / "model.nvdla"),
+                    "size_bytes": (resnet / "model.nvdla").stat().st_size,
+                },
+                "complexity": {
+                    "loadable_size_bytes": (resnet / "model.nvdla").stat().st_size,
+                    "input_shape_nchw": [1, 3, 224, 224],
+                    "output_elements": 1000,
+                    "hwl_count": 246,
+                    "operation_counts": {
+                        "Convolution": 114,
+                        "SDP": 130,
+                        "PDP": 2,
+                        "CDP": 0,
+                        "Rubik": 0,
+                        "BDMA": 0,
+                    },
                 },
                 "image": {
                     "path": "input.jpg",
@@ -190,6 +220,29 @@ class BoardPayloadTests(unittest.TestCase):
             )
             self.assertEqual(sdp_manifest["source"]["nvdla_sw_base_sha"], "base")
             self.assertNotIn("nvdla_sw_sha", sdp_manifest["source"])
+            lenet_manifest = json.loads(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "lenet_small"
+                    / "manifest.json"
+                ).read_text()
+            )
+            self.assertEqual(lenet_manifest["complexity"]["hwl_count"], 10)
+            resnet_manifest = json.loads(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "resnet50_small"
+                    / "manifest.json"
+                ).read_text()
+            )
+            self.assertEqual(
+                resnet_manifest["complexity"]["operation_counts"]["Convolution"],
+                114,
+            )
 
     def test_rejects_source_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

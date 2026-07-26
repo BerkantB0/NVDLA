@@ -19,6 +19,13 @@ class ResNet50Tests(unittest.TestCase):
         workload.mkdir()
         output = artifact / "runtime-output" / "output.dimg"
         output.write_text("1 2 3\n")
+        (artifact / "serial.log").write_text(
+            "".join(
+                f"Completed {'Convolution' if index < 114 else 'SDP' if index < 244 else 'PDP'} "
+                f"operation index {index} ROI 0\n"
+                for index in range(246)
+            )
+        )
         loadable_hash = "1" * 64
         image_hash = "2" * 64
         lock = root / "lock.json"
@@ -37,7 +44,10 @@ class ResNet50Tests(unittest.TestCase):
         )
         write_json(
             workload / "generated-manifest.json",
-            {"oracle": {"nvdla_exact": {"status": "pending"}}},
+            {
+                "loadable": {"size_bytes": 1234},
+                "oracle": {"nvdla_exact": {"status": "pending"}},
+            },
         )
         write_json(
             artifact / "manifest.json",
@@ -72,6 +82,18 @@ class ResNet50Tests(unittest.TestCase):
                 (workload / "generated-manifest.json").read_text()
             )
             self.assertEqual(manifest["oracle"]["nvdla_exact"]["status"], "verified")
+            self.assertEqual(manifest["complexity"]["hwl_count"], 246)
+            self.assertEqual(
+                manifest["complexity"]["operation_counts"],
+                {
+                    "Convolution": 114,
+                    "SDP": 130,
+                    "PDP": 2,
+                    "CDP": 0,
+                    "Rubik": 0,
+                    "BDMA": 0,
+                },
+            )
             self.assertTrue((workload / "golden-output.dimg").is_file())
 
     def test_rejects_wrong_vp_configuration_during_promotion(self) -> None:

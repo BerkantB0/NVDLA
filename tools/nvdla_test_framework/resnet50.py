@@ -4,6 +4,7 @@ import hashlib
 import re
 import shutil
 import urllib.request
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -335,6 +336,13 @@ def build_resnet50_small_workload(
             "sha256": loadable_sha,
             "size_bytes": loadable.stat().st_size,
         },
+        "complexity": {
+            "loadable_size_bytes": loadable.stat().st_size,
+            "input_shape_nchw": [1, 3, 224, 224],
+            "output_elements": spec["output_elements"],
+            "hwl_count": None,
+            "operation_counts": {},
+        },
         "output_protobuf": {
             "path": "output.protobuf",
             "sha256": sha256_file(output_protobuf),
@@ -400,8 +408,37 @@ def promote_resnet50_small_golden(
             "ResNet-50 VP golden promotion failed: " + ", ".join(failed)
         )
 
+    operation_matches = re.findall(
+        r"Completed\s+([A-Za-z]+)\s+operation index\s+(\d+)\s+ROI",
+        (artifact_dir / "serial.log").read_text(encoding="utf-8", errors="replace"),
+    )
+    operation_by_index: dict[int, str] = {}
+    for processor, index_text in operation_matches:
+        index = int(index_text)
+        previous = operation_by_index.setdefault(index, processor)
+        if previous != processor:
+            raise ValueError(
+                f"ResNet-50 VP operation {index} has conflicting processors: "
+                f"{previous} and {processor}"
+            )
+    expected_hwl_count = vp["hwl_progress"]["total"]
+    if sorted(operation_by_index) != list(range(expected_hwl_count)):
+        raise ValueError(
+            "ResNet-50 VP operation sequence does not cover every HWL index"
+        )
+    operation_counts = Counter(operation_by_index.values())
     golden_path = workload_dir / "golden-output.dimg"
     shutil.copyfile(output_path, golden_path)
+    workload["complexity"] = {
+        "loadable_size_bytes": workload["loadable"]["size_bytes"],
+        "input_shape_nchw": [1, 3, 224, 224],
+        "output_elements": spec["output_elements"],
+        "hwl_count": expected_hwl_count,
+        "operation_counts": {
+            engine: operation_counts.get(engine, 0)
+            for engine in ("Convolution", "SDP", "PDP", "CDP", "Rubik", "BDMA")
+        },
+    }
     workload["oracle"]["nvdla_exact"] = {
         "status": "verified",
         "source": "source-built nv_small VP",
