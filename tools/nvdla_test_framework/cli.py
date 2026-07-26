@@ -18,8 +18,13 @@ from .lockcheck import run_lock_check
 from .petalinux import run_petalinux_dts
 from .petalinux_rootfs import run_petalinux_rootfs_audit
 from .petalinux_sd import run_petalinux_sd_bundle
+from .performance import import_performance_archives
 from .report import write_report
-from .resnet50 import build_resnet50_small_workload, fetch_resnet50_sources
+from .resnet50 import (
+    build_resnet50_small_workload,
+    fetch_resnet50_sources,
+    promote_resnet50_small_golden,
+)
 from .stock import run_stock_sdp_control
 from .trace import DEFAULT_CSB_BASE, run_trace_compare, run_trace_parse
 from .vp_audit import run_vp_small_config_audit
@@ -94,6 +99,14 @@ def main(argv: list[str] | None = None) -> int:
     resnet_workload.add_argument("--nvdla-sw", required=True, type=Path)
     resnet_workload.add_argument("--out", required=True, type=Path)
 
+    resnet_golden = sub.add_parser(
+        "resnet50-golden-promote",
+        help="Promote a verified source-built nv_small VP output",
+    )
+    resnet_golden.add_argument("--lock", required=True, type=Path)
+    resnet_golden.add_argument("--workload-dir", required=True, type=Path)
+    resnet_golden.add_argument("--artifact", required=True, type=Path)
+
     audit = sub.add_parser("vp-small-config-audit", help="Record nv_small VP/KMD configuration evidence")
     audit.add_argument("--lock", required=True, type=Path)
     audit.add_argument("--work-dir", required=True, type=Path)
@@ -139,6 +152,13 @@ def main(argv: list[str] | None = None) -> int:
     board_payload.add_argument("--out-dir", required=True, type=Path)
     board_payload.add_argument("--archive", required=True, type=Path)
     board_payload.add_argument("--manifest", required=True, type=Path)
+
+    performance = sub.add_parser(
+        "performance-import",
+        help="Analyze one model's board benchmark archives",
+    )
+    performance.add_argument("--archive", required=True, action="append", type=Path)
+    performance.add_argument("--out", required=True, type=Path)
 
     trace_parse = sub.add_parser("trace-parse", help="Canonicalize NVDLA VP SystemC transactions")
     trace_parse.add_argument("--input", required=True, type=Path)
@@ -195,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
             args.nvdla_sw,
             args.out,
         )
+    if args.command == "resnet50-golden-promote":
+        return promote_resnet50_small_golden(
+            args.lock,
+            args.workload_dir,
+            args.artifact,
+        )
     if args.command == "vp-small-config-audit":
         return run_vp_small_config_audit(args.lock, args.work_dir, args.artifacts)
     if args.command == "sdp-small-diagnostic":
@@ -225,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_board_artifact_import(args.archive, args.out, args.serial_log)
     if args.command == "board-payload":
         return run_board_payload(args.workloads_dir, args.out_dir, args.archive, args.manifest)
+    if args.command == "performance-import":
+        return import_performance_archives(args.archive, args.out)
     if args.command == "trace-parse":
         return run_trace_parse(
             args.input,

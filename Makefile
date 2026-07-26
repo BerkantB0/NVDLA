@@ -10,10 +10,10 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
-        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload vp-resnet50-small-golden vp-resnet50-small-golden-start vp-resnet50-small-golden-status lenet-compare \
+        vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload vp-resnet50-small-golden vp-resnet50-small-golden-promote vp-resnet50-small-golden-start vp-resnet50-small-golden-status lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
-        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect \
+        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report \
         test report clean
 
 help:
@@ -59,6 +59,7 @@ help:
 	  '  make vp-lenet-small-stability Run 100-repeat nv_small LeNet stability gate' \
 	  '  make vp-resnet50-small-workload Build pinned nv_small INT8 ResNet-50 workload' \
 	  '  make vp-resnet50-small-golden Run ResNet-50 on source-built nv_small VP' \
+	  '  make vp-resnet50-small-golden-promote Verify and promote the completed VP output' \
 	  '  make vp-resnet50-small-golden-start Start detached ResNet-50 VP golden run' \
 	  '  make vp-resnet50-small-golden-status Inspect detached VP progress/result' \
 	  '  VP_HW_CONFIG=small VP_RUNNER=source-docker LANE=modern make vp-test' \
@@ -82,6 +83,7 @@ help:
 	  '  make petalinux-sd-bundle Build a hashed SD-card handoff without writing media' \
 	  '  make petalinux-board-payload Build the hash-verified nv_small test payload' \
 	  '  make petalinux-board-collect Import a manual or SSH board evidence archive' \
+	  '  make performance-report Analyze one model benchmark campaign from ARCHIVES' \
 	  '' \
 	  'Reports:' \
 	  '  make report          Summarize artifacts into artifacts/latest-report.md'
@@ -220,6 +222,18 @@ vp-resnet50-small-golden: vp-resnet50-small-workload
 		VP_TRACE=0 \
 		scripts/run_modern_lenet_full_control.sh
 
+vp-resnet50-small-golden-promote: vp-resnet50-small-workload
+	@artifact="$${VP_RESNET50_ARTIFACT:-$$(find artifacts -maxdepth 1 -type d -name '*-vp-modern-resnet50-small' -printf '%T@ %p\n' 2>/dev/null | sort -nr | sed -n '1s/^[^ ]* //p')}"; \
+	test -n "$$artifact" || { \
+		echo "No completed nv_small ResNet-50 VP artifact found." >&2; \
+		echo "Run make vp-resnet50-small-golden first or set VP_RESNET50_ARTIFACT." >&2; \
+		exit 2; \
+	}; \
+	$(PYTHON) -m nvdla_test_framework resnet50-golden-promote \
+		--lock repro.lock.json \
+		--workload-dir artifacts/workloads/resnet50_small \
+		--artifact "$$artifact"
+
 vp-resnet50-small-golden-start:
 	@scripts/vp_resnet50_background.sh start
 
@@ -299,11 +313,18 @@ petalinux-package:
 petalinux-sd-bundle:
 	@scripts/petalinux_sd_bundle.sh
 
-petalinux-board-payload: workloads vp-lenet-small-workload vp-resnet50-small-workload
+petalinux-board-payload: workloads vp-lenet-small-workload vp-resnet50-small-golden-promote
 	@scripts/petalinux_board_payload.sh
 
 petalinux-board-collect:
 	@scripts/petalinux_board_collect.sh
+
+performance-report:
+	@test -n "$${ARCHIVES:-}" || { echo "Set ARCHIVES to one model's benchmark tarballs" >&2; exit 2; }
+	@set -- $${ARCHIVES}; args=""; \
+	for archive in "$$@"; do args="$$args --archive $$archive"; done; \
+	$(PYTHON) -m nvdla_test_framework performance-import $$args \
+		--out "$${PERFORMANCE_OUT:-artifacts/performance-report}"
 
 test: doctor lock-check unit xsa-audit vp-reference petalinux-smoke
 
