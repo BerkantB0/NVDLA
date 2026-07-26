@@ -1,0 +1,180 @@
+From 8265e8214ef1c7a5a9884fb4ebf1a6eb15ace465 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 26 Jul 2026 22:14:22 +0100
+Subject: [PATCH 17/17] umd: wake emulator worker when tasks are queued
+
+The emulator worker polls its task queue every 500 ms. This adds up to
+500 ms of avoidable latency to each emulator task and accesses the queue
+concurrently without synchronization.
+
+Protect the queue and worker state with a mutex, wait for work on a
+condition variable, and notify blocking submitters after processing
+completes. This preserves the existing blocking semantics without
+periodic polling.
+
+Tested by cross-building nvdla_runtime and libnvdla_runtime.so with the
+pinned Buildroot ARM64 toolchain.
+
+Signed-off-by: Codex <codex@local>
+---
+ umd/core/src/runtime/Emulator.cpp            | 69 ++++++++++++--------
+ umd/core/src/runtime/include/priv/Emulator.h |  5 ++
+ 2 files changed, 47 insertions(+), 27 deletions(-)
+
+diff --git a/umd/core/src/runtime/Emulator.cpp b/umd/core/src/runtime/Emulator.cpp
+index 6121c13..edfbc91 100644
+--- a/umd/core/src/runtime/Emulator.cpp
++++ b/umd/core/src/runtime/Emulator.cpp
+@@ -41,6 +41,7 @@ namespace priv
+ {
+ 
+ Emulator::Emulator() :
++        m_taskActive(false),
+         m_thread(),
+         m_threadActive(false),
+         m_signalShutdown(false)
+@@ -55,19 +56,21 @@ Emulator::~Emulator()
+ 
+ bool Emulator::ping()
+ {
++    std::lock_guard<std::mutex> lock(m_taskMutex);
+     return m_threadActive;
+ }
+ 
+ NvDlaError Emulator::submit(NvU8* task_mem, bool blocking)
+ {
++    std::unique_lock<std::mutex> lock(m_taskMutex);
++
+     m_taskQueue.push(task_mem);
++    m_taskCondition.notify_one();
+ 
+-    if (blocking) {
+-        // wait until queue becomes empty
+-        while (!m_taskQueue.empty()) {
+-            NvDlaThreadYield();
+-        }
+-    }
++    if (blocking)
++        m_taskCondition.wait(lock, [this] {
++            return m_taskQueue.empty() && !m_taskActive;
++        });
+ 
+     return NvDlaSuccess;
+ }
+@@ -96,7 +99,11 @@ bool Emulator::stop()
+ 
+     if (m_thread)
+     {
+-        m_signalShutdown = true;
++        {
++            std::lock_guard<std::mutex> lock(m_taskMutex);
++            m_signalShutdown = true;
++        }
++        m_taskCondition.notify_one();
+         NvDlaThreadJoin(m_thread);
+         m_thread = NULL;
+     }
+@@ -107,17 +114,32 @@ bool Emulator::stop()
+ bool Emulator::run()
+ {
+     bool ok = true;
+-    m_threadActive = true;
+ 
+     EMUInterface* emu_if = new EMUInterfaceA();
+ 
++    {
++        std::lock_guard<std::mutex> lock(m_taskMutex);
++        m_threadActive = true;
++    }
++
+     NvDlaDebugPrintf("Emulator starting\n");
+ 
+     while (true)
+     {
+-        if (!m_taskQueue.empty())
+         {
++            std::unique_lock<std::mutex> lock(m_taskMutex);
++            m_taskCondition.wait(lock, [this] {
++                return m_signalShutdown || !m_taskQueue.empty();
++            });
++
++            if (m_signalShutdown && m_taskQueue.empty())
++                break;
++
+             NvU8* task_mem = m_taskQueue.front();
++            m_taskQueue.pop();
++            m_taskActive = true;
++            lock.unlock();
++
+             NvDlaDebugPrintf("Work Found!\n");
+ 
+             EMUTaskDescAccessor task_desc = emu_if->taskDescAccessor(task_mem);
+@@ -144,31 +166,24 @@ bool Emulator::run()
+             processTask(task_mem, mappedAddressList);
+             NvDlaDebugPrintf("Work Done\n");
+ 
+-            m_taskQueue.pop();
+-            continue;
+-        }
+-
+-        if (m_signalShutdown)
+-        {
+-            NvDlaDebugPrintf("Shutdown signal received, exiting\n");
+-            break;
+-        }
+-
+-        if (m_taskQueue.empty())
+-        {
+-            NvDlaSleepMS(500);
++            lock.lock();
++            m_taskActive = false;
++            lock.unlock();
++            m_taskCondition.notify_all();
+         }
+     }
+ 
+-    // Cleanup
+-    while (!m_taskQueue.empty())
+     {
+-        m_taskQueue.pop();
++        std::lock_guard<std::mutex> lock(m_taskMutex);
++        while (!m_taskQueue.empty())
++            m_taskQueue.pop();
++        m_taskActive = false;
++        m_threadActive = false;
++        m_signalShutdown = false;
+     }
++    m_taskCondition.notify_all();
+ 
+     delete emu_if;
+-    m_threadActive = false;
+-    m_signalShutdown = false;
+ 
+     return ok;
+ }
+diff --git a/umd/core/src/runtime/include/priv/Emulator.h b/umd/core/src/runtime/include/priv/Emulator.h
+index c21d9f1..5add934 100644
+--- a/umd/core/src/runtime/include/priv/Emulator.h
++++ b/umd/core/src/runtime/include/priv/Emulator.h
+@@ -29,6 +29,8 @@
+ #ifndef NVDLA_PRIV_EMULATOR_H
+ #define NVDLA_PRIV_EMULATOR_H
+ 
++#include <condition_variable>
++#include <mutex>
+ #include <queue>
+ 
+ #include "priv/EMUInterface.h"
+@@ -73,6 +75,9 @@ protected:
+ 
+ private:
+     std::queue<NvU8*> m_taskQueue;
++    std::condition_variable m_taskCondition;
++    std::mutex m_taskMutex;
++    bool m_taskActive;
+ 
+     NvDlaThreadHandle m_thread;
+     bool m_threadActive;
+-- 
+2.43.0
+

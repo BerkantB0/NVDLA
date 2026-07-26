@@ -1,7 +1,7 @@
-From 8fe1aadcb9f5de5671cc3862b554c7ed83bd363a Mon Sep 17 00:00:00 2001
+From 0294d116266f83d4db500a9d2e0e3e4470182332 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Thu, 25 Jun 2026 19:48:00 +0300
-Subject: [PATCH 07/16] umd: allow runtime executable linker flags
+Subject: [PATCH 07/17] umd: allow runtime executable linker flags
 
 Some modern cross toolchains default to position-independent executables. The
 runtime application links the upstream prebuilt static libjpeg.a, which is not
