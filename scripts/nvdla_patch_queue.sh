@@ -138,6 +138,10 @@ check_queue() {
     : > "$log"
     local rc=0
     for patch in "$PATCH_DIR"/*.patch; do
+      if ! grep -q '^diff --git a/kmd/' "$patch"; then
+        echo "Skipping $(basename "$patch") (no KMD changes)" | tee -a "$log"
+        continue
+      fi
       echo "Checking $(basename "$patch")" | tee -a "$log"
       if ! "$LINUX/scripts/checkpatch.pl" --no-tree "$patch" 2>&1 | tee -a "$log"; then
         rc=1

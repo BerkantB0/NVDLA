@@ -1,0 +1,92 @@
+From 44783cbba17388dd4e459bf4c518d70a8118472e Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 26 Jul 2026 17:50:30 +0100
+Subject: [PATCH 16/16] umd: record profiling clock measurement overhead
+
+The structured profile records the monotonic clock resolution, but does not
+quantify the cost of the clock pair around each measured interval. This
+leaves observer overhead to assumption.
+
+Measure the minimum cost of 1000 back-to-back CLOCK_MONOTONIC_RAW calls
+and report it as metadata. The calibration runs once during opt-in
+profiling and does not alter accelerator submission, scheduling, or output
+handling.
+
+Signed-off-by: Codex <codex@local>
+---
+ umd/apps/runtime/RuntimeTest.cpp | 17 +++++++++++++++++
+ umd/apps/runtime/RuntimeTest.h   |  2 ++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/umd/apps/runtime/RuntimeTest.cpp b/umd/apps/runtime/RuntimeTest.cpp
+index f4b5845..e756054 100644
+--- a/umd/apps/runtime/RuntimeTest.cpp
++++ b/umd/apps/runtime/RuntimeTest.cpp
+@@ -64,6 +64,20 @@ static NvU64 elapsedNs(NvU64 before)
+     return monotonicRawNs() - before;
+ }
+ 
++static NvU64 measureClockPairOverheadNs()
++{
++    NvU64 minimum = ~0ULL;
++
++    for (NvU32 index = 0; index < 1000; ++index)
++    {
++        NvU64 before = monotonicRawNs();
++        NvU64 overhead = elapsedNs(before);
++        if (overhead < minimum)
++            minimum = overhead;
++    }
++    return minimum;
++}
++
+ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+                                     const TestInfo* i)
+ {
+@@ -82,6 +96,7 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+             "  \"schema_version\": 1,\n"
+             "  \"clock\": \"CLOCK_MONOTONIC_RAW\",\n"
+             "  \"clock_resolution_ns\": %llu,\n"
++            "  \"clock_pair_overhead_ns\": %llu,\n"
+             "  \"warmup_iterations\": %u,\n"
+             "  \"measured_iterations\": %u,\n"
+             "  \"outputs_consistent\": %s,\n"
+@@ -103,6 +118,7 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+             "  },\n"
+             "  \"samples\": [\n",
+             (unsigned long long)profile.clockResolutionNs,
++            (unsigned long long)profile.clockPairOverheadNs,
+             appArgs->warmupIterations,
+             appArgs->measuredIterations,
+             profile.outputsConsistent ? "true" : "false",
+@@ -569,6 +585,7 @@ NvDlaError run(const TestAppArgs* appArgs, TestInfo* i)
+         i->profile.clockResolutionNs =
+             (NvU64)resolution.tv_sec * 1000000000ULL +
+             (NvU64)resolution.tv_nsec;
++    i->profile.clockPairOverheadNs = measureClockPairOverheadNs();
+ 
+     /* Create runtime instance */
+     NvDlaDebugPrintf("creating new runtime context...\n");
+diff --git a/umd/apps/runtime/RuntimeTest.h b/umd/apps/runtime/RuntimeTest.h
+index 76737f5..544bea4 100644
+--- a/umd/apps/runtime/RuntimeTest.h
++++ b/umd/apps/runtime/RuntimeTest.h
+@@ -51,6 +51,7 @@ struct PerformanceProfile
+ {
+     PerformanceProfile() :
+         clockResolutionNs(0),
++        clockPairOverheadNs(0),
+         runtimeCreateNs(0),
+         loadableReadNs(0),
+         runtimeLoadNs(0),
+@@ -69,6 +70,7 @@ struct PerformanceProfile
+     {}
+ 
+     NvU64 clockResolutionNs;
++    NvU64 clockPairOverheadNs;
+     NvU64 runtimeCreateNs;
+     NvU64 loadableReadNs;
+     NvU64 runtimeLoadNs;
+-- 
+2.43.0
+
