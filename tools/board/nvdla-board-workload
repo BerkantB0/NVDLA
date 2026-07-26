@@ -502,7 +502,7 @@ while [ "$index" -le "$REPEAT" ]; do
                 {
                     for (field = 1; field <= NF; field++) {
                         value = $field + 0
-                        index = count++
+                        class_index = count++
                         for (rank = 1; rank <= 5; rank++) {
                             if (!(rank in best) || value > best[rank]) {
                                 for (move = 5; move > rank; move--) {
@@ -510,7 +510,7 @@ while [ "$index" -le "$REPEAT" ]; do
                                     best_index[move] = best_index[move - 1]
                                 }
                                 best[rank] = value
-                                best_index[rank] = index
+                                best_index[rank] = class_index
                                 break
                             }
                         }

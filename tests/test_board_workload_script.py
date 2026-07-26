@@ -32,6 +32,8 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("nvdla-board-workload: $MODE repeat-$index begin", text)
         self.assertIn("repeat_marker_written", text)
         self.assertIn('grep -Fq "$repeat_marker"', text)
+        self.assertIn("class_index = count++", text)
+        self.assertNotRegex(text, r"(?m)^[ \t]+index = count\+\+$")
         self.assertNotIn("/sys/bus/platform/devices/a0000000.nvdla", text)
         self.assertNotIn("/dev/mem", text)
         self.assertNotIn("rmmod", text)

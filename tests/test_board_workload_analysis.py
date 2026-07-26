@@ -245,6 +245,41 @@ class BoardWorkloadAnalysisTests(unittest.TestCase):
             self.assertEqual(result["correctness_status"], "inconclusive")
             self.assertEqual(result["repeat_results"][0]["output_elements"], 1000)
 
+    def test_recovers_resnet_top5_after_target_postprocessing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repeat = root / "repeat-1"
+            repeat.mkdir()
+            (repeat / "runtime.exit-status").write_text("0\n")
+            (repeat / "irq-delta.txt").write_text("246\n")
+            (repeat / "dmesg-delta.log").write_text(
+                "Exit: dla_initiate_processors status=0\n"
+                "Completed SDP operation index 245 ROI 0\n"
+                "246 HWLs done, totally 246 layers\n"
+            )
+            values = [0] * 1000
+            values[278] = 50
+            values[287] = 40
+            output = " ".join(str(value) for value in values) + "\n"
+            (repeat / "output.txt").write_text(output)
+            (repeat / "output.dimg").write_text(output)
+
+            result = analyze_board_workload(
+                root,
+                {"mode": "resnet50", "status": "1", "repeat_requested": "1"},
+            )
+
+            repeat_result = result["repeat_results"][0]
+            self.assertEqual(repeat_result["status"], "pass")
+            self.assertEqual(repeat_result["classification"], "execution-pass-oracle-pending")
+            self.assertEqual(
+                repeat_result["top5"][:2],
+                [
+                    {"rank": 1, "index": 278, "value": 50},
+                    {"rank": 2, "index": 287, "value": 40},
+                ],
+            )
+
     def test_rejects_partial_resnet_hwl_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
