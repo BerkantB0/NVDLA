@@ -1,4 +1,4 @@
-From 70ae646599df122b5b5cf3092cd3c948a7969b98 Mon Sep 17 00:00:00 2001
+From a7ea0765cd5728a1d508e0c3d6d5b4241e4cec7c Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Sun, 26 Jul 2026 17:50:30 +0100
 Subject: [PATCH 16/17] umd: record profiling clock measurement overhead
@@ -19,7 +19,7 @@ Signed-off-by: Codex <codex@local>
  2 files changed, 19 insertions(+)
 
 diff --git a/umd/apps/runtime/RuntimeTest.cpp b/umd/apps/runtime/RuntimeTest.cpp
-index f4b5845..e756054 100644
+index 7968ede..d5e9710 100644
 --- a/umd/apps/runtime/RuntimeTest.cpp
 +++ b/umd/apps/runtime/RuntimeTest.cpp
 @@ -64,6 +64,20 @@ static NvU64 elapsedNs(NvU64 before)
@@ -44,7 +44,7 @@ index f4b5845..e756054 100644
                                      const TestInfo* i)
  {
 @@ -82,6 +96,7 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
-             "  \"schema_version\": 1,\n"
+             "  \"schema_version\": 2,\n"
              "  \"clock\": \"CLOCK_MONOTONIC_RAW\",\n"
              "  \"clock_resolution_ns\": %llu,\n"
 +            "  \"clock_pair_overhead_ns\": %llu,\n"
@@ -68,7 +68,7 @@ index f4b5845..e756054 100644
      /* Create runtime instance */
      NvDlaDebugPrintf("creating new runtime context...\n");
 diff --git a/umd/apps/runtime/RuntimeTest.h b/umd/apps/runtime/RuntimeTest.h
-index 76737f5..544bea4 100644
+index 6cbeb71..f2a4040 100644
 --- a/umd/apps/runtime/RuntimeTest.h
 +++ b/umd/apps/runtime/RuntimeTest.h
 @@ -51,6 +51,7 @@ struct PerformanceProfile

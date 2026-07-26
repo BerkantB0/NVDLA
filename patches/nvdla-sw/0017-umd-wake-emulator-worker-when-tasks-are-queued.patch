@@ -1,4 +1,4 @@
-From 8265e8214ef1c7a5a9884fb4ebf1a6eb15ace465 Mon Sep 17 00:00:00 2001
+From b53b1afa2ff28faa9f5111eac3dd03e2602612eb Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Sun, 26 Jul 2026 22:14:22 +0100
 Subject: [PATCH 17/17] umd: wake emulator worker when tasks are queued

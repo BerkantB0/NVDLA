@@ -1,4 +1,4 @@
-From 9a75f1eb868522db5f523e76d680586d30b0344f Mon Sep 17 00:00:00 2001
+From ce7329cd2b1caa47bb5cb1635222063cc07c24f1 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Sun, 26 Jul 2026 17:18:48 +0100
 Subject: [PATCH 15/17] kmd: make firmware progress logging opt-in
