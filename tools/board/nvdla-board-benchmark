@@ -18,6 +18,7 @@ fi
 REGIME="${REGIME:-all}"
 POWER_SAMPLE="${POWER_SAMPLE:-0}"
 FIRMWARE_LOG="${FIRMWARE_LOG:-0}"
+BENCH_CPU="${BENCH_CPU:-2}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-30}"
 POWER_IDLE_SECONDS="${POWER_IDLE_SECONDS:-10}"
 if [ "$MODEL" = "resnet50" ]; then
@@ -31,6 +32,18 @@ case "$REGIME" in
 esac
 case "$POWER_SAMPLE" in 0|1) ;; *) echo "POWER_SAMPLE must be 0 or 1" >&2; exit 2 ;; esac
 case "$FIRMWARE_LOG" in 0|1) ;; *) echo "FIRMWARE_LOG must be 0 or 1" >&2; exit 2 ;; esac
+case "$BENCH_CPU" in
+    none) ;;
+    *[!0-9]*|"") echo "BENCH_CPU must be an online CPU number or none" >&2; exit 2 ;;
+    *)
+        if [ ! -d "/sys/devices/system/cpu/cpu$BENCH_CPU" ] ||
+           { [ -r "/sys/devices/system/cpu/cpu$BENCH_CPU/online" ] &&
+             [ "$(cat "/sys/devices/system/cpu/cpu$BENCH_CPU/online")" != "1" ]; }; then
+            echo "BENCH_CPU is not online: $BENCH_CPU" >&2
+            exit 2
+        fi
+        ;;
+esac
 
 if [ "$MODEL" = "lenet" ]; then
     COLD_STARTS="${COLD_STARTS:-10}"
@@ -145,6 +158,7 @@ finish() {
         echo "settle_seconds=$SETTLE_SECONDS"
         echo "power_sample=$POWER_SAMPLE"
         echo "firmware_log=$FIRMWARE_LOG"
+        echo "benchmark_cpu=$BENCH_CPU"
         echo "power_idle_seconds=$POWER_IDLE_SECONDS"
         echo "runtime_timeout_seconds=$RUNTIME_TIMEOUT"
         echo "irq_before=$IRQ_BEFORE"
@@ -189,6 +203,7 @@ esac
 capture uname.txt uname -a
 capture cmdline.txt cat /proc/cmdline
 capture cpuinfo.txt cat /proc/cpuinfo
+capture benchmark-runner-status.txt cat /proc/self/status
 capture meminfo-before.txt cat /proc/meminfo
 capture loadavg-before.txt cat /proc/loadavg
 capture interrupts-before.txt cat /proc/interrupts
@@ -329,8 +344,13 @@ run_profile() {
     set +e
     (
         cd "$run_dir"
-        nvdla-benchmark-launch --elapsed-ns launch-elapsed-ns.txt \
-            --timeout-seconds "$RUNTIME_TIMEOUT" -- \
+        set -- nvdla-benchmark-launch \
+            --elapsed-ns launch-elapsed-ns.txt \
+            --rusage rusage.env
+        if [ "$BENCH_CPU" != "none" ]; then
+            set -- "$@" --cpu "$BENCH_CPU"
+        fi
+        set -- "$@" --timeout-seconds "$RUNTIME_TIMEOUT" -- \
             env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
             nvdla_runtime \
                 --loadable "$LOADABLE" \
@@ -339,6 +359,7 @@ run_profile() {
                 --profile-json profile.json \
                 --warmup "$warmups" \
                 --iterations "$iterations"
+        "$@"
     ) >"$run_dir/runtime.stdout.log" 2>"$run_dir/runtime.stderr.log"
     runtime_status=$?
     set -e

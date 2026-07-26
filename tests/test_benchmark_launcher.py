@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -34,12 +35,38 @@ class BenchmarkLauncherTests(unittest.TestCase):
             )
             self.assertEqual(build.returncode, 0, build.stderr)
             elapsed = root / "elapsed.txt"
+            rusage = root / "rusage.env"
+            affinity = root / "affinity.txt"
+            cpu = min(os.sched_getaffinity(0))
             result = subprocess.run(
-                [str(binary), "--elapsed-ns", str(elapsed), "--", "/bin/true"],
+                [
+                    str(binary),
+                    "--elapsed-ns",
+                    str(elapsed),
+                    "--rusage",
+                    str(rusage),
+                    "--cpu",
+                    str(cpu),
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    f"grep '^Cpus_allowed_list:' /proc/self/status > {affinity}",
+                ],
                 check=False,
             )
             self.assertEqual(result.returncode, 0)
             self.assertGreater(int(elapsed.read_text()), 0)
+            fields = dict(
+                line.split("=", 1)
+                for line in rusage.read_text().splitlines()
+            )
+            self.assertEqual(fields["cpu_affinity"], str(cpu))
+            self.assertIn("voluntary_context_switches", fields)
+            self.assertIn("involuntary_context_switches", fields)
+            self.assertEqual(
+                affinity.read_text().split(":", 1)[1].strip(),
+                str(cpu),
+            )
 
             timed = subprocess.run(
                 [

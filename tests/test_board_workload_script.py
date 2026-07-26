@@ -53,6 +53,9 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("CLOCK_EXPECTED_HZ", text)
         self.assertIn("outputs_consistent", text)
         self.assertIn("golden-output.dimg", text)
+        self.assertIn('BENCH_CPU="${BENCH_CPU:-2}"', text)
+        self.assertIn("--rusage rusage.env", text)
+        self.assertIn('--cpu "$BENCH_CPU"', text)
         self.assertNotIn("/dev/mem", text)
         self.assertNotIn("rmmod", text)
 
