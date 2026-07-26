@@ -148,6 +148,7 @@
       },
       "expected_loadable_sha256": "1BE9C27E7D9069547A65B96368955815DC917F82E4CFFC1483435F1425C25A34",
       "expected_output_protobuf_sha256": "55995DCF3F1A8301E3588825FE0C4970CB5FF460208FFFB35361D5C4260176FE",
+      "expected_nv_small_vp_output_sha256": "842D34F68EA6D9360D239BD9921A600831B080FDDB69695EE0BF579170F65C7F",
       "output_elements": 1000,
       "target": {
         "config": "nv_small",

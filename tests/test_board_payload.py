@@ -81,6 +81,7 @@ class BoardPayloadTests(unittest.TestCase):
 
         (resnet / "model.nvdla").write_bytes(b"resnet-loadable")
         (resnet / "input.jpg").write_bytes(b"jpeg-input")
+        (resnet / "golden-output.dimg").write_bytes(b"resnet-golden")
         write_json(
             resnet / "generated-manifest.json",
             {
@@ -114,7 +115,13 @@ class BoardPayloadTests(unittest.TestCase):
                 },
                 "output_elements": 1000,
                 "oracle": {
-                    "nvdla_exact": {"status": "pending"},
+                    "nvdla_exact": {
+                        "status": "verified",
+                        "output": {
+                            "path": "golden-output.dimg",
+                            "sha256": sha256_file(resnet / "golden-output.dimg"),
+                        },
+                    },
                     "fp32_context": {"status": "context-only", "top5": []},
                 },
             },
@@ -157,6 +164,15 @@ class BoardPayloadTests(unittest.TestCase):
             self.assertIn("resnet50", payload["workloads"])
             self.assertTrue(
                 (root / "first" / "nvdla-tests" / "resnet50_small" / "loadable.nvdla").is_file()
+            )
+            self.assertTrue(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "resnet50_small"
+                    / "golden-output.dimg"
+                ).is_file()
             )
             sdp_manifest = json.loads(
                 (

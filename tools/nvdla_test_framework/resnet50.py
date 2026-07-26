@@ -359,3 +359,71 @@ def build_resnet50_small_workload(
     print(f"ResNet-50 nv_small workload ready: {out_dir}")
     print("Exact NVDLA tensor oracle: pending source-built nv_small VP run")
     return 0
+
+
+def promote_resnet50_small_golden(
+    lock_path: Path,
+    workload_dir: Path,
+    artifact_dir: Path,
+) -> int:
+    spec = _spec(lock_path)
+    workload_manifest_path = workload_dir / "generated-manifest.json"
+    vp_manifest_path = artifact_dir / "manifest.json"
+    output_path = artifact_dir / "runtime-output" / "output.dimg"
+    workload = read_json(workload_manifest_path)
+    vp = read_json(vp_manifest_path)
+
+    expected = {
+        "loadable": spec["expected_loadable_sha256"],
+        "image": spec["preprocess"]["expected_output_sha256"],
+        "output": spec["expected_nv_small_vp_output_sha256"],
+    }
+    checks = {
+        "status": vp.get("status") == "pass",
+        "mode": vp.get("mode") == "resnet50_small_golden",
+        "hardware_config": vp.get("vp_hw_config") == "small",
+        "runner": vp.get("vp_runner") == "source-docker",
+        "output_format": vp.get("output", {}).get("integer_format") is True,
+        "output_elements": vp.get("output", {}).get("elements") == spec["output_elements"],
+        "hwl_completion": vp.get("hwl_progress", {}).get("completed")
+        == vp.get("hwl_progress", {}).get("total")
+        == 246,
+        "loadable_hash": vp.get("inputs", {}).get("loadable", {}).get("sha256", "").lower()
+        == expected["loadable"].lower(),
+        "image_hash": vp.get("inputs", {}).get("image", {}).get("sha256", "").lower()
+        == expected["image"].lower(),
+        "output_hash": sha256_file(output_path).lower() == expected["output"].lower(),
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise ValueError(
+            "ResNet-50 VP golden promotion failed: " + ", ".join(failed)
+        )
+
+    golden_path = workload_dir / "golden-output.dimg"
+    shutil.copyfile(output_path, golden_path)
+    workload["oracle"]["nvdla_exact"] = {
+        "status": "verified",
+        "source": "source-built nv_small VP",
+        "source_artifact": str(artifact_dir),
+        "source_manifest_sha256": sha256_file(vp_manifest_path),
+        "output": {
+            "path": golden_path.name,
+            "sha256": sha256_file(golden_path),
+            "size_bytes": golden_path.stat().st_size,
+            "elements": spec["output_elements"],
+        },
+        "configuration_proof": {
+            "vp_hw_config": vp["vp_hw_config"],
+            "vp_runner": vp["vp_runner"],
+            "vp_binary_sha256": vp.get("vp_binary", {}).get("sha256"),
+            "cmod_sha256": vp.get("vp_cmod", {}).get("sha256"),
+            "dtb_sha256": vp.get("inputs", {}).get("dtb", {}).get("sha256"),
+            "module_sha256": vp.get("inputs", {}).get("module", {}).get("sha256"),
+            "runtime_sha256": vp.get("inputs", {}).get("runtime", {}).get("sha256"),
+            "hwl_progress": vp["hwl_progress"],
+        },
+    }
+    write_json(workload_manifest_path, workload)
+    print(f"Verified ResNet-50 nv_small golden: {golden_path}")
+    return 0

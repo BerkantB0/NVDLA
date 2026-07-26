@@ -197,6 +197,15 @@ def build_board_payload(
             resnet_image["sha256"],
         ),
     }
+    resnet_oracle = resnet_manifest.get("oracle", {}).get("nvdla_exact", {})
+    if resnet_oracle.get("status") != "verified":
+        raise ValueError("ResNet-50 nv_small VP golden has not been promoted")
+    resnet_golden = resnet_oracle.get("output", {})
+    resnet_files["golden"] = _copy_verified(
+        resnet_source / resnet_golden["path"],
+        resnet_out / "golden-output.dimg",
+        resnet_golden["sha256"],
+    )
     resnet_payload_manifest = {
         "schema_version": 1,
         "name": "resnet50_small",
@@ -227,13 +236,23 @@ def build_board_payload(
             "preprocess": resnet_image.get("preprocess"),
         },
         "output_elements": resnet_manifest["output_elements"],
-        "oracle": resnet_manifest["oracle"],
+        "oracle": {
+            **resnet_manifest["oracle"],
+            "nvdla_exact": {
+                **resnet_oracle,
+                "output": {
+                    **resnet_files["golden"],
+                    "path": "golden-output.dimg",
+                    "elements": resnet_manifest["output_elements"],
+                },
+            },
+        },
         "pass_policy": {
             "execution": (
                 "runtime exit zero, positive IRQ delta, all reported HWLs complete, "
                 "and exactly 1000 integer output elements"
             ),
-            "tensor_correctness": "pending independent source-built nv_small VP golden",
+            "tensor_correctness": "exact DIMG match to source-built nv_small VP golden",
         },
     }
     write_json(resnet_out / "manifest.json", resnet_payload_manifest)
