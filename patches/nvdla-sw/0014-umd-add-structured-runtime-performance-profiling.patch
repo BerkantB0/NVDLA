@@ -1,7 +1,7 @@
 From 3efd7e7f39bb566ceaede5d14a5f7e17abec0196 Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Sun, 26 Jul 2026 17:17:51 +0100
-Subject: [PATCH 14/14] umd: add structured runtime performance profiling
+Subject: [PATCH 14/15] umd: add structured runtime performance profiling
 
 Add opt-in CLOCK_MONOTONIC_RAW profiling for runtime setup, buffer preparation, blocking submissions, output extraction, and teardown. Reuse one loaded model and bound buffer set for warm-up and measured submissions, and verify that every output remains byte-identical.
 
