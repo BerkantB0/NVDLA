@@ -19,6 +19,7 @@ BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-benchmark"
 BENCHMARK_LAUNCHER_MEMBER = "usr/bin/nvdla-benchmark-launch"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
+TIMESYNC_MEMBER = "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
 MODULE_PREFIX = "lib/modules/"
 MODULE_SUFFIX = "/extra/opendla.ko"
 FORBIDDEN_HOST_PREFIXES = ("/home/", "/mnt/", "/tmp/work/", "/build/tmp/")
@@ -85,6 +86,7 @@ def audit_petalinux_rootfs(
             "benchmark_launcher": BENCHMARK_LAUNCHER_MEMBER,
             "serial_autologin": AUTOLOGIN_MEMBER,
             "network_profile": NETWORK_MEMBER,
+            "timesync_profile": TIMESYNC_MEMBER,
             "module": module_members[0] if module_members else None,
         }
 
@@ -128,6 +130,19 @@ def audit_petalinux_rootfs(
                         "network profile is missing required settings: "
                         + ", ".join(missing_lines)
                     )
+            if label == "timesync_profile":
+                text = destination.read_text(encoding="utf-8", errors="replace")
+                required_lines = {
+                    "NTP=192.168.50.1",
+                    "FallbackNTP=",
+                    "RootDistanceMaxSec=30",
+                }
+                missing_lines = sorted(required_lines.difference(text.splitlines()))
+                if missing_lines:
+                    errors.append(
+                        "timesync profile is missing required settings: "
+                        + ", ".join(missing_lines)
+                    )
 
         available_by_name: dict[str, list[str]] = {}
         for name in members:
@@ -141,6 +156,7 @@ def audit_petalinux_rootfs(
             "benchmark_runner",
             "serial_autologin",
             "network_profile",
+            "timesync_profile",
         }:
             continue
         try:

@@ -14,3 +14,10 @@ address `192.168.50.2/24`, and expected directly connected host address
 `192.168.50.1/24`. It is not a generic NVDLA runtime requirement. Replace or
 omit it for routed networks, multiple boards on one Ethernet segment, other
 board models, or production deployment.
+
+The recipe also configures `systemd-timesyncd` to use the directly connected
+Windows host at `192.168.50.1`, with `RootDistanceMaxSec=30` because Windows
+Time reports a root distance above systemd's default acceptance threshold.
+This host-specific relaxation is intended only to make board artifact
+timestamps meaningful. It is not evidence of precision synchronization and
+must not be used for accelerator latency or performance measurements.

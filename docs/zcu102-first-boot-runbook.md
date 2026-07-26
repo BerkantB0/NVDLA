@@ -202,6 +202,22 @@ address on the dedicated wired adapter and keep normal internet routing on a
 separate interface. Do not attach multiple images using the fixed MAC address
 to the same Ethernet segment.
 
+The same direct-link profile configures `systemd-timesyncd` to use the Windows
+host:
+
+```ini
+[Time]
+NTP=192.168.50.1
+FallbackNTP=
+RootDistanceMaxSec=30
+```
+
+Windows must have its NTP server provider enabled, be synchronized to an
+upstream source, and allow UDP port 123 from `192.168.50.2`. The relaxed root
+distance accepts the uncertainty reported by Windows Time. It provides useful
+wall-clock timestamps for logs and manifests but is not sufficiently precise
+for accelerator latency, throughput, or cycle-level measurements.
+
 For SSH retrieval, first assign or obtain an IP address and set a temporary
 password for the `petalinux` account from the serial root shell if required:
 

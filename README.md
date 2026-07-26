@@ -148,6 +148,11 @@ bring-up setup, not part of the portable NVDLA software stack. Replace or omit
 it for a routed network, multiple boards, a different ZCU102 revision, or
 another platform.
 
+That profile also uses the Windows host at `192.168.50.1` as its only NTP
+source and permits a 30-second maximum root distance. This host-specific policy
+exists to correct artifact wall-clock timestamps; it is not suitable for
+precision timing or performance measurements.
+
 Each significant run writes evidence under `artifacts/<run-id>/`, including a
 `manifest.json`, environment details, source and binary hashes, logs, output
 tensors where applicable, and an explicit pass, fail, or blocked result.

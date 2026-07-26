@@ -24,6 +24,7 @@ cp "$ROOT/tools/board/nvdla-board-workload" "$DEST/files/nvdla-board-workload"
 cp "$ROOT/tools/board/nvdla-board-benchmark" "$DEST/files/nvdla-board-benchmark"
 cp "$ROOT/tools/board/serial-root-autologin.conf" "$DEST/files/serial-root-autologin.conf"
 cp "$ROOT/tools/board/20-nvdla-direct.network" "$DEST/files/20-nvdla-direct.network"
+cp "$ROOT/tools/board/nvdla-host-timesync.conf" "$DEST/files/nvdla-host-timesync.conf"
 
 PATCH_INC="$DEST/nvdla-board-tools-patches.inc"
 pl_install_patch_queue "$DEST" "$PATCH_INC" "scripts/petalinux_board_tools.sh"

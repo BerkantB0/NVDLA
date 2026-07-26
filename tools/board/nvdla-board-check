@@ -47,9 +47,12 @@ capture uname.txt uname -a
 capture cmdline.txt cat /proc/cmdline
 capture os-release.txt cat /etc/os-release
 capture network-profile.txt cat /etc/systemd/network/20-nvdla-direct.network
+capture timesync-profile.txt cat /etc/systemd/timesyncd.conf.d/nvdla-host.conf
 capture network-addresses.txt ip -br addr
 capture network-routes.txt ip route
 capture eth0-link-statistics.txt ip -s link show eth0
+capture timedatectl.txt timedatectl
+capture timesync-status.txt timedatectl timesync-status
 capture modules-before.txt lsmod
 capture module-info.txt modinfo opendla
 capture interrupts-before.txt cat /proc/interrupts

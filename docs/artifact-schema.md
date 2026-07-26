@@ -128,6 +128,9 @@ and explicit `ttyPS0` serial-autologin override. For this ZCU102 direct-link
 image, the audit also requires the project-specific `eth0` profile containing
 MAC `02:00:00:50:10:02` and address `192.168.50.2/24`. That requirement
 describes this bring-up image, not a generic NVDLA runtime or KMD dependency.
+The same audit requires the host-specific timesyncd drop-in selecting
+`192.168.50.1` with `RootDistanceMaxSec=30`; synchronized wall-clock timestamps
+must not be interpreted as precision performance timing.
 SD-bundle manifests record the three source and copied boot-file hashes plus a
 deterministic archive hash.
 

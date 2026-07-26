@@ -302,6 +302,9 @@ manifest = {
         "network_profile_in_rootfs": rootfs_audit.get("members", {}).get("network_profile")
         if rootfs_audit
         else None,
+        "timesync_profile_in_rootfs": rootfs_audit.get("members", {}).get("timesync_profile")
+        if rootfs_audit
+        else None,
     },
     "rootfs": {
         "archive_path": rootfs_tar_path,

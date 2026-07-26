@@ -36,6 +36,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         path: Path,
         omit: set[str] | None = None,
         network_profile: bytes | None = None,
+        timesync_profile: bytes | None = None,
     ) -> None:
         names = {
             "usr/bin/nvdla_runtime",
@@ -48,6 +49,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla-benchmark-launch",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
+            "etc/systemd/timesyncd.conf.d/nvdla-host.conf",
             "lib/modules/6.6.10/extra/opendla.ko",
             "lib/ld-linux-aarch64.so.1",
             "usr/lib/libc.so.6",
@@ -80,6 +82,16 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                         )
                     )
                     if name == "etc/systemd/network/20-nvdla-direct.network"
+                    else (
+                        timesync_profile
+                        or (
+                            b"[Time]\n"
+                            b"NTP=192.168.50.1\n"
+                            b"FallbackNTP=\n"
+                            b"RootDistanceMaxSec=30\n"
+                        )
+                    )
+                    if name == "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
                     else f"synthetic:{name}".encode("ascii")
                 )
                 member = tarfile.TarInfo(f"./{name}")
@@ -188,6 +200,23 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertTrue(
             any("network profile is missing required settings" in error for error in result["errors"])
+        )
+
+    def test_rejects_missing_timesync_profile(self) -> None:
+        result = self._audit({"etc/systemd/timesyncd.conf.d/nvdla-host.conf"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing timesync_profile from rootfs", result["errors"])
+
+    def test_rejects_incomplete_timesync_profile(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        archive = root / "rootfs.tar.gz"
+        self._write_archive(archive, timesync_profile=b"[Time]\nNTP=192.168.50.1\n")
+        result = audit_petalinux_rootfs(archive, root / "extract", self._inspector())
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(
+            any("timesync profile is missing required settings" in error for error in result["errors"])
         )
 
     def test_rejects_wrong_elf_architecture(self) -> None:
