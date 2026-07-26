@@ -37,6 +37,8 @@ PROVENANCE_KEYS = (
     "runtime_library_sha256",
     "kernel_release",
     "nvdla_clock_hz",
+    "nvdla_clock_expected_hz",
+    "nvdla_clock_tolerance_hz",
     "payload_sha256",
     "firmware_log",
 )
@@ -76,17 +78,6 @@ def _hash_records(path: Path) -> dict[str, str]:
     return records
 
 
-def _clock_rate(root: Path) -> int | None:
-    clock_path = root / "nvdla-clock-lines.txt"
-    if not clock_path.is_file():
-        return None
-    for line in clock_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        for field in line.split():
-            if field.isdigit() and 99_999_000 <= int(field) <= 100_001_000:
-                return int(field)
-    return None
-
-
 def _load_session_root(archive: Path, extraction: Path) -> Path:
     _safe_extract(archive, extraction)
     candidates = list(extraction.rglob("benchmark.env"))
@@ -106,7 +97,18 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
     image = workload.get("image", {})
     loadable = workload.get("loadable", {})
     payload_hash = software.get("SHA256SUMS")
-    rate = _clock_rate(root)
+    if env.get("nvdla_clock_status") != "verified-xsa-rate":
+        raise ValueError("benchmark did not verify the XSA-derived NVDLA clock")
+    rate = int(env.get("nvdla_clock_actual_hz", "0"))
+    expected_rate = int(env.get("nvdla_clock_expected_hz", "0"))
+    tolerance = int(env.get("nvdla_clock_tolerance_hz", "-1"))
+    if (
+        rate <= 0
+        or expected_rate <= 0
+        or tolerance < 0
+        or abs(rate - expected_rate) > tolerance
+    ):
+        raise ValueError("invalid NVDLA clock evidence")
     result = {
         "model": env.get("model"),
         "input_sha256": str(image.get("sha256", "")).lower() or None,
@@ -116,6 +118,8 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
         "runtime_library_sha256": software.get("libnvdla_runtime.so"),
         "kernel_release": kernel_release,
         "nvdla_clock_hz": rate,
+        "nvdla_clock_expected_hz": expected_rate,
+        "nvdla_clock_tolerance_hz": tolerance,
         "payload_sha256": payload_hash,
         "firmware_log": env.get("firmware_log"),
     }
@@ -533,7 +537,9 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         "",
         f"- Independent fresh-boot sessions: {len(sessions)}",
         f"- Kernel: `{baseline['kernel_release']}`",
-        f"- NVDLA clock: `{baseline['nvdla_clock_hz']}` Hz",
+        f"- NVDLA clock: `{baseline['nvdla_clock_hz']}` Hz observed; "
+        f"`{baseline['nvdla_clock_expected_hz']}` Hz expected from XSA "
+        f"(tolerance `{baseline['nvdla_clock_tolerance_hz']}` Hz)",
         f"- Module SHA256: `{baseline['module_sha256']}`",
         f"- Runtime SHA256: `{baseline['runtime_sha256']}`",
         f"- Maximum timing-pair overhead: "

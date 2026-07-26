@@ -152,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     board_payload.add_argument("--out-dir", required=True, type=Path)
     board_payload.add_argument("--archive", required=True, type=Path)
     board_payload.add_argument("--manifest", required=True, type=Path)
+    board_payload.add_argument("--lock", type=Path, default=Path("repro.lock.json"))
 
     performance = sub.add_parser(
         "performance-import",
@@ -250,7 +251,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "board-artifact-import":
         return run_board_artifact_import(args.archive, args.out, args.serial_log)
     if args.command == "board-payload":
-        return run_board_payload(args.workloads_dir, args.out_dir, args.archive, args.manifest)
+        return run_board_payload(
+            args.workloads_dir,
+            args.out_dir,
+            args.archive,
+            args.manifest,
+            args.lock,
+        )
     if args.command == "performance-import":
         return import_performance_archives(args.archive, args.out)
     if args.command == "trace-parse":

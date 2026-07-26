@@ -57,6 +57,7 @@ def audit_xsa(xsa_path: Path) -> dict[str, Any]:
     wrapper_params = _parameters(wrapper)
 
     interrupt: dict[str, Any] = {}
+    clocks: dict[str, Any] = {}
     for port in _iter_named(wrapper, "PORT"):
         if port.attrib.get("NAME") == "dla_intr":
             interrupt = {
@@ -72,7 +73,13 @@ def audit_xsa(xsa_path: Path) -> dict[str, Any]:
                     for c in _iter_named(port, "CONNECTION")
                 ],
             }
-            break
+        if port.attrib.get("SIGIS") == "clk":
+            name = port.attrib.get("NAME")
+            if name:
+                clocks[name] = {
+                    "frequency_hz": _attr_int(port.attrib.get("CLKFREQUENCY")),
+                    "signame": port.attrib.get("SIGNAME"),
+                }
 
     bus_interfaces = []
     for bus in _iter_named(wrapper, "BUSINTERFACE"):
@@ -116,6 +123,7 @@ def audit_xsa(xsa_path: Path) -> dict[str, Any]:
                 else None
             ),
             "interrupt": interrupt,
+            "clocks": clocks,
             "bus_interfaces": bus_interfaces,
         },
         "memory": {
@@ -161,6 +169,13 @@ def validate_audit(audit: dict[str, Any], lock: dict[str, Any]) -> list[str]:
             f"interrupt connection: expected port {expected['interrupt_ps_port']!r}, got {sorted(connected_ports)!r}"
         )
 
+    for port in expected["clock_ports"]:
+        expect(
+            f"{port} frequency",
+            audit["wrapper"]["clocks"].get(port, {}).get("frequency_hz"),
+            expected["clock_hz"],
+        )
+
     widths = {
         b.get("datawidth")
         for b in audit["wrapper"]["bus_interfaces"]
@@ -201,8 +216,14 @@ def run_xsa_audit(xsa_path: Path, lock_path: Path, out_path: Path | None) -> int
         print(f"  CSB: {audit['wrapper']['base']}..{audit['wrapper']['high']}")
         print(f"  IRQ: dla_intr -> {lock['hardware']['xsa']['expected']['interrupt_ps_port']}")
         print(f"  DBB: {', '.join(audit['memory']['dbb_slave_interfaces'])}")
+        print(
+            "  clocks: "
+            + ", ".join(
+                f"{name}={clock['frequency_hz']} Hz"
+                for name, clock in sorted(audit["wrapper"]["clocks"].items())
+            )
+        )
         return 0
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-

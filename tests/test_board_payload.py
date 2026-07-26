@@ -160,7 +160,12 @@ class BoardPayloadTests(unittest.TestCase):
             payload = json.loads(
                 (root / "first" / "nvdla-tests" / "PAYLOAD.json").read_text()
             )
-            self.assertEqual(payload["schema_version"], 2)
+            self.assertEqual(payload["schema_version"], 3)
+            self.assertEqual(payload["hardware"]["clock"]["expected_hz"], 149985016)
+            self.assertEqual(
+                payload["hardware"]["clock"]["linux_tolerance_hz"],
+                1000,
+            )
             self.assertIn("resnet50", payload["workloads"])
             self.assertTrue(
                 (root / "first" / "nvdla-tests" / "resnet50_small" / "loadable.nvdla").is_file()

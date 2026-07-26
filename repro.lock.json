@@ -13,6 +13,12 @@
         "interrupt_output": "dla_intr",
         "interrupt_ps_port": "pl_ps_irq0",
         "interrupt_sensitivity": "LEVEL_HIGH",
+        "clock_ports": [
+          "csb_clk",
+          "m_axi_clk"
+        ],
+        "clock_hz": 149985016,
+        "linux_clock_tolerance_hz": 1000,
         "dbb_axi_data_width": 64,
         "dbb_memory_slave": "S_AXI_HP0_FPD",
         "coherent_dma": false

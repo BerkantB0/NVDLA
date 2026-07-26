@@ -19,6 +19,14 @@ class XsaAuditTests(unittest.TestCase):
         errors = validate_audit(audit, lock)
         self.assertEqual(errors, [])
         self.assertEqual(audit["wrapper"]["range_size"], 0x10000)
+        self.assertEqual(
+            audit["wrapper"]["clocks"]["csb_clk"]["frequency_hz"],
+            149985016,
+        )
+        self.assertEqual(
+            audit["wrapper"]["clocks"]["m_axi_clk"]["frequency_hz"],
+            149985016,
+        )
 
     def test_synthetic_xsa_reports_dbb_and_irq(self) -> None:
         hwh = """<?xml version="1.0"?>
@@ -29,6 +37,8 @@ class XsaAuditTests(unittest.TestCase):
     <PORT NAME="dla_intr" DIR="O" SENSITIVITY="LEVEL_HIGH">
       <CONNECTION INSTANCE="zynq_ultra_ps_e_0" PORT="pl_ps_irq0"/>
     </PORT>
+    <PORT NAME="csb_clk" SIGIS="clk" CLKFREQUENCY="149985016"/>
+    <PORT NAME="m_axi_clk" SIGIS="clk" CLKFREQUENCY="149985016"/>
     <BUSINTERFACE NAME="m_axi" TYPE="MASTER" DATAWIDTH="64"/>
   </MODULE>
   <MEMRANGE INSTANCE="zynq_ultra_ps_e_0" MASTERBUSINTERFACE="m_axi" SLAVEBUSINTERFACE="S_AXI_HP0_FPD"/>
@@ -47,4 +57,3 @@ class XsaAuditTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

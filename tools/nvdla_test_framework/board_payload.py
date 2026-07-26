@@ -7,7 +7,7 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
-from .common import read_json, sha256_file, write_json
+from .common import read_json, repo_root, sha256_file, write_json
 
 
 EXPECTED_LENET_OUTPUT = "0 2 0 0 0 0 0 124 0 0"
@@ -80,6 +80,7 @@ def build_board_payload(
     out_dir: Path,
     archive_path: Path,
     manifest_path: Path,
+    lock_path: Path | None = None,
 ) -> dict[str, Any]:
     if out_dir.exists() and any(out_dir.iterdir()):
         raise ValueError(f"payload output directory is not empty: {out_dir}")
@@ -90,6 +91,10 @@ def build_board_payload(
     sdp_manifest = read_json(sdp_source / "generated-manifest.json")
     lenet_manifest = read_json(lenet_source / "generated-manifest.json")
     resnet_manifest = read_json(resnet_source / "generated-manifest.json")
+    resolved_lock = lock_path or repo_root() / "repro.lock.json"
+    lock = read_json(resolved_lock)
+    xsa = lock["hardware"]["xsa"]
+    expected_hardware = xsa["expected"]
 
     if sdp_manifest.get("target", {}).get("config") != "nv_small":
         raise ValueError("SDP workload is not tagged nv_small")
@@ -258,10 +263,20 @@ def build_board_payload(
     write_json(resnet_out / "manifest.json", resnet_payload_manifest)
 
     payload_manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "board": "zcu102",
         "hardware_config": "nv_small",
         "delivery": "sd-fat-read-only",
+        "hardware": {
+            "xsa_sha256": xsa["sha256"],
+            "clock": {
+                "ports": expected_hardware["clock_ports"],
+                "expected_hz": expected_hardware["clock_hz"],
+                "linux_tolerance_hz": expected_hardware[
+                    "linux_clock_tolerance_hz"
+                ],
+            },
+        },
         "workloads": {
             "sdp": {
                 "path": "sdp_regression_small",
@@ -290,6 +305,8 @@ def build_board_payload(
         "status": "pass",
         "source": {
             "workloads_dir": str(workloads_dir),
+            "repro_lock": str(resolved_lock),
+            "repro_lock_sha256": sha256_file(resolved_lock),
             "sdp_manifest": str(sdp_source / "generated-manifest.json"),
             "lenet_manifest": str(lenet_source / "generated-manifest.json"),
             "resnet50_manifest": str(resnet_source / "generated-manifest.json"),
@@ -310,9 +327,16 @@ def run_board_payload(
     out_dir: Path,
     archive_path: Path,
     manifest_path: Path,
+    lock_path: Path | None = None,
 ) -> int:
     try:
-        result = build_board_payload(workloads_dir, out_dir, archive_path, manifest_path)
+        result = build_board_payload(
+            workloads_dir,
+            out_dir,
+            archive_path,
+            manifest_path,
+            lock_path,
+        )
     except Exception as exc:
         write_json(
             manifest_path,

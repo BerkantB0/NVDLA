@@ -69,6 +69,12 @@ STATUS=0
 CLASSIFICATION="not-run"
 NODE=""
 PRINTK_ORIGINAL=""
+CLOCK_EXPECTED_HZ=0
+CLOCK_TOLERANCE_HZ=0
+CLOCK_ACTUAL_HZ=0
+CLOCK_STATUS="not-checked"
+DMESG_LINES=0
+IRQ_BEFORE=0
 GOVERNORS_SAVED="$OUT/governors-before.txt"
 
 mkdir -p "$OUT"
@@ -145,6 +151,9 @@ finish() {
         echo "irq_after=$IRQ_AFTER"
         echo "irq_delta=$IRQ_DELTA"
         echo "nvdla_clock_status=$CLOCK_STATUS"
+        echo "nvdla_clock_expected_hz=$CLOCK_EXPECTED_HZ"
+        echo "nvdla_clock_actual_hz=$CLOCK_ACTUAL_HZ"
+        echo "nvdla_clock_tolerance_hz=$CLOCK_TOLERANCE_HZ"
     } >"$OUT/benchmark.env"
     rm -f "$ARCHIVE" "$LATEST"
     tar -czf "$ARCHIVE" -C "$(dirname "$OUT")" "$(basename "$OUT")"
@@ -170,6 +179,12 @@ else
     IRQ_BEFORE=0
     finish
 fi
+
+CLOCK_EXPECTED_HZ="$(sed -n 's/.*"expected_hz": \([0-9][0-9]*\).*/\1/p' "$PAYLOAD_ROOT/PAYLOAD.json")"
+CLOCK_TOLERANCE_HZ="$(sed -n 's/.*"linux_tolerance_hz": \([0-9][0-9]*\).*/\1/p' "$PAYLOAD_ROOT/PAYLOAD.json")"
+case "$CLOCK_EXPECTED_HZ:$CLOCK_TOLERANCE_HZ" in
+    *[!0-9:]*|:*|*:) STATUS=1; CLASSIFICATION="payload-clock-metadata-failure"; finish ;;
+esac
 
 capture uname.txt uname -a
 capture cmdline.txt cat /proc/cmdline
@@ -247,22 +262,26 @@ else
     : >"$OUT/clk-summary.txt"
     : >"$OUT/nvdla-clock-lines.txt"
 fi
-if awk '
-    {
-        for (field = 1; field <= NF; field++)
-            if ($field ~ /^[0-9]+$/ && $field >= 99999000 && $field <= 100001000)
-                found = 1
-    }
-    END { exit(found ? 0 : 1) }
-' "$OUT/nvdla-clock-lines.txt"; then
-    CLOCK_STATUS="verified-100mhz"
+CLOCK_ACTUAL_HZ="$(awk '$1 == "pl0_ref" { print $5; exit }' "$OUT/nvdla-clock-lines.txt")"
+case "$CLOCK_ACTUAL_HZ" in
+    *[!0-9]*|"") CLOCK_ACTUAL_HZ=0 ;;
+esac
+if [ "$CLOCK_ACTUAL_HZ" -gt "$CLOCK_EXPECTED_HZ" ]; then
+    CLOCK_DIFFERENCE_HZ=$((CLOCK_ACTUAL_HZ - CLOCK_EXPECTED_HZ))
+else
+    CLOCK_DIFFERENCE_HZ=$((CLOCK_EXPECTED_HZ - CLOCK_ACTUAL_HZ))
+fi
+printf '%s\n' "$CLOCK_DIFFERENCE_HZ" >"$OUT/nvdla-clock-difference-hz.txt"
+if [ "$CLOCK_ACTUAL_HZ" -gt 0 ] &&
+   [ "$CLOCK_DIFFERENCE_HZ" -le "$CLOCK_TOLERANCE_HZ" ]; then
+    CLOCK_STATUS="verified-xsa-rate"
 elif [ -s "$OUT/nvdla-clock-lines.txt" ]; then
     CLOCK_STATUS="unexpected-rate"
 else
     CLOCK_STATUS="unavailable"
 fi
 printf '%s\n' "$CLOCK_STATUS" >"$OUT/nvdla-clock-status.txt"
-if [ "$CLOCK_STATUS" != "verified-100mhz" ]; then
+if [ "$CLOCK_STATUS" != "verified-xsa-rate" ]; then
     STATUS=1
     CLASSIFICATION="nvdla-clock-unverified"
     finish

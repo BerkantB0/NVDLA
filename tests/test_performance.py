@@ -34,6 +34,10 @@ class PerformanceTests(unittest.TestCase):
                     "status=0",
                     "classification=exact-performance-pass",
                     "firmware_log=0",
+                    "nvdla_clock_status=verified-xsa-rate",
+                    "nvdla_clock_expected_hz=149985016",
+                    "nvdla_clock_actual_hz=149985000",
+                    "nvdla_clock_tolerance_hz=1000",
                 ]
             )
             + "\n"
@@ -63,7 +67,7 @@ class PerformanceTests(unittest.TestCase):
             "Linux zcu102-nvdla 6.6.40-xilinx-v2024.1 #1 SMP aarch64 GNU/Linux\n"
         )
         (session / "nvdla-clock-lines.txt").write_text(
-            "pl0_ref 1 1 0 100000000 0 0\n"
+            "pl0_ref 1 1 0 149985000 0 0\n"
         )
         for regime, launch, submits in (
             ("cold", 12_000_000, [8_000_000]),

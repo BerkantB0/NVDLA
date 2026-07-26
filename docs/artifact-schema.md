@@ -158,13 +158,18 @@ indices. `execution-pass-oracle-pending` has host status `pass` but
 `correctness_status: "inconclusive"`; only comparison with an independent
 `nv_small` VP golden promotes it to `exact-pass`.
 
+Board payload schema 3 records the checked-in XSA hash plus its expected
+`csb_clk`/`m_axi_clk` frequency and the accepted Linux reporting tolerance.
+These fields are covered by `SHA256SUMS`; the benchmark does not accept an
+unversioned host-side clock override.
+
 ## Performance Campaign
 
 Target archives named `nvdla-board-benchmark-<model>-<timestamp>.tar.gz`
 contain:
 
-- `benchmark.env`: campaign parameters, status, clock verification, and IRQ
-  totals;
+- `benchmark.env`: campaign parameters, status, XSA-derived expected clock,
+  observed Linux clock, accepted tolerance, and IRQ totals;
 - `cold-N/`, `warm-N/`, and `steady-1/`: runtime profile JSON, external
   launch timing, runtime logs, exact output, output hash, verification, and IRQ
   delta. Profiles include monotonic clock resolution and measured timing-pair

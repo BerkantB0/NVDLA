@@ -102,6 +102,9 @@ and archive containing the pinned SDP, `nv_small` LeNet, and verified
 `nv_small` ResNet-50 workloads, manifests, and `SHA256SUMS`. Copy that
 directory to the SD FAT partition
 alongside, but separate from, the three boot files.
+The payload also pins the NVDLA clock declared by the checked-in XSA, allowing
+the board benchmark to compare Linux clock evidence with the exact hardware
+handoff used to build `BOOT.BIN`.
 
 `make petalinux-sd-bundle` creates a deterministic archive and a ready-to-copy
 directory containing `BOOT.BIN`, `boot.scr`, and `image.ub`; it never writes to

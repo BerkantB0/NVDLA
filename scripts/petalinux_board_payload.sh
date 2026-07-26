@@ -16,6 +16,7 @@ mkdir -p "$RUN_DIR"
 cd "$ROOT"
 
 python3 -m nvdla_test_framework board-payload \
+  --lock "$ROOT/repro.lock.json" \
   --workloads-dir "$WORKLOADS_DIR" \
   --out-dir "$PAYLOAD_DIR" \
   --archive "$ARCHIVE_PATH" \

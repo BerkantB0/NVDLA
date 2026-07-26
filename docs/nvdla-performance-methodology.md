@@ -12,6 +12,12 @@ oracles validated in the source-built `nv_small` VP. Performance evidence is
 accepted only when module, runtime, kernel, payload, model, input, loadable,
 and NVDLA clock provenance match.
 
+The paper and earlier feasibility notes describe a 100 MHz implementation, but
+the checked-in XSA used for this board declares both `csb_clk` and `m_axi_clk`
+as 149,985,016 Hz. Linux reports the corresponding `pl0_ref` as 149,985,000 Hz.
+The benchmark therefore uses the XSA value carried in the hashed payload, with
+a pinned 1,000 Hz tolerance for Linux clock-framework representation.
+
 ## Timing Boundaries
 
 All clocks use integer nanoseconds from `CLOCK_MONOTONIC_RAW`.
@@ -53,7 +59,7 @@ The board benchmark:
 - selects the `performance` governor when supported;
 - redirects runtime output away from UART;
 - waits for the configured settling period;
-- verifies a recorded 100 MHz NVDLA clock;
+- verifies the active NVDLA clock against the frequency pinned from the XSA;
 - requires a positive NVDLA IRQ delta and exact tensor output;
 - rejects kernel error patterns;
 - archives raw profiles, outputs, environment, hashes, and logs.
@@ -94,7 +100,7 @@ COLD_STARTS=1 WARM_STARTS=2 WARMUPS=1 STEADY_SAMPLES=3 SETTLE_SECONDS=10 \
 ```
 
 The pilot must produce `exact-performance-pass`, no kernel bad patterns, a
-verified 100 MHz clock, and an archive in `/tmp`.
+an XSA-matched clock, and an archive in `/tmp`.
 
 For an observer-effect check, run an otherwise identical short pilot once with
 `FIRMWARE_LOG=0` and once with `FIRMWARE_LOG=1`. Report both, but use quiet
