@@ -26,9 +26,10 @@ All clocks use integer nanoseconds from `CLOCK_MONOTONIC_RAW`.
 |---|---|---|
 | Cold | New process after `sync` and a page-cache drop | Parent launch to child exit |
 | Warm | New process after model, input, runtime, and library cache priming | Parent launch to child exit |
-| Steady | One loaded runtime context and one bound buffer set | Blocking `IRuntime::submit()` |
+| Steady | One loaded runtime context and one bound buffer set | Runtime execution latency |
 
-The steady submit interval includes UMD submission, the DRM ioctl, KMD
+Runtime execution latency is the blocking `IRuntime::submit()` interval. It
+includes UMD submission, the DRM ioctl, KMD
 scheduling, hardware execution, interrupt completion, and any loadable
 emulator work. It excludes model file reading, loadable deserialization, image
 decode, buffer allocation, output file writing, and process startup.
@@ -40,10 +41,32 @@ synchronizes the previously unprotected task queue. Steady measurements made
 with an earlier runtime can contain polling delays in 500 ms increments and
 must not be combined with or substituted for final campaign results.
 
-The runtime also records context creation, loadable read and load, emulator
-initialization, input and output setup, output extraction, DIMG generation,
-buffer cleanup, unload, emulator shutdown, runtime destruction, and test and
-process totals.
+Performance profile schema 2 records the interval as
+`runtime_execution_ns`; schema 1 pilot archives are intentionally incompatible
+and must not be mixed with the final campaign.
+
+The runtime also records context creation, loadable file read, runtime load,
+emulator initialization, input and output setup, output extraction, DIMG
+generation, buffer cleanup, unload, emulator shutdown, runtime destruction,
+and test and process totals.
+
+The importer retains those detailed phases and also reports these aggregates:
+
+| Aggregate | Components |
+|---|---|
+| Runtime initialization | Runtime context creation and emulator initialization |
+| Model loading | Loadable file read plus deserialization, GEM allocation, and population in `runtime->load()` |
+| Buffer preparation | Input decode/conversion/binding plus output allocation/binding |
+| Runtime execution | Blocking `IRuntime::submit()` |
+| Result handling | Output extraction plus final DIMG generation |
+| Teardown | Buffer cleanup, emulator stop, unload, and runtime destruction |
+
+Cold and warm aggregate percentages use external launch-to-exit latency as the
+denominator. Any process startup or other time outside the instrumented UMD
+phases is reported as unprofiled time rather than redistributed. In the steady
+regime, model and buffer setup occur once, so they are reported as one-time
+context costs; only runtime execution and output extraction are expressed per
+measured inference.
 
 Metrics are buffered in memory and written after measured work and teardown.
 Warm-up samples are identified and excluded from statistics. Every repeated
@@ -62,6 +85,7 @@ scheduling, register access, IRQ behavior, and the public ABI are unchanged.
 The board benchmark:
 
 - sets `firmware_log=0` and console log level 3;
+- pins the runtime and its worker thread to A53 CPU 2 by default;
 - records and restores console log level and CPU governors;
 - selects the `performance` governor when supported;
 - redirects runtime output away from UART;
@@ -69,7 +93,15 @@ The board benchmark:
 - verifies the active NVDLA clock against the frequency pinned from the XSA;
 - requires a positive NVDLA IRQ delta and exact tensor output;
 - rejects kernel error patterns;
+- records process user/system CPU time, page faults, and voluntary/involuntary
+  context switches after each process exits;
 - archives raw profiles, outputs, environment, hashes, and logs.
+
+Set `BENCH_CPU=none` only for an explicitly labelled scheduling control.
+Process scheduler totals are also normalized by all executed inferences,
+including warm-ups, because the process-level `wait4()` evidence includes
+their cost. CPU migration counts are reported as unavailable unless a later
+kernel facility provides them directly; they are not inferred.
 
 Correctness and diagnostic runners set `firmware_log=1` because their
 operation-sequence classifiers depend on progress messages.
@@ -119,11 +151,19 @@ COLD_STARTS=1 WARM_STARTS=2 WARMUPS=1 STEADY_SAMPLES=3 SETTLE_SECONDS=10 \
 The pilot must produce `exact-performance-pass`, no kernel bad patterns, an
 XSA-matched clock, and an archive in `/tmp`.
 
+The importer reports two same-session sanity comparisons automatically:
+
+- cold versus cached warm process medians;
+- the first measured steady inference versus the median of later measured
+  inferences.
+
 For an observer-effect check, run an otherwise identical short pilot once with
 `FIRMWARE_LOG=0` and once with `FIRMWARE_LOG=1`. Report both, but use quiet
-runs only in the primary campaign. Compare an instrumented and legacy
-single-submit pilot as well; a median difference above 2 percent requires
-investigation before the final campaign.
+runs only in the primary campaign. Analyze the two logging modes separately
+because the importer correctly rejects mixed `firmware_log` provenance.
+Compare an instrumented and legacy single-execution pilot separately as well;
+a median difference above 2 percent requires investigation before the final
+campaign.
 
 ## Final Campaign
 
@@ -170,9 +210,37 @@ The importer creates:
 - `phase-breakdown.svg`.
 
 It reports count, mean, median, standard deviation, coefficient of variation,
-minimum, maximum, IQR, p5, p95, throughput, phase percentages, and per-session
-results. A deterministic 95 percent percentile bootstrap confidence interval
-is calculated over independent session medians.
+minimum, maximum, IQR, p5, p95, aggregate and detailed phases, scheduler
+context, workload complexity, and per-session results. A deterministic 95
+percent percentile bootstrap confidence interval is calculated over
+independent session medians.
+
+Four throughput quantities are kept distinct:
+
+- cold deployment throughput from mean cold launch-to-exit latency;
+- warm end-to-end throughput from mean warm launch-to-exit latency;
+- steady runtime execution throughput from mean runtime execution latency;
+- a theoretical stage-bottleneck upper bound,
+  `1 / max(warm input preparation, steady runtime execution)`.
+
+The last quantity is not measured pipelined throughput. The current runtime is
+blocking and the steady test reuses one prepared input, so it does not prove
+that input preparation and accelerator execution can overlap.
+
+Software overhead is calculated independently for each fresh-boot session as:
+
+```text
+overhead = median(warm end-to-end) - median(steady runtime execution)
+overhead percentage = overhead / median(warm end-to-end)
+```
+
+Only then are the session overheads summarized. This avoids subtracting pooled
+statistics that do not preserve session pairing.
+
+The report also multiplies runtime execution latency by the verified NVDLA
+clock. The result is labelled a host-observed NVDLA-clock-equivalent interval,
+not accelerator cycles, because it includes UMD, ioctl, scheduler, interrupt,
+and emulator overhead.
 
 No outlier is removed. Tukey 1.5 IQR fences flag observations while retaining
 them in every statistic. Mixed model, input, loadable, module, runtime, runtime
@@ -180,10 +248,12 @@ library, kernel, clock, or payload provenance is rejected.
 
 ## Interpretation Limits
 
-Host-observed submit latency is not a per-layer hardware cycle count. Per-HWL
+Runtime execution latency is not a per-layer hardware cycle count. Per-HWL
 instrumentation is deferred because kernel tracepoints or NVDLA statistic
-descriptors could perturb the baseline or alter the loadable. Existing verbose
-correctness artifacts provide operation counts and engine composition.
+descriptors could perturb the baseline or alter the loadable. Each payload
+instead records loadable size, NCHW input dimensions, output size, HWL count,
+and operation count per engine. ResNet-50 counts are deduplicated by operation
+index from the verified source-built `nv_small` VP oracle.
 
 Comparisons with prior work must state clock frequency, hardware
 configuration, memory path, software stack, precision, batch size,
