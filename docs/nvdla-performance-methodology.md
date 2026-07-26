@@ -207,7 +207,18 @@ The importer creates:
 - `performance-summary.csv`;
 - `performance-report.md`;
 - `latency-distribution.svg`;
-- `phase-breakdown.svg`.
+- `phase-breakdown.svg`;
+- `throughput-comparison.svg`;
+- `session-variability.svg`.
+
+The latency figure retains every observation and overlays the median,
+interquartile range, and p5-p95 interval. The phase figure uses normalized
+horizontal bars with absolute mean latency totals, so composition and scale
+remain visible together. The throughput figure keeps the three measured timing
+definitions visually separate from the analytical stage-bottleneck upper
+bound. The session figure shows independent fresh-boot medians and their
+bootstrap interval; its per-regime panels use independent linear scales to
+make small between-boot differences visible.
 
 It reports count, mean, median, standard deviation, coefficient of variation,
 minimum, maximum, IQR, p5, p95, aggregate and detailed phases, scheduler
