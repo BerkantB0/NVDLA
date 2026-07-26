@@ -1,7 +1,7 @@
-From da9b5b5639aa44bd86560da37f6d81e46dd547f6 Mon Sep 17 00:00:00 2001
+From 8819af0f91dcfb90c1c8d5d44a6295ae4958993d Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Fri, 3 Jul 2026 02:15:15 +0300
-Subject: [PATCH 08/12] kmd: allow external builds to select small config
+Subject: [PATCH 08/13] kmd: allow external builds to select small config
 
 opendla.h selects opendla_small.h only when DLA_2_CONFIG is defined.
 

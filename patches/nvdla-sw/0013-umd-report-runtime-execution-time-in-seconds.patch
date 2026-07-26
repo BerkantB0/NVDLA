@@ -1,0 +1,43 @@
+From c4ac5859c34592445c03cdf31b3ba11d2e6e0689 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sun, 26 Jul 2026 17:12:33 +0100
+Subject: [PATCH 13/13] umd: report runtime execution time in seconds
+
+The elapsed-time helper converted its result to microseconds while the caller labelled the value as seconds, overstating execution time by a factor of one million. Return seconds directly and make the unit explicit in the helper name.
+
+Signed-off-by: Codex <codex@local>
+---
+ umd/apps/runtime/RuntimeTest.cpp | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/umd/apps/runtime/RuntimeTest.cpp b/umd/apps/runtime/RuntimeTest.cpp
+index b17bd4d..9ae98c3 100644
+--- a/umd/apps/runtime/RuntimeTest.cpp
++++ b/umd/apps/runtime/RuntimeTest.cpp
+@@ -367,10 +367,10 @@ void unloadLoadable(const TestAppArgs* appArgs, TestInfo *i)
+     }
+ }
+ 
+-double get_elapsed_time(struct timespec *before, struct timespec *after)
++double get_elapsed_time_seconds(struct timespec *before, struct timespec *after)
+ {
+-  double deltat_s  = (after->tv_sec - before->tv_sec) * 1000000;
+-  double deltat_ns = (after->tv_nsec - before->tv_nsec) / 1000;
++  double deltat_s  = after->tv_sec - before->tv_sec;
++  double deltat_ns = (after->tv_nsec - before->tv_nsec) / 1000000000.0;
+   return deltat_s + deltat_ns;
+ }
+ 
+@@ -397,7 +397,8 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+         ORIGINATE_ERROR(NvDlaError_BadParameter, "runtime->submit() failed");
+ 
+     clock_gettime(CLOCK_MONOTONIC, &after);
+-    NvDlaDebugPrintf("execution time = %f s\n", get_elapsed_time(&before,&after));
++    NvDlaDebugPrintf("execution time = %f s\n",
++                     get_elapsed_time_seconds(&before, &after));
+ 
+     PROPAGATE_ERROR_FAIL(DlaBuffer2DIMG(&pOutputBuffer, i->outputImage));
+ 
+-- 
+2.43.0
+

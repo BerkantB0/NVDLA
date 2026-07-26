@@ -1,7 +1,7 @@
-From c79be52b470ba37ae7be43a31ac75e0144f553bc Mon Sep 17 00:00:00 2001
+From 3cc48939130353428133884f85baf7dcf2dc64ec Mon Sep 17 00:00:00 2001
 From: Codex <codex@local>
 Date: Thu, 25 Jun 2026 19:35:00 +0300
-Subject: [PATCH 06/12] umd: include limits for numeric_limits use
+Subject: [PATCH 06/13] umd: include limits for numeric_limits use
 
 The UMD Type.h helper uses std::numeric_limits in saturate(), but the header
 does not include <limits>. Older toolchains may have exposed numeric_limits
