@@ -33,6 +33,13 @@ scheduling, hardware execution, interrupt completion, and any loadable
 emulator work. It excludes model file reading, loadable deserialization, image
 decode, buffer allocation, output file writing, and process startup.
 
+The pinned UMD patch queue replaces the upstream emulator worker's 500 ms
+task-queue polling interval with a condition variable. The change is confined
+to the emulator implementation, preserves blocking-submit behavior, and also
+synchronizes the previously unprotected task queue. Steady measurements made
+with an earlier runtime can contain polling delays in 500 ms increments and
+must not be combined with or substituted for final campaign results.
+
 The runtime also records context creation, loadable read and load, emulator
 initialization, input and output setup, output extraction, DIMG generation,
 buffer cleanup, unload, emulator shutdown, runtime destruction, and test and
@@ -86,6 +93,16 @@ make petalinux-board-payload
 Copy the generated `nvdla-tests` directory to the SD FAT partition. Use a fresh
 boot for every independent session. Do not run a correctness workload before
 a performance session because that changes cache and accelerator state.
+Before starting a session, verify that the configured direct-link NTP source
+has synchronized the board:
+
+```sh
+timedatectl show -p NTPSynchronized --value
+date -u '+%Y-%m-%dT%H:%M:%SZ'
+```
+
+Wall-clock synchronization provides meaningful artifact timestamps;
+`CLOCK_MONOTONIC_RAW` remains the measurement clock.
 
 ## Pilot
 
@@ -99,8 +116,8 @@ COLD_STARTS=1 WARM_STARTS=2 WARMUPS=1 STEADY_SAMPLES=3 SETTLE_SECONDS=10 \
   nvdla-board-benchmark resnet50 /run/media/ROOT-mmcblk0p1/nvdla-tests
 ```
 
-The pilot must produce `exact-performance-pass`, no kernel bad patterns, a
-an XSA-matched clock, and an archive in `/tmp`.
+The pilot must produce `exact-performance-pass`, no kernel bad patterns, an
+XSA-matched clock, and an archive in `/tmp`.
 
 For an observer-effect check, run an otherwise identical short pilot once with
 `FIRMWARE_LOG=0` and once with `FIRMWARE_LOG=1`. Report both, but use quiet
