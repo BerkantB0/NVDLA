@@ -28,6 +28,7 @@ PHASES = (
     "runtime_unload",
     "runtime_destroy",
 )
+ENGINES = ("Convolution", "SDP", "PDP", "CDP", "Rubik", "BDMA")
 PROVENANCE_KEYS = (
     "model",
     "input_sha256",
@@ -41,6 +42,7 @@ PROVENANCE_KEYS = (
     "nvdla_clock_tolerance_hz",
     "payload_sha256",
     "firmware_log",
+    "benchmark_cpu",
 )
 
 
@@ -96,6 +98,15 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
     kernel_release = uname[2] if len(uname) >= 3 else None
     image = workload.get("image", {})
     loadable = workload.get("loadable", {})
+    complexity = workload.get("complexity", {})
+    operation_counts = complexity.get("operation_counts", {})
+    if (
+        not isinstance(operation_counts, dict)
+        or set(operation_counts) != set(ENGINES)
+        or sum(operation_counts.values()) != complexity.get("hwl_count")
+        or complexity.get("loadable_size_bytes") != loadable.get("size_bytes")
+    ):
+        raise ValueError("invalid workload complexity evidence")
     payload_hash = software.get("SHA256SUMS")
     if env.get("nvdla_clock_status") != "verified-xsa-rate":
         raise ValueError("benchmark did not verify the XSA-derived NVDLA clock")
@@ -122,6 +133,8 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
         "nvdla_clock_tolerance_hz": tolerance,
         "payload_sha256": payload_hash,
         "firmware_log": env.get("firmware_log"),
+        "benchmark_cpu": env.get("benchmark_cpu"),
+        "workload_complexity": complexity,
     }
     missing = [key for key in PROVENANCE_KEYS if result.get(key) in {None, ""}]
     if missing:
@@ -131,6 +144,8 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
 
 def _read_profile(path: Path) -> dict[str, Any]:
     profile = read_json(path)
+    if int(profile.get("schema_version", 0)) != 2:
+        raise ValueError(f"{path}: unsupported performance profile schema")
     if profile.get("clock") != "CLOCK_MONOTONIC_RAW":
         raise ValueError(f"{path}: unsupported clock")
     if int(profile.get("clock_resolution_ns", 0)) <= 0:
@@ -144,7 +159,12 @@ def _read_profile(path: Path) -> dict[str, Any]:
     return profile
 
 
-def _profile_rows(root: Path, session: str, model: str) -> list[dict[str, Any]]:
+def _profile_rows(
+    root: Path,
+    session: str,
+    model: str,
+    benchmark_cpu: str,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for regime in ("cold", "warm", "steady"):
         for run_dir in sorted(root.glob(f"{regime}-*")):
@@ -157,6 +177,25 @@ def _profile_rows(root: Path, session: str, model: str) -> list[dict[str, Any]]:
                 raise ValueError(f"{run_dir}: NVDLA IRQ count did not increase")
             profile_path = run_dir / "profile.json"
             profile = _read_profile(profile_path)
+            rusage = _parse_env(run_dir / "rusage.env")
+            if rusage.get("cpu_affinity") != benchmark_cpu:
+                raise ValueError(f"{run_dir}: runtime CPU affinity does not match session")
+            scheduling_fields = (
+                "user_time_ns",
+                "system_time_ns",
+                "minor_page_faults",
+                "major_page_faults",
+                "voluntary_context_switches",
+                "involuntary_context_switches",
+            )
+            missing_scheduling = [
+                field for field in scheduling_fields if field not in rusage
+            ]
+            if missing_scheduling:
+                raise ValueError(
+                    f"{run_dir}: incomplete process scheduling evidence: "
+                    + ", ".join(missing_scheduling)
+                )
             phases = profile["phases_ns"]
             clock_overhead_ns = int(profile["clock_pair_overhead_ns"])
             launch_ns = (
@@ -167,16 +206,22 @@ def _profile_rows(root: Path, session: str, model: str) -> list[dict[str, Any]]:
             for sample in profile["samples"]:
                 if sample.get("warmup"):
                     continue
-                submit_ns = int(sample["submit_ns"])
-                if submit_ns <= 0:
-                    raise ValueError(f"{profile_path}: invalid submit latency")
-                overhead_fraction = clock_overhead_ns / submit_ns
+                runtime_execution_ns = int(sample["runtime_execution_ns"])
+                if runtime_execution_ns <= 0:
+                    raise ValueError(
+                        f"{profile_path}: invalid runtime execution latency"
+                    )
+                overhead_fraction = clock_overhead_ns / runtime_execution_ns
                 if overhead_fraction > 0.01:
                     raise ValueError(
                         f"{profile_path}: clock measurement overhead exceeds 1% "
-                        f"of submit latency"
+                        f"of runtime execution latency"
                     )
-                latency_ns = launch_ns if regime in {"cold", "warm"} else submit_ns
+                latency_ns = (
+                    launch_ns
+                    if regime in {"cold", "warm"}
+                    else runtime_execution_ns
+                )
                 row: dict[str, Any] = {
                     "session": session,
                     "model": model,
@@ -184,7 +229,7 @@ def _profile_rows(root: Path, session: str, model: str) -> list[dict[str, Any]]:
                     "run": run_dir.name,
                     "sample_index": int(sample["index"]),
                     "latency_ns": latency_ns,
-                    "submit_ns": submit_ns,
+                    "runtime_execution_ns": runtime_execution_ns,
                     "output_extract_ns": int(sample["output_extract_ns"]),
                     "launch_elapsed_ns": launch_ns,
                     "process_total_ns": int(phases["process_total"]),
@@ -192,10 +237,29 @@ def _profile_rows(root: Path, session: str, model: str) -> list[dict[str, Any]]:
                     "clock_pair_overhead_ns": clock_overhead_ns,
                     "clock_overhead_fraction": overhead_fraction,
                     "profile_path": str(profile_path.relative_to(root)),
+                    "profile_total_iterations": len(profile["samples"]),
+                    "profile_measured_iterations": int(
+                        profile["measured_iterations"]
+                    ),
+                    "profile_warmup_iterations": int(profile["warmup_iterations"]),
+                    "cpu_affinity": rusage["cpu_affinity"],
+                    "process_user_time_ns": int(rusage["user_time_ns"]),
+                    "process_system_time_ns": int(rusage["system_time_ns"]),
+                    "minor_page_faults": int(rusage["minor_page_faults"]),
+                    "major_page_faults": int(rusage["major_page_faults"]),
+                    "voluntary_context_switches": int(
+                        rusage["voluntary_context_switches"]
+                    ),
+                    "involuntary_context_switches": int(
+                        rusage["involuntary_context_switches"]
+                    ),
+                    "cpu_migrations": rusage.get("cpu_migrations", "unavailable"),
                 }
                 for phase in PHASES:
                     row[f"phase_{phase}_ns"] = int(phases.get(phase, 0))
-                row["outside_submit_ns"] = max(0, int(latency_ns) - submit_ns)
+                row["outside_runtime_execution_ns"] = max(
+                    0, int(latency_ns) - runtime_execution_ns
+                )
                 rows.append(row)
     if not rows:
         raise ValueError(f"{root}: no cold, warm, or steady measurements found")
@@ -244,6 +308,12 @@ def summarize_values(values: Iterable[float]) -> dict[str, Any]:
         "outlier_count": sum(value < low_fence or value > high_fence for value in data),
         "outlier_fences_ns": [low_fence, high_fence],
     }
+
+
+def _duration_summary(values: Iterable[float]) -> dict[str, Any]:
+    result = summarize_values(values)
+    result.pop("throughput_images_per_second")
+    return result
 
 
 def bootstrap_session_medians(
@@ -322,27 +392,198 @@ def _power_summary(root: Path) -> dict[str, Any]:
     }
 
 
-def _phase_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    unique: dict[tuple[str, str], dict[str, Any]] = {}
+def _profile_groups(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        unique[(row["session"], row["profile_path"])] = row
-    profiles = list(unique.values())
-    result: dict[str, Any] = {}
-    for phase in PHASES:
-        result[phase] = statistics.fmean(
-            row[f"phase_{phase}_ns"] for row in profiles
+        grouped[(row["session"], row["profile_path"])].append(row)
+    return grouped
+
+
+def _phase_summary(rows: list[dict[str, Any]], regime: str) -> dict[str, Any]:
+    profile_groups = _profile_groups(rows)
+    representatives = [group[0] for group in profile_groups.values()]
+    detailed = {
+        phase: statistics.fmean(
+            row[f"phase_{phase}_ns"] for row in representatives
         )
-    result["submit"] = statistics.fmean(row["submit_ns"] for row in rows)
-    total = sum(result.values())
-    result["percentages"] = {
-        name: value * 100.0 / total if total else 0.0
-        for name, value in result.items()
-        if name != "percentages"
+        for phase in PHASES
     }
-    result["runtime_overhead_outside_submit_ns"] = statistics.fmean(
-        row["outside_submit_ns"] for row in rows
-    )
-    return result
+    if regime == "steady":
+        runtime_execution = statistics.fmean(
+            row["runtime_execution_ns"] for row in rows
+        )
+        output_extraction = statistics.fmean(
+            row["output_extract_ns"] for row in rows
+        )
+        observed = runtime_execution + output_extraction
+        return {
+            "scope": "per measured inference in one loaded context",
+            "detailed_context_one_time_mean_ns": detailed,
+            "aggregates_mean_ns": {
+                "runtime_execution": runtime_execution,
+                "result_handling": output_extraction,
+            },
+            "observed_iteration_mean_ns": observed,
+            "percentages": {
+                "runtime_execution": runtime_execution * 100.0 / observed,
+                "result_handling": output_extraction * 100.0 / observed,
+            },
+            "note": (
+                "Context setup, model loading, buffer binding, final DIMG writing, "
+                "and teardown occur once per steady profile and are reported separately."
+            ),
+        }
+
+    profile_aggregates = []
+    for group in profile_groups.values():
+        if len(group) != 1:
+            raise ValueError(
+                f"{regime} profiles must contain exactly one measured inference"
+            )
+        row = group[0]
+        aggregates = {
+            "runtime_initialization": (
+                row["phase_runtime_create_ns"] + row["phase_emu_init_ns"]
+            ),
+            "model_loading": (
+                row["phase_loadable_read_ns"] + row["phase_runtime_load_ns"]
+            ),
+            "buffer_preparation": (
+                row["phase_input_setup_ns"] + row["phase_output_setup_ns"]
+            ),
+            "runtime_execution": row["runtime_execution_ns"],
+            "result_handling": (
+                row["output_extract_ns"] + row["phase_output_write_ns"]
+            ),
+            "teardown": (
+                row["phase_buffer_cleanup_ns"]
+                + row["phase_emu_stop_ns"]
+                + row["phase_runtime_unload_ns"]
+                + row["phase_runtime_destroy_ns"]
+            ),
+        }
+        accounted = sum(aggregates.values())
+        if accounted > row["latency_ns"]:
+            raise ValueError(
+                f"{row['profile_path']}: profiled phases exceed external "
+                f"{regime} end-to-end latency"
+            )
+        aggregates["unprofiled_process_and_launch"] = max(
+            0, row["latency_ns"] - accounted
+        )
+        profile_aggregates.append(aggregates)
+
+    aggregate_names = tuple(profile_aggregates[0])
+    aggregate_means = {
+        name: statistics.fmean(item[name] for item in profile_aggregates)
+        for name in aggregate_names
+    }
+    end_to_end = statistics.fmean(row["latency_ns"] for row in rows)
+    return {
+        "scope": "one fresh process and one measured inference",
+        "detailed_profile_mean_ns": detailed,
+        "aggregates_mean_ns": aggregate_means,
+        "end_to_end_mean_ns": end_to_end,
+        "percentages": {
+            name: value * 100.0 / end_to_end if end_to_end else 0.0
+            for name, value in aggregate_means.items()
+        },
+    }
+
+
+def _scalar_summary(values: Iterable[float]) -> dict[str, Any]:
+    data = [float(value) for value in values]
+    if not data:
+        raise ValueError("scalar summary requires at least one value")
+    return {
+        "count": len(data),
+        "mean": statistics.fmean(data),
+        "median": statistics.median(data),
+        "minimum": min(data),
+        "maximum": max(data),
+        "p5": percentile(data, 0.05),
+        "p95": percentile(data, 0.95),
+    }
+
+
+def _clock_equivalent_summary(
+    rows: list[dict[str, Any]],
+    clock_hz: int,
+) -> dict[str, Any]:
+    values = [
+        row["runtime_execution_ns"] * clock_hz / 1_000_000_000.0
+        for row in rows
+    ]
+    return {
+        "label": "host-observed NVDLA-clock-equivalent runtime execution intervals",
+        "clock_hz": clock_hz,
+        "includes_software_overhead": True,
+        **_scalar_summary(values),
+    }
+
+
+def _scheduling_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    profile_groups = list(_profile_groups(rows).values())
+    profiles = [group[0] for group in profile_groups]
+    per_inference = [
+        {
+            "user_time_ns": (
+                group[0]["process_user_time_ns"]
+                / group[0]["profile_total_iterations"]
+            ),
+            "system_time_ns": (
+                group[0]["process_system_time_ns"]
+                / group[0]["profile_total_iterations"]
+            ),
+            "voluntary_context_switches": (
+                group[0]["voluntary_context_switches"]
+                / group[0]["profile_total_iterations"]
+            ),
+            "involuntary_context_switches": (
+                group[0]["involuntary_context_switches"]
+                / group[0]["profile_total_iterations"]
+            ),
+        }
+        for group in profile_groups
+    ]
+    return {
+        "cpu_affinity": sorted({row["cpu_affinity"] for row in profiles}),
+        "process_user_time_ns": _duration_summary(
+            row["process_user_time_ns"] for row in profiles
+        ),
+        "process_system_time_ns": _duration_summary(
+            row["process_system_time_ns"] for row in profiles
+        ),
+        "minor_page_faults": _scalar_summary(
+            row["minor_page_faults"] for row in profiles
+        ),
+        "major_page_faults": _scalar_summary(
+            row["major_page_faults"] for row in profiles
+        ),
+        "voluntary_context_switches": _scalar_summary(
+            row["voluntary_context_switches"] for row in profiles
+        ),
+        "involuntary_context_switches": _scalar_summary(
+            row["involuntary_context_switches"] for row in profiles
+        ),
+        "per_executed_inference_including_warmups": {
+            "user_time_ns": _duration_summary(
+                item["user_time_ns"] for item in per_inference
+            ),
+            "system_time_ns": _duration_summary(
+                item["system_time_ns"] for item in per_inference
+            ),
+            "voluntary_context_switches": _scalar_summary(
+                item["voluntary_context_switches"] for item in per_inference
+            ),
+            "involuntary_context_switches": _scalar_summary(
+                item["involuntary_context_switches"] for item in per_inference
+            ),
+        },
+        "cpu_migrations": "unavailable",
+    }
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -389,27 +630,27 @@ def _phase_svg(path: Path, phases: dict[str, dict[str, Any]]) -> None:
     width, height = 900, 430
     regimes = list(phases)
     colors = {
-        "submit": "#3169a8",
-        "runtime_load": "#c33c54",
-        "input_setup": "#2f7d5c",
-        "output_setup": "#d58b28",
-        "loadable_read": "#7656a5",
-        "other": "#8a8a8a",
+        "runtime_initialization": "#7656a5",
+        "model_loading": "#c33c54",
+        "buffer_preparation": "#2f7d5c",
+        "runtime_execution": "#3169a8",
+        "result_handling": "#d58b28",
+        "teardown": "#69737d",
+        "unprofiled_process_and_launch": "#b8b8b8",
     }
     body = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="white"/>',
-        '<text x="450" y="28" text-anchor="middle" font-family="sans-serif" font-size="18">Mean measured phase composition</text>',
+        '<text x="450" y="28" text-anchor="middle" font-family="sans-serif" font-size="18">Mean aggregate phase composition</text>',
     ]
-    selected = ("submit", "runtime_load", "input_setup", "output_setup", "loadable_read")
+    selected = tuple(colors)
     for index, regime in enumerate(regimes):
-        values = phases[regime]
-        total = sum(values[name] for name in selected)
-        other = sum(values[name] for name in PHASES if name not in selected)
-        total += other
+        values = phases[regime]["aggregates_mean_ns"]
+        total = sum(values.values())
         x = 110 + index * 260
         y = 350.0
-        for name, value in [*( (name, values[name]) for name in selected), ("other", other)]:
+        for name in selected:
+            value = values.get(name, 0.0)
             bar = 280.0 * value / total if total else 0.0
             y -= bar
             body.append(
@@ -419,14 +660,158 @@ def _phase_svg(path: Path, phases: dict[str, dict[str, Any]]) -> None:
             f'<text x="{x + 60}" y="378" text-anchor="middle" font-family="sans-serif" font-size="14">{regime}</text>'
         )
     legend_x = 650
-    for index, name in enumerate((*selected, "other")):
-        y = 75 + index * 28
+    for index, name in enumerate(selected):
+        y = 60 + index * 25
         body.append(f'<rect x="{legend_x}" y="{y - 12}" width="16" height="16" fill="{colors[name]}"/>')
         body.append(
             f'<text x="{legend_x + 24}" y="{y + 1}" font-family="sans-serif" font-size="12">{name}</text>'
         )
     body.append("</svg>")
     path.write_text("\n".join(body) + "\n", encoding="utf-8")
+
+
+def _session_regime_values(
+    grouped: dict[str, list[dict[str, Any]]],
+) -> dict[str, dict[str, list[float]]]:
+    result: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for regime, rows in grouped.items():
+        for row in rows:
+            result[row["session"]][regime].append(row["latency_ns"])
+    return result
+
+
+def _software_overhead(
+    grouped: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    session_values = _session_regime_values(grouped)
+    sessions = []
+    for session, regimes in sorted(session_values.items()):
+        if "warm" not in regimes or "steady" not in regimes:
+            continue
+        warm = statistics.median(regimes["warm"])
+        steady = statistics.median(regimes["steady"])
+        overhead = warm - steady
+        sessions.append(
+            {
+                "session": session,
+                "warm_end_to_end_median_ns": warm,
+                "runtime_execution_median_ns": steady,
+                "overhead_ns": overhead,
+                "overhead_percentage_of_warm_end_to_end": (
+                    overhead * 100.0 / warm if warm else None
+                ),
+            }
+        )
+    if not sessions:
+        return {"status": "unavailable", "reason": "warm and steady regimes required"}
+    return {
+        "status": "available",
+        "definition": (
+            "per-session warm end-to-end median minus steady runtime execution "
+            "latency median"
+        ),
+        "sessions": sessions,
+        "overhead_ns": _duration_summary(
+            item["overhead_ns"] for item in sessions
+        ),
+        "overhead_percentage": _scalar_summary(
+            item["overhead_percentage_of_warm_end_to_end"] for item in sessions
+        ),
+    }
+
+
+def _pilot_sanity(
+    grouped: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    session_values = _session_regime_values(grouped)
+    cache_effect = []
+    for session, regimes in sorted(session_values.items()):
+        if "cold" not in regimes or "warm" not in regimes:
+            continue
+        cold = statistics.median(regimes["cold"])
+        warm = statistics.median(regimes["warm"])
+        cache_effect.append(
+            {
+                "session": session,
+                "cold_median_ns": cold,
+                "warm_median_ns": warm,
+                "cold_minus_warm_ns": cold - warm,
+                "cold_penalty_percentage_of_warm": (
+                    (cold - warm) * 100.0 / warm if warm else None
+                ),
+            }
+        )
+
+    first_later = []
+    steady_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in grouped.get("steady", []):
+        steady_by_session[row["session"]].append(row)
+    for session, rows in sorted(steady_by_session.items()):
+        ordered = sorted(rows, key=lambda row: row["sample_index"])
+        if len(ordered) < 2:
+            continue
+        first = ordered[0]["runtime_execution_ns"]
+        later = statistics.median(
+            row["runtime_execution_ns"] for row in ordered[1:]
+        )
+        first_later.append(
+            {
+                "session": session,
+                "first_runtime_execution_ns": first,
+                "later_runtime_execution_median_ns": later,
+                "first_minus_later_ns": first - later,
+                "first_penalty_percentage_of_later": (
+                    (first - later) * 100.0 / later if later else None
+                ),
+            }
+        )
+    return {
+        "cold_vs_cached": cache_effect,
+        "first_vs_later_steady_inference": first_later,
+        "external_ab_controls": {
+            "quiet_vs_verbose": (
+                "analyze as separate firmware_log=0 and firmware_log=1 pilot reports"
+            ),
+            "profiled_vs_legacy": (
+                "run as a separate short control; do not mix with primary archives"
+            ),
+        },
+    }
+
+
+def _throughput_definitions(summaries: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    labels = {
+        "cold": "cold_deployment_images_per_second",
+        "warm": "warm_end_to_end_images_per_second",
+        "steady": "steady_runtime_execution_images_per_second",
+    }
+    for regime, label in labels.items():
+        if regime in summaries:
+            result[label] = summaries[regime]["latency"][
+                "throughput_images_per_second"
+            ]
+    if "warm" in summaries and "steady" in summaries:
+        input_preparation = summaries["warm"]["phases"][
+            "detailed_profile_mean_ns"
+        ]["input_setup"]
+        runtime_execution = summaries["steady"]["latency"]["mean_ns"]
+        bottleneck = max(input_preparation, runtime_execution)
+        result["theoretical_stage_bottleneck_upper_bound_images_per_second"] = (
+            1_000_000_000.0 / bottleneck if bottleneck else None
+        )
+        result["theoretical_stage_bottleneck_basis"] = {
+            "warm_input_preparation_mean_ns": input_preparation,
+            "steady_runtime_execution_mean_ns": runtime_execution,
+            "formula": "1 / max(input preparation, runtime execution)",
+            "qualification": (
+                "Analytical upper bound only. The current blocking runtime does not "
+                "demonstrate overlap, and steady tests reuse one prepared input."
+            ),
+        }
+    return result
 
 
 def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
@@ -444,6 +829,10 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
             env = _parse_env(root / "benchmark.env")
             if env.get("status") != "0":
                 raise ValueError(f"{archive}: target benchmark did not pass")
+            if env.get("classification") != "exact-performance-pass":
+                raise ValueError(
+                    f"{archive}: target benchmark is not correctness-qualified"
+                )
             provenance = _provenance(root, env)
             if baseline is None:
                 baseline = provenance
@@ -458,7 +847,12 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                         "mixed benchmark provenance: " + ", ".join(differences)
                     )
             session_id = root.name
-            rows = _profile_rows(root, session_id, provenance["model"])
+            rows = _profile_rows(
+                root,
+                session_id,
+                provenance["model"],
+                provenance["benchmark_cpu"],
+            )
             all_rows.extend(rows)
             sessions.append(
                 {
@@ -484,8 +878,14 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         }
         summaries[regime] = {
             "latency": summarize_values(row["latency_ns"] for row in rows),
-            "submit": summarize_values(row["submit_ns"] for row in rows),
-            "phases": _phase_summary(rows),
+            "runtime_execution": summarize_values(
+                row["runtime_execution_ns"] for row in rows
+            ),
+            "runtime_execution_clock_equivalent_intervals": (
+                _clock_equivalent_summary(rows, baseline["nvdla_clock_hz"])
+            ),
+            "phases": _phase_summary(rows, regime),
+            "scheduling": _scheduling_summary(rows),
             "maximum_clock_overhead_fraction": max(
                 row["clock_overhead_fraction"] for row in rows
             ),
@@ -496,18 +896,37 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         }
 
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "provenance": baseline,
+        "workload_complexity": baseline["workload_complexity"],
         "session_count": len(sessions),
         "sessions": sessions,
         "regimes": summaries,
+        "throughput_definitions": _throughput_definitions(summaries),
+        "software_overhead": _software_overhead(grouped),
+        "pilot_sanity": _pilot_sanity(grouped),
+        "correctness_qualification": {
+            "status": "qualified",
+            "accepted_samples": len(all_rows),
+            "requirements": [
+                "target benchmark status is exact-performance-pass",
+                "every output matches the established exact golden",
+                "repeated in-memory outputs are identical",
+                "every run has a positive NVDLA IRQ delta",
+                "no configured bad kernel pattern is present",
+                "the active NVDLA clock matches the XSA-derived rate",
+            ],
+        },
         "outlier_policy": (
             "No samples are discarded. Tukey 1.5 IQR fences flag retained observations."
         ),
         "timing_boundaries": {
             "cold": "CLOCK_MONOTONIC_RAW parent launch-to-process-exit after page-cache drop",
             "warm": "CLOCK_MONOTONIC_RAW parent launch-to-process-exit with primed file cache",
-            "steady": "blocking nvdla IRuntime::submit() with one loaded and bound context",
+            "steady": (
+                "runtime execution latency: blocking nvdla IRuntime::submit() "
+                "with one loaded and bound context"
+            ),
         },
     }
     _write_csv(out_dir / "performance-raw.csv", all_rows)
@@ -520,6 +939,11 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 "model": baseline["model"] if baseline else "",
                 "regime": regime,
                 **result["latency"],
+                "runtime_execution_mean_ns": result["runtime_execution"]["mean_ns"],
+                "runtime_execution_median_ns": result["runtime_execution"]["median_ns"],
+                "clock_equivalent_mean_intervals": result[
+                    "runtime_execution_clock_equivalent_intervals"
+                ]["mean"],
                 "bootstrap_lower_ns": result["session_median_bootstrap_95ci"]["lower_ns"],
                 "bootstrap_upper_ns": result["session_median_bootstrap_95ci"]["upper_ns"],
                 "session_count": result["session_median_bootstrap_95ci"]["session_count"],
@@ -542,10 +966,17 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         f"(tolerance `{baseline['nvdla_clock_tolerance_hz']}` Hz)",
         f"- Module SHA256: `{baseline['module_sha256']}`",
         f"- Runtime SHA256: `{baseline['runtime_sha256']}`",
+        f"- Benchmark CPU affinity: `{baseline['benchmark_cpu']}`",
+        f"- Workload: `{baseline['workload_complexity']['loadable_size_bytes']}` byte "
+        f"loadable, input NCHW `{baseline['workload_complexity']['input_shape_nchw']}`, "
+        f"`{baseline['workload_complexity']['hwl_count']}` HWLs",
+        f"- Engine operations: `{baseline['workload_complexity']['operation_counts']}`",
         f"- Maximum timing-pair overhead: "
         f"`{max(result['maximum_clock_overhead_fraction'] for result in summaries.values()) * 100:.6f}%` "
-        "of submit latency",
+        "of runtime execution latency",
         "",
+        "All accepted samples are correctness-qualified by exact golden output, "
+        "output consistency, positive IRQ progress, clean kernel logs, and verified clock.",
         "No observations were discarded. Reported outliers remain in every statistic.",
         "",
         "## Latency",
@@ -568,6 +999,106 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
     report.extend(
         [
             "",
+            "## Throughput Definitions",
+            "",
+            "| Definition | Images/s |",
+            "|---|---:|",
+        ]
+    )
+    throughput = summary["throughput_definitions"]
+    for name in (
+        "cold_deployment_images_per_second",
+        "warm_end_to_end_images_per_second",
+        "steady_runtime_execution_images_per_second",
+        "theoretical_stage_bottleneck_upper_bound_images_per_second",
+    ):
+        if name in throughput:
+            report.append(f"| {name.replace('_', ' ')} | {throughput[name]:.4f} |")
+    if "theoretical_stage_bottleneck_basis" in throughput:
+        report.extend(
+            [
+                "",
+                "The stage-bottleneck value is an analytical upper bound, not measured "
+                "pipelined throughput. The current blocking runtime does not demonstrate "
+                "input preparation overlapping runtime execution.",
+            ]
+        )
+
+    report.extend(
+        [
+            "",
+            "## Runtime Execution",
+            "",
+            "`runtime execution latency` is the blocking `IRuntime::submit()` interval.",
+            "",
+            "| Regime | Mean (ms) | Median (ms) | Mean clock-equivalent intervals |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for regime in ("cold", "warm", "steady"):
+        if regime not in summaries:
+            continue
+        execution = summaries[regime]["runtime_execution"]
+        intervals = summaries[regime][
+            "runtime_execution_clock_equivalent_intervals"
+        ]
+        report.append(
+            f"| {regime} | {execution['mean_ns'] / 1e6:.3f} | "
+            f"{execution['median_ns'] / 1e6:.3f} | {intervals['mean']:.1f} |"
+        )
+    report.extend(
+        [
+            "",
+            "Clock-equivalent intervals are host-observed runtime execution latency "
+            "multiplied by the measured NVDLA clock. They include UMD, ioctl, scheduling, "
+            "IRQ, and emulator overhead and are not hardware cycle counts.",
+            "",
+            "## Aggregate Phases",
+            "",
+            "| Regime | Initialization (ms) | Model loading (ms) | Buffer preparation (ms) | Runtime execution (ms) | Result handling (ms) | Teardown (ms) | Unprofiled (ms) |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for regime in ("cold", "warm", "steady"):
+        if regime not in summaries:
+            continue
+        phases = summaries[regime]["phases"]["aggregates_mean_ns"]
+        report.append(
+            f"| {regime} | {phases.get('runtime_initialization', 0) / 1e6:.3f} | "
+            f"{phases.get('model_loading', 0) / 1e6:.3f} | "
+            f"{phases.get('buffer_preparation', 0) / 1e6:.3f} | "
+            f"{phases.get('runtime_execution', 0) / 1e6:.3f} | "
+            f"{phases.get('result_handling', 0) / 1e6:.3f} | "
+            f"{phases.get('teardown', 0) / 1e6:.3f} | "
+            f"{phases.get('unprofiled_process_and_launch', 0) / 1e6:.3f} |"
+        )
+
+    overhead = summary["software_overhead"]
+    if overhead["status"] == "available":
+        report.extend(
+            [
+                "",
+                "## Software Overhead",
+                "",
+                "Per-session overhead is the warm end-to-end median minus the steady "
+                "runtime execution median.",
+                "",
+                f"- Median overhead: `{overhead['overhead_ns']['median_ns'] / 1e6:.3f}` ms",
+                f"- Median share of warm end-to-end latency: "
+                f"`{overhead['overhead_percentage']['median']:.3f}%`",
+            ]
+        )
+
+    report.extend(
+        [
+            "",
+            "## Scheduling Context",
+            "",
+            f"The runtime was pinned to CPU `{baseline['benchmark_cpu']}`. Per-process "
+            "user/system CPU time, page faults, and voluntary/involuntary context "
+            "switches are retained in the JSON summary and raw CSV. CPU migration "
+            "counts are marked unavailable rather than inferred.",
+            "",
             "## Figures",
             "",
             "![Latency distribution](latency-distribution.svg)",
@@ -577,7 +1108,8 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
             "## Timing Boundaries",
             "",
             "Cold and warm results use the external launch-to-exit clock. Steady-state "
-            "results use blocking `IRuntime::submit()`, which includes UMD submission, "
+            "results use runtime execution latency (blocking `IRuntime::submit()`), "
+            "which includes UMD submission, "
             "the KMD ioctl and scheduler, hardware execution, and IRQ completion.",
             "",
             "Power results, when available, come from a separate run and are not mixed "

@@ -34,6 +34,7 @@ class PerformanceTests(unittest.TestCase):
                     "status=0",
                     "classification=exact-performance-pass",
                     "firmware_log=0",
+                    "benchmark_cpu=2",
                     "nvdla_clock_status=verified-xsa-rate",
                     "nvdla_clock_expected_hz=149985016",
                     "nvdla_clock_actual_hz=149985000",
@@ -45,8 +46,22 @@ class PerformanceTests(unittest.TestCase):
         (session / "workload-manifest.json").write_text(
             json.dumps(
                 {
-                    "loadable": {"sha256": "1" * 64},
+                    "loadable": {"sha256": "1" * 64, "size_bytes": 445736},
                     "image": {"sha256": "2" * 64},
+                    "complexity": {
+                        "loadable_size_bytes": 445736,
+                        "input_shape_nchw": [1, 1, 28, 28],
+                        "output_elements": 10,
+                        "hwl_count": 10,
+                        "operation_counts": {
+                            "Convolution": 4,
+                            "SDP": 4,
+                            "PDP": 2,
+                            "CDP": 0,
+                            "Rubik": 0,
+                            "BDMA": 0,
+                        },
+                    },
                 }
             )
         )
@@ -78,6 +93,22 @@ class PerformanceTests(unittest.TestCase):
             run.mkdir()
             (run / "verification.txt").write_text("exact-pass\n")
             (run / "run.env").write_text("runtime_status=0\nirq_delta=2\n")
+            (run / "rusage.env").write_text(
+                "\n".join(
+                    [
+                        "schema_version=1",
+                        "cpu_affinity=2",
+                        "user_time_ns=1000000",
+                        "system_time_ns=200000",
+                        "minor_page_faults=12",
+                        "major_page_faults=0",
+                        "voluntary_context_switches=3",
+                        "involuntary_context_switches=1",
+                        "cpu_migrations=unavailable",
+                    ]
+                )
+                + "\n"
+            )
             if launch:
                 (run / "launch-elapsed-ns.txt").write_text(f"{launch}\n")
             phases = {
@@ -96,7 +127,7 @@ class PerformanceTests(unittest.TestCase):
                 "process_total": 15_000,
             }
             profile = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "clock": "CLOCK_MONOTONIC_RAW",
                 "clock_resolution_ns": 1,
                 "clock_pair_overhead_ns": clock_pair_overhead_ns,
@@ -109,7 +140,7 @@ class PerformanceTests(unittest.TestCase):
                     {
                         "index": index,
                         "warmup": False,
-                        "submit_ns": value,
+                        "runtime_execution_ns": value,
                         "output_extract_ns": 50,
                     }
                     for index, value in enumerate(submits, start=1)
@@ -152,10 +183,46 @@ class PerformanceTests(unittest.TestCase):
                 self.assertTrue((output / name).is_file(), name)
             summary = json.loads((output / "performance-summary.json").read_text())
             self.assertEqual(summary["session_count"], 2)
+            self.assertEqual(summary["schema_version"], 2)
             self.assertEqual(summary["regimes"]["steady"]["latency"]["count"], 4)
             self.assertEqual(summary["sessions"][0]["power"]["status"], "unavailable")
             percentages = summary["regimes"]["steady"]["phases"]["percentages"]
             self.assertAlmostEqual(sum(percentages.values()), 100.0)
+            self.assertEqual(summary["workload_complexity"]["hwl_count"], 10)
+            self.assertEqual(
+                summary["regimes"]["steady"]["scheduling"]["cpu_affinity"],
+                ["2"],
+            )
+            self.assertEqual(
+                summary["correctness_qualification"]["status"],
+                "qualified",
+            )
+            self.assertAlmostEqual(
+                summary["software_overhead"]["overhead_ns"]["median_ns"],
+                3_900_000,
+            )
+            self.assertNotIn(
+                "throughput_images_per_second",
+                summary["software_overhead"]["overhead_ns"],
+            )
+            self.assertAlmostEqual(
+                summary["regimes"]["steady"]["scheduling"][
+                    "per_executed_inference_including_warmups"
+                ]["voluntary_context_switches"]["mean"],
+                1.5,
+            )
+            self.assertIn(
+                "theoretical_stage_bottleneck_upper_bound_images_per_second",
+                summary["throughput_definitions"],
+            )
+            self.assertTrue(
+                summary["regimes"]["steady"][
+                    "runtime_execution_clock_equivalent_intervals"
+                ]["includes_software_overhead"]
+            )
+            report = (output / "performance-report.md").read_text()
+            self.assertIn("runtime execution latency", report)
+            self.assertNotIn("blocking submit", report)
             self.assertLess(
                 summary["regimes"]["steady"]["maximum_clock_overhead_fraction"],
                 0.01,
