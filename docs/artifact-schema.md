@@ -158,4 +158,27 @@ indices. `execution-pass-oracle-pending` has host status `pass` but
 `correctness_status: "inconclusive"`; only comparison with an independent
 `nv_small` VP golden promotes it to `exact-pass`.
 
+## Performance Campaign
+
+Target archives named `nvdla-board-benchmark-<model>-<timestamp>.tar.gz`
+contain:
+
+- `benchmark.env`: campaign parameters, status, clock verification, and IRQ
+  totals;
+- `cold-N/`, `warm-N/`, and `steady-1/`: runtime profile JSON, external
+  launch timing, runtime logs, exact output, output hash, verification, and IRQ
+  delta. Profiles include monotonic clock resolution and measured timing-pair
+  overhead;
+- `software-hashes.txt`, `module-hash.txt`, `workload-manifest.json`, and
+  `payload-manifest.json`: provenance;
+- CPU governor/frequency, NVDLA clock, temperature, load average, memory, and
+  kernel log evidence;
+- optional `power-sampling/`: sensor labels plus raw idle and active readings.
+
+The host importer produces `performance-raw.csv`,
+`performance-summary.json`, `performance-summary.csv`,
+`performance-report.md`, `latency-distribution.svg`, and
+`phase-breakdown.svg`. Timing definitions and statistical policy are in
+`docs/nvdla-performance-methodology.md`.
+
 Large generated artifacts should remain in `artifacts/` and should not be committed.

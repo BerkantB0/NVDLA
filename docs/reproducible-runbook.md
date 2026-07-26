@@ -1,5 +1,8 @@
 # Reproducible Runbook
 
+The controlled board performance campaign is documented in
+[`nvdla-performance-methodology.md`](nvdla-performance-methodology.md).
+
 ## Host Assumptions
 
 Run commands from Ubuntu WSL in the repository root:
@@ -95,8 +98,9 @@ and pass/fail/block reason.
 The image does not autoload `opendla.ko` or start a runtime service. Model
 loadables and input/golden data remain separate generated test assets.
 `make petalinux-board-payload` builds a deterministic `nvdla-tests` directory
-and archive containing the pinned SDP and `nv_small` LeNet workloads,
-manifests, and `SHA256SUMS`. Copy that directory to the SD FAT partition
+and archive containing the pinned SDP, `nv_small` LeNet, and verified
+`nv_small` ResNet-50 workloads, manifests, and `SHA256SUMS`. Copy that
+directory to the SD FAT partition
 alongside, but separate from, the three boot files.
 
 `make petalinux-sd-bundle` creates a deterministic archive and a ready-to-copy
