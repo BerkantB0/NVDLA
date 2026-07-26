@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 import tarfile
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from nvdla_test_framework.performance import (
@@ -179,8 +181,34 @@ class PerformanceTests(unittest.TestCase):
                 "performance-report.md",
                 "latency-distribution.svg",
                 "phase-breakdown.svg",
+                "throughput-comparison.svg",
+                "session-variability.svg",
             ):
                 self.assertTrue((output / name).is_file(), name)
+            for name in (
+                "latency-distribution.svg",
+                "phase-breakdown.svg",
+                "throughput-comparison.svg",
+                "session-variability.svg",
+            ):
+                ET.parse(output / name)
+                svg = (output / name).read_text(encoding="utf-8")
+                self.assertNotRegex(
+                    svg.lower(),
+                    re.compile(r"(?<![a-z])(?:nan|inf)(?![a-z])"),
+                )
+            self.assertIn(
+                "Points show every retained observation",
+                (output / "latency-distribution.svg").read_text(),
+            )
+            self.assertIn(
+                "Analytical stage upper bound",
+                (output / "throughput-comparison.svg").read_text(),
+            )
+            self.assertIn(
+                "Fresh-boot session variability",
+                (output / "session-variability.svg").read_text(),
+            )
             summary = json.loads((output / "performance-summary.json").read_text())
             self.assertEqual(summary["session_count"], 2)
             self.assertEqual(summary["schema_version"], 2)
@@ -223,6 +251,8 @@ class PerformanceTests(unittest.TestCase):
             report = (output / "performance-report.md").read_text()
             self.assertIn("runtime execution latency", report)
             self.assertNotIn("blocking submit", report)
+            self.assertIn("throughput-comparison.svg", report)
+            self.assertIn("session-variability.svg", report)
             self.assertLess(
                 summary["regimes"]["steady"]["maximum_clock_overhead_fraction"],
                 0.01,
