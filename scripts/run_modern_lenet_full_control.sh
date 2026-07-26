@@ -332,7 +332,7 @@ if [ "$WRITE_STATUS" -eq 0 ]; then
     mkdir -p /mnt/w/runtime-output
 fi
 
-insmod /mnt/r/opendla.ko >/tmp/module-load.log 2>&1
+insmod /mnt/r/opendla.ko firmware_log=1 >/tmp/module-load.log 2>&1
 MODULE_STATUS=$?
 cat_section module_load /tmp/module-load.log
 echo "__NVDLA_STATUS_module_load=$MODULE_STATUS"

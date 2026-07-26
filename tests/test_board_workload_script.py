@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "board" / "nvdla-board-workload"
+BENCHMARK_SCRIPT = ROOT / "tools" / "board" / "nvdla-board-benchmark"
 CHECK_SCRIPT = ROOT / "tools" / "board" / "nvdla-board-check"
 VP_BACKGROUND_SCRIPT = ROOT / "scripts" / "vp_resnet50_background.sh"
 VP_CONTROL_SCRIPT = ROOT / "scripts" / "run_modern_lenet_full_control.sh"
@@ -35,6 +36,22 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("class_index = count++", text)
         self.assertNotRegex(text, r"(?m)^[ \t]+index = count\+\+$")
         self.assertNotIn("/sys/bus/platform/devices/a0000000.nvdla", text)
+        self.assertNotIn("/dev/mem", text)
+        self.assertNotIn("rmmod", text)
+        self.assertIn("/sys/module/opendla/parameters/firmware_log", text)
+
+    def test_benchmark_has_controlled_measurement_boundaries(self) -> None:
+        text = BENCHMARK_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("nvdla-benchmark-launch", text)
+        self.assertIn("--profile-json profile.json", text)
+        self.assertIn("--warmup", text)
+        self.assertIn("--iterations", text)
+        self.assertIn("drop_caches", text)
+        self.assertIn("firmware_log", text)
+        self.assertIn("dmesg -n 3", text)
+        self.assertIn("verified-100mhz", text)
+        self.assertIn("outputs_consistent", text)
+        self.assertIn("golden-output.dimg", text)
         self.assertNotIn("/dev/mem", text)
         self.assertNotIn("rmmod", text)
 
@@ -70,6 +87,14 @@ class BoardWorkloadScriptTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+        benchmark_result = subprocess.run(
+            ["dash", "-n", str(BENCHMARK_SCRIPT)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(benchmark_result.returncode, 0, benchmark_result.stderr)
 
         check_result = subprocess.run(
             ["dash", "-n", str(CHECK_SCRIPT)],

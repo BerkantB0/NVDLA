@@ -1,0 +1,436 @@
+#!/bin/sh
+set -eu
+
+MODEL="${1:-}"
+PAYLOAD_ROOT="${2:-}"
+case "$MODEL" in
+    lenet|resnet50) ;;
+    *)
+        echo "usage: nvdla-board-benchmark {lenet|resnet50} PAYLOAD_ROOT" >&2
+        exit 2
+        ;;
+esac
+if [ -z "$PAYLOAD_ROOT" ] || [ ! -d "$PAYLOAD_ROOT" ]; then
+    echo "payload root does not exist: $PAYLOAD_ROOT" >&2
+    exit 2
+fi
+
+REGIME="${REGIME:-all}"
+POWER_SAMPLE="${POWER_SAMPLE:-0}"
+FIRMWARE_LOG="${FIRMWARE_LOG:-0}"
+SETTLE_SECONDS="${SETTLE_SECONDS:-30}"
+POWER_IDLE_SECONDS="${POWER_IDLE_SECONDS:-10}"
+if [ "$MODEL" = "resnet50" ]; then
+    RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-300}"
+else
+    RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-60}"
+fi
+case "$REGIME" in
+    all|cold|warm|steady) ;;
+    *) echo "REGIME must be all, cold, warm, or steady" >&2; exit 2 ;;
+esac
+case "$POWER_SAMPLE" in 0|1) ;; *) echo "POWER_SAMPLE must be 0 or 1" >&2; exit 2 ;; esac
+case "$FIRMWARE_LOG" in 0|1) ;; *) echo "FIRMWARE_LOG must be 0 or 1" >&2; exit 2 ;; esac
+
+if [ "$MODEL" = "lenet" ]; then
+    COLD_STARTS="${COLD_STARTS:-10}"
+    WARM_STARTS="${WARM_STARTS:-30}"
+    WARMUPS="${WARMUPS:-20}"
+    STEADY_SAMPLES="${STEADY_SAMPLES:-200}"
+    WORKLOAD="$PAYLOAD_ROOT/lenet_small"
+    LOADABLE="$WORKLOAD/loadable.nvdla"
+    INPUT="$WORKLOAD/input.pgm"
+    GOLDEN="$WORKLOAD/expected-output.txt"
+else
+    COLD_STARTS="${COLD_STARTS:-5}"
+    WARM_STARTS="${WARM_STARTS:-10}"
+    WARMUPS="${WARMUPS:-5}"
+    STEADY_SAMPLES="${STEADY_SAMPLES:-30}"
+    WORKLOAD="$PAYLOAD_ROOT/resnet50_small"
+    LOADABLE="$WORKLOAD/loadable.nvdla"
+    INPUT="$WORKLOAD/input.jpg"
+    GOLDEN="$WORKLOAD/golden-output.dimg"
+fi
+
+for value in "$SETTLE_SECONDS" "$POWER_IDLE_SECONDS" "$RUNTIME_TIMEOUT" "$COLD_STARTS" "$WARM_STARTS" "$WARMUPS" "$STEADY_SAMPLES"; do
+    case "$value" in *[!0-9]*|"") echo "benchmark counts must be non-negative integers" >&2; exit 2 ;; esac
+done
+if [ ! -f "$LOADABLE" ] || [ ! -f "$INPUT" ] || [ ! -f "$GOLDEN" ]; then
+    echo "benchmark workload is incomplete: $WORKLOAD" >&2
+    exit 2
+fi
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="/tmp/nvdla-board-benchmark-${MODEL}-${STAMP}"
+ARCHIVE="${OUT}.tar.gz"
+LATEST="/tmp/nvdla-board-benchmark-latest.tar.gz"
+BAD_PATTERN='Oops|BUG:|WARNING:|DMA-API|scheduler timeout|interrupt timeout|Timeout waiting for hardware|detected stalls|rcu.*stall|SError|External abort'
+STATUS=0
+CLASSIFICATION="not-run"
+NODE=""
+PRINTK_ORIGINAL=""
+GOVERNORS_SAVED="$OUT/governors-before.txt"
+
+mkdir -p "$OUT"
+
+capture() {
+    name="$1"
+    shift
+    if "$@" >"$OUT/$name" 2>&1; then
+        return 0
+    fi
+    printf '%s\n' "$?" >"$OUT/${name}.exit-status"
+}
+
+irq_total() {
+    awk '
+        tolower($0) ~ /nvdla/ {
+            for (field = 2; field <= NF; field++) {
+                if ($field ~ /^[0-9]+$/)
+                    total += $field
+                else
+                    break
+            }
+        }
+        END { print total + 0 }
+    ' /proc/interrupts
+}
+
+restore_environment() {
+    if [ -n "$PRINTK_ORIGINAL" ] && [ -w /proc/sys/kernel/printk ]; then
+        printf '%s\n' "$PRINTK_ORIGINAL" >/proc/sys/kernel/printk 2>/dev/null || true
+    fi
+    if [ -f "$GOVERNORS_SAVED" ]; then
+        while IFS='=' read -r path value; do
+            if [ -n "$path" ] && [ -w "$path" ]; then
+                printf '%s\n' "$value" >"$path" 2>/dev/null || true
+            fi
+        done <"$GOVERNORS_SAVED"
+    fi
+}
+
+finish() {
+    restore_environment
+    dmesg >"$OUT/dmesg-after.log" 2>&1 || true
+    tail -n +"$((DMESG_LINES + 1))" "$OUT/dmesg-after.log" >"$OUT/dmesg-delta.log" 2>/dev/null || true
+    IRQ_AFTER="$(irq_total)"
+    IRQ_DELTA=$((IRQ_AFTER - IRQ_BEFORE))
+    printf '%s\n' "$IRQ_AFTER" >"$OUT/irq-after.txt"
+    printf '%s\n' "$IRQ_DELTA" >"$OUT/irq-delta.txt"
+    if grep -Ei "$BAD_PATTERN" "$OUT/dmesg-delta.log" >"$OUT/bad-kernel-patterns.txt"; then
+        STATUS=1
+        CLASSIFICATION="kernel-log-failure"
+    else
+        : >"$OUT/bad-kernel-patterns.txt"
+    fi
+    {
+        echo "schema_version=1"
+        echo "model=$MODEL"
+        echo "regime=$REGIME"
+        echo "status=$STATUS"
+        echo "classification=$CLASSIFICATION"
+        echo "timestamp_utc=$STAMP"
+        echo "payload_root=$PAYLOAD_ROOT"
+        echo "render_node=$NODE"
+        echo "cold_starts=$COLD_STARTS"
+        echo "warm_starts=$WARM_STARTS"
+        echo "warmups=$WARMUPS"
+        echo "steady_samples=$STEADY_SAMPLES"
+        echo "settle_seconds=$SETTLE_SECONDS"
+        echo "power_sample=$POWER_SAMPLE"
+        echo "firmware_log=$FIRMWARE_LOG"
+        echo "power_idle_seconds=$POWER_IDLE_SECONDS"
+        echo "runtime_timeout_seconds=$RUNTIME_TIMEOUT"
+        echo "irq_before=$IRQ_BEFORE"
+        echo "irq_after=$IRQ_AFTER"
+        echo "irq_delta=$IRQ_DELTA"
+        echo "nvdla_clock_status=$CLOCK_STATUS"
+    } >"$OUT/benchmark.env"
+    rm -f "$ARCHIVE" "$LATEST"
+    tar -czf "$ARCHIVE" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+    ln -s "$ARCHIVE" "$LATEST"
+    echo "NVDLA_BENCHMARK_MODEL=$MODEL"
+    echo "NVDLA_BENCHMARK_STATUS=$STATUS"
+    echo "NVDLA_BENCHMARK_CLASSIFICATION=$CLASSIFICATION"
+    echo "NVDLA_BENCHMARK_ARTIFACT=$ARCHIVE"
+    exit "$STATUS"
+}
+trap restore_environment EXIT HUP INT TERM
+
+if (
+    cd "$PAYLOAD_ROOT"
+    sha256sum -c SHA256SUMS
+) >"$OUT/payload-verify.log" 2>&1; then
+    :
+else
+    STATUS=1
+    CLASSIFICATION="payload-verification-failure"
+    CLOCK_STATUS="not-checked"
+    DMESG_LINES=0
+    IRQ_BEFORE=0
+    finish
+fi
+
+capture uname.txt uname -a
+capture cmdline.txt cat /proc/cmdline
+capture cpuinfo.txt cat /proc/cpuinfo
+capture meminfo-before.txt cat /proc/meminfo
+capture loadavg-before.txt cat /proc/loadavg
+capture interrupts-before.txt cat /proc/interrupts
+capture mounts.txt cat /proc/mounts
+capture payload-files.txt find "$PAYLOAD_ROOT" -type f -print
+capture software-hashes.txt sha256sum \
+    /usr/bin/nvdla_runtime \
+    /usr/lib/libnvdla_runtime.so \
+    /usr/bin/nvdla-board-benchmark \
+    /usr/bin/nvdla-benchmark-launch \
+    "$LOADABLE" "$INPUT" "$GOLDEN" \
+    "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS"
+MODULE_PATH="$(modinfo -n opendla 2>/dev/null || true)"
+if [ -n "$MODULE_PATH" ] && [ -f "$MODULE_PATH" ]; then
+    sha256sum "$MODULE_PATH" >"$OUT/module-hash.txt"
+else
+    : >"$OUT/module-hash.txt"
+fi
+cp "$PAYLOAD_ROOT/PAYLOAD.json" "$OUT/payload-manifest.json"
+cp "$WORKLOAD/manifest.json" "$OUT/workload-manifest.json"
+
+dmesg >"$OUT/dmesg-before.log" 2>&1 || true
+DMESG_LINES="$(wc -l <"$OUT/dmesg-before.log" | tr -d ' ')"
+IRQ_BEFORE="$(irq_total)"
+printf '%s\n' "$IRQ_BEFORE" >"$OUT/irq-before.txt"
+
+if modprobe opendla firmware_log="$FIRMWARE_LOG" >"$OUT/module-load.log" 2>&1; then
+    :
+else
+    STATUS=1
+    CLASSIFICATION="module-load-failure"
+    CLOCK_STATUS="not-checked"
+    finish
+fi
+if [ -w /sys/module/opendla/parameters/firmware_log ]; then
+    printf '%s\n' "$FIRMWARE_LOG" >/sys/module/opendla/parameters/firmware_log
+fi
+capture module-parameters.txt sh -c 'for path in /sys/module/opendla/parameters/*; do printf "%s=" "$(basename "$path")"; cat "$path"; done'
+
+set -- /dev/dri/renderD*
+if [ ! -e "$1" ]; then
+    STATUS=1
+    CLASSIFICATION="render-node-failure"
+    CLOCK_STATUS="not-checked"
+    finish
+fi
+NODE="$1"
+
+PRINTK_ORIGINAL="$(cat /proc/sys/kernel/printk 2>/dev/null || true)"
+dmesg -n 3
+: >"$GOVERNORS_SAVED"
+for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    if [ -r "$governor" ]; then
+        printf '%s=%s\n' "$governor" "$(cat "$governor")" >>"$GOVERNORS_SAVED"
+        if [ -w "$governor" ] && grep -qw performance "$(dirname "$governor")/scaling_available_governors"; then
+            printf 'performance\n' >"$governor"
+        fi
+    fi
+done
+capture governors-active.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+capture frequencies-before.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+capture temperatures-before.txt sh -c 'for path in /sys/class/thermal/thermal_zone*/temp; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+
+if [ ! -r /sys/kernel/debug/clk/clk_summary ]; then
+    mount -t debugfs debugfs /sys/kernel/debug >"$OUT/debugfs-mount.log" 2>&1 || true
+fi
+if [ -r /sys/kernel/debug/clk/clk_summary ]; then
+    cp /sys/kernel/debug/clk/clk_summary "$OUT/clk-summary.txt"
+    grep -Ei 'pl0_ref|nvdla|csb|m_axi' "$OUT/clk-summary.txt" >"$OUT/nvdla-clock-lines.txt" || true
+else
+    : >"$OUT/clk-summary.txt"
+    : >"$OUT/nvdla-clock-lines.txt"
+fi
+if awk '
+    {
+        for (field = 1; field <= NF; field++)
+            if ($field ~ /^[0-9]+$/ && $field >= 99999000 && $field <= 100001000)
+                found = 1
+    }
+    END { exit(found ? 0 : 1) }
+' "$OUT/nvdla-clock-lines.txt"; then
+    CLOCK_STATUS="verified-100mhz"
+elif [ -s "$OUT/nvdla-clock-lines.txt" ]; then
+    CLOCK_STATUS="unexpected-rate"
+else
+    CLOCK_STATUS="unavailable"
+fi
+printf '%s\n' "$CLOCK_STATUS" >"$OUT/nvdla-clock-status.txt"
+if [ "$CLOCK_STATUS" != "verified-100mhz" ]; then
+    STATUS=1
+    CLASSIFICATION="nvdla-clock-unverified"
+    finish
+fi
+
+sleep "$SETTLE_SECONDS"
+capture loadavg-settled.txt cat /proc/loadavg
+capture meminfo-settled.txt cat /proc/meminfo
+
+verify_output() {
+    run_dir="$1"
+    output="$run_dir/output.dimg"
+    if [ ! -f "$output" ]; then
+        echo "missing-output" >"$run_dir/verification.txt"
+        return 1
+    fi
+    if [ "$MODEL" = "lenet" ]; then
+        actual="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$output")"
+        expected="$(awk '{$1=$1; printf "%s%s", separator, $0; separator=" "} END { print "" }' "$GOLDEN")"
+        printf '%s\n' "$actual" >"$run_dir/output-normalized.txt"
+        [ "$actual" = "$expected" ] || {
+            echo "output-mismatch" >"$run_dir/verification.txt"
+            return 1
+        }
+    elif ! cmp -s "$GOLDEN" "$output"; then
+        echo "output-mismatch" >"$run_dir/verification.txt"
+        return 1
+    fi
+    if ! grep -q '"outputs_consistent":[[:space:]]*true' "$run_dir/profile.json"; then
+        echo "repeat-output-inconsistency" >"$run_dir/verification.txt"
+        return 1
+    fi
+    sha256sum "$output" >"$run_dir/output.sha256"
+    echo "exact-pass" >"$run_dir/verification.txt"
+}
+
+run_profile() {
+    regime="$1"
+    index="$2"
+    warmups="$3"
+    iterations="$4"
+    run_dir="$OUT/$regime-$index"
+    mkdir -p "$run_dir"
+    irq_before="$(irq_total)"
+    set +e
+    (
+        cd "$run_dir"
+        nvdla-benchmark-launch --elapsed-ns launch-elapsed-ns.txt \
+            --timeout-seconds "$RUNTIME_TIMEOUT" -- \
+            env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
+            nvdla_runtime \
+                --loadable "$LOADABLE" \
+                --image "$INPUT" \
+                --rawdump \
+                --profile-json profile.json \
+                --warmup "$warmups" \
+                --iterations "$iterations"
+    ) >"$run_dir/runtime.stdout.log" 2>"$run_dir/runtime.stderr.log"
+    runtime_status=$?
+    set -e
+    irq_after="$(irq_total)"
+    {
+        echo "runtime_status=$runtime_status"
+        echo "irq_before=$irq_before"
+        echo "irq_after=$irq_after"
+        echo "irq_delta=$((irq_after - irq_before))"
+    } >"$run_dir/run.env"
+    if [ "$runtime_status" -ne 0 ]; then
+        echo "runtime-failure" >"$run_dir/verification.txt"
+        return 1
+    fi
+    verify_output "$run_dir"
+}
+
+run_many() {
+    regime="$1"
+    count="$2"
+    index=1
+    while [ "$index" -le "$count" ]; do
+        if [ "$regime" = "cold" ]; then
+            sync
+            if ! printf '3\n' >/proc/sys/vm/drop_caches; then
+                STATUS=1
+                CLASSIFICATION="page-cache-drop-failure"
+                finish
+            fi
+        else
+            cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime /usr/lib/libnvdla_runtime.so >/dev/null
+        fi
+        if ! run_profile "$regime" "$index" 0 1; then
+            STATUS=1
+            CLASSIFICATION="${regime}-run-failure"
+            finish
+        fi
+        index=$((index + 1))
+    done
+}
+
+case "$REGIME" in all|cold) run_many cold "$COLD_STARTS" ;; esac
+case "$REGIME" in all|warm) run_many warm "$WARM_STARTS" ;; esac
+case "$REGIME" in
+    all|steady)
+        cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime /usr/lib/libnvdla_runtime.so >/dev/null
+        if ! run_profile steady 1 "$WARMUPS" "$STEADY_SAMPLES"; then
+            STATUS=1
+            CLASSIFICATION="steady-run-failure"
+            finish
+        fi
+        ;;
+esac
+
+if [ "$POWER_SAMPLE" -eq 1 ]; then
+    POWER_OUT="$OUT/power-sampling"
+    mkdir -p "$POWER_OUT"
+    : >"$POWER_OUT/sensor-files.txt"
+    : >"$POWER_OUT/sensor-labels.txt"
+    for sensor in /sys/class/hwmon/hwmon*/power*_input; do
+        [ -r "$sensor" ] || continue
+        label_path="${sensor%_input}_label"
+        device_label="$(dirname "$sensor")/device/of_node/label"
+        label=""
+        if [ -r "$label_path" ]; then
+            label="$(cat "$label_path")"
+        elif [ -r "$device_label" ]; then
+            label="$(tr -d '\000' <"$device_label")"
+        fi
+        [ -n "$label" ] || continue
+        printf '%s\n' "$sensor" >>"$POWER_OUT/sensor-files.txt"
+        printf '%s=%s\n' "$sensor" "$label" >>"$POWER_OUT/sensor-labels.txt"
+    done
+    if [ -s "$POWER_OUT/sensor-files.txt" ]; then
+        idle_end=$(( $(cut -d '.' -f 1 /proc/uptime) + POWER_IDLE_SECONDS ))
+        while [ "$(cut -d '.' -f 1 /proc/uptime)" -lt "$idle_end" ]; do
+            timestamp="$(cut -d ' ' -f 1 /proc/uptime)"
+            while IFS= read -r sensor; do
+                [ -r "$sensor" ] && printf '%s,%s,%s\n' "$timestamp" "$sensor" "$(cat "$sensor")"
+            done <"$POWER_OUT/sensor-files.txt"
+            sleep 1
+        done >"$POWER_OUT/idle-readings.csv"
+        stop_file="$POWER_OUT/stop"
+        (
+            while [ ! -f "$stop_file" ]; do
+                timestamp="$(cut -d ' ' -f 1 /proc/uptime)"
+                while IFS= read -r sensor; do
+                    [ -r "$sensor" ] && printf '%s,%s,%s\n' "$timestamp" "$sensor" "$(cat "$sensor")"
+                done <"$POWER_OUT/sensor-files.txt"
+                sleep 1
+            done
+        ) >"$POWER_OUT/readings.csv" &
+        sampler_pid=$!
+        if ! run_profile power 1 "$WARMUPS" "$STEADY_SAMPLES"; then
+            touch "$stop_file"
+            wait "$sampler_pid" 2>/dev/null || true
+            STATUS=1
+            CLASSIFICATION="power-run-failure"
+            finish
+        fi
+        touch "$stop_file"
+        wait "$sampler_pid" 2>/dev/null || true
+    else
+        echo "labelled hwmon power rails unavailable" >"$POWER_OUT/unavailable.txt"
+    fi
+fi
+
+capture frequencies-after.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+capture temperatures-after.txt sh -c 'for path in /sys/class/thermal/thermal_zone*/temp; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+capture loadavg-after.txt cat /proc/loadavg
+capture meminfo-after.txt cat /proc/meminfo
+STATUS=0
+CLASSIFICATION="exact-performance-pass"
+finish

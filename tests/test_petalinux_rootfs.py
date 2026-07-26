@@ -44,6 +44,8 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla-flatbuf-client",
             "usr/bin/nvdla-board-check",
             "usr/bin/nvdla-board-workload",
+            "usr/bin/nvdla-board-benchmark",
+            "usr/bin/nvdla-benchmark-launch",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
             "lib/modules/6.6.10/extra/opendla.ko",
@@ -58,7 +60,12 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             for name in sorted(names):
                 data = (
                     b"#!/bin/sh\nexit 0\n"
-                    if name in {"usr/bin/nvdla-board-check", "usr/bin/nvdla-board-workload"}
+                    if name
+                    in {
+                        "usr/bin/nvdla-board-check",
+                        "usr/bin/nvdla-board-workload",
+                        "usr/bin/nvdla-board-benchmark",
+                    }
                     else b"[Service]\nExecStart=-/sbin/agetty --autologin root ttyPS0\n"
                     if name == "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
                     else (
@@ -92,7 +99,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                 needed = RUNTIME_NEEDED
             elif path.name == "libnvdla_runtime.so":
                 needed = LIBRARY_NEEDED
-            elif path.name in {"nvdla-kmd-smoke", "nvdla-flatbuf-client"}:
+            elif path.name in {
+                "nvdla-kmd-smoke",
+                "nvdla-flatbuf-client",
+                "nvdla-benchmark-launch",
+            }:
                 needed = SMOKE_NEEDED
             return {
                 "machine": machine,
@@ -146,6 +157,16 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/bin/nvdla-board-workload"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing workload_runner from rootfs", result["errors"])
+
+    def test_rejects_missing_benchmark_runner(self) -> None:
+        result = self._audit({"usr/bin/nvdla-board-benchmark"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing benchmark_runner from rootfs", result["errors"])
+
+    def test_rejects_missing_benchmark_launcher(self) -> None:
+        result = self._audit({"usr/bin/nvdla-benchmark-launch"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing benchmark_launcher from rootfs", result["errors"])
 
     def test_rejects_missing_serial_autologin_override(self) -> None:
         result = self._audit({"etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"})

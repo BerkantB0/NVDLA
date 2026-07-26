@@ -23,6 +23,8 @@ BOARD_SMOKE_BINARY_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-kmd-smoke"
 BOARD_FLATBUF_CLIENT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-flatbuf-client"
 BOARD_CHECK_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-check"
 BOARD_WORKLOAD_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-workload"
+BOARD_BENCHMARK_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-benchmark"
+BOARD_BENCHMARK_LAUNCH_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-benchmark-launch"
 RUNTIME_PACKAGE_PATH="$(
   { find "$PETALINUX_PROJECT/build/tmp/deploy/rpm" -type f -name 'nvdla-runtime-[0-9]*.rpm' -printf '%T@ %p\n' 2>/dev/null || true; } \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
@@ -35,6 +37,7 @@ export ROOTFS_TAR_PATH ROOTFS_AUDIT_PATH IMAGE_APPEND_PATH RUNTIME_RECIPE_PATH B
 export RUNTIME_BINARY_PATH RUNTIME_LIBRARY_PATH RUNTIME_PACKAGE_PATH
 export BOARD_SMOKE_BINARY_PATH BOARD_FLATBUF_CLIENT_PATH BOARD_CHECK_SCRIPT_PATH BOARD_TOOLS_PACKAGE_PATH
 export BOARD_WORKLOAD_SCRIPT_PATH
+export BOARD_BENCHMARK_SCRIPT_PATH BOARD_BENCHMARK_LAUNCH_PATH
 
 if [[ ! -f "$ROOTFS_TAR_PATH" ]]; then
   pl_finish_blocked "PetaLinux rootfs archive is missing; run make petalinux-image first"

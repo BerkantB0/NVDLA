@@ -416,7 +416,7 @@ VERMAGIC_STATUS=$?
 cat_section module_vermagic /tmp/module-vermagic.txt
 echo "__NVDLA_STATUS_module_vermagic=$VERMAGIC_STATUS"
 
-insmod /mnt/r/opendla.ko >/tmp/module-load.log 2>&1
+insmod /mnt/r/opendla.ko firmware_log=1 >/tmp/module-load.log 2>&1
 MODULE_STATUS=$?
 cat_section module_load /tmp/module-load.log
 echo "__NVDLA_STATUS_module_load=$MODULE_STATUS"
@@ -591,7 +591,7 @@ VERMAGIC_STATUS=$?
 cat_section module_vermagic /tmp/module-vermagic.txt
 echo "__NVDLA_STATUS_module_vermagic=$VERMAGIC_STATUS"
 
-insmod /mnt/r/opendla.ko >/tmp/module-load.log 2>&1
+insmod /mnt/r/opendla.ko firmware_log=1 >/tmp/module-load.log 2>&1
 MODULE_STATUS=$?
 cat_section module_load /tmp/module-load.log
 echo "__NVDLA_STATUS_module_load=$MODULE_STATUS"

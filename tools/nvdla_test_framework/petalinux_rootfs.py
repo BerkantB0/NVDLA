@@ -15,6 +15,8 @@ SMOKE_MEMBER = "usr/bin/nvdla-kmd-smoke"
 FLATBUF_CLIENT_MEMBER = "usr/bin/nvdla-flatbuf-client"
 COLLECTOR_MEMBER = "usr/bin/nvdla-board-check"
 WORKLOAD_RUNNER_MEMBER = "usr/bin/nvdla-board-workload"
+BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-benchmark"
+BENCHMARK_LAUNCHER_MEMBER = "usr/bin/nvdla-benchmark-launch"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
 MODULE_PREFIX = "lib/modules/"
@@ -79,6 +81,8 @@ def audit_petalinux_rootfs(
             "flatbuf_client": FLATBUF_CLIENT_MEMBER,
             "collector": COLLECTOR_MEMBER,
             "workload_runner": WORKLOAD_RUNNER_MEMBER,
+            "benchmark_runner": BENCHMARK_RUNNER_MEMBER,
+            "benchmark_launcher": BENCHMARK_LAUNCHER_MEMBER,
             "serial_autologin": AUTOLOGIN_MEMBER,
             "network_profile": NETWORK_MEMBER,
             "module": module_members[0] if module_members else None,
@@ -101,7 +105,7 @@ def audit_petalinux_rootfs(
             with destination.open("wb") as output:
                 output.write(source.read())
             extracted[label] = destination
-            if label in {"collector", "workload_runner"}:
+            if label in {"collector", "workload_runner", "benchmark_runner"}:
                 if member.mode & 0o111 == 0:
                     errors.append(f"{label} is not executable")
                 if not destination.read_bytes().startswith(b"#!/bin/sh\n"):
@@ -131,7 +135,13 @@ def audit_petalinux_rootfs(
 
     elf: dict[str, dict[str, Any]] = {}
     for label, path in extracted.items():
-        if label in {"collector", "workload_runner", "serial_autologin", "network_profile"}:
+        if label in {
+            "collector",
+            "workload_runner",
+            "benchmark_runner",
+            "serial_autologin",
+            "network_profile",
+        }:
             continue
         try:
             info = inspector(path)

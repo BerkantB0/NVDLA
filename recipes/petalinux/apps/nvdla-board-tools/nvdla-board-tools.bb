@@ -9,8 +9,10 @@ SRC_URI = " \
     git://github.com/nvdla/sw.git;protocol=https;branch=master \
     file://nvdla-kmd-smoke.c \
     file://nvdla-flatbuf-client.c \
+    file://nvdla-benchmark-launch.c \
     file://nvdla-board-check \
     file://nvdla-board-workload \
+    file://nvdla-board-benchmark \
     file://serial-root-autologin.conf \
     file://20-nvdla-direct.network \
 "
@@ -30,6 +32,10 @@ do_compile() {
         ${WORKDIR}/nvdla-flatbuf-client.c \
         ${LDFLAGS} \
         -o ${B}/nvdla-flatbuf-client
+    ${CC} ${CPPFLAGS} ${CFLAGS} ${DEBUG_PREFIX_MAP} -g0 \
+        ${WORKDIR}/nvdla-benchmark-launch.c \
+        ${LDFLAGS} \
+        -o ${B}/nvdla-benchmark-launch
 }
 
 do_install() {
@@ -38,8 +44,10 @@ do_install() {
     install -d ${D}${sysconfdir}/systemd/network
     install -m 0755 ${B}/nvdla-kmd-smoke ${D}${bindir}/nvdla-kmd-smoke
     install -m 0755 ${B}/nvdla-flatbuf-client ${D}${bindir}/nvdla-flatbuf-client
+    install -m 0755 ${B}/nvdla-benchmark-launch ${D}${bindir}/nvdla-benchmark-launch
     install -m 0755 ${WORKDIR}/nvdla-board-check ${D}${bindir}/nvdla-board-check
     install -m 0755 ${WORKDIR}/nvdla-board-workload ${D}${bindir}/nvdla-board-workload
+    install -m 0755 ${WORKDIR}/nvdla-board-benchmark ${D}${bindir}/nvdla-board-benchmark
     install -m 0644 ${WORKDIR}/serial-root-autologin.conf \
         ${D}${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf
     install -m 0644 ${WORKDIR}/20-nvdla-direct.network \
@@ -50,8 +58,10 @@ do_deploy() {
     install -d ${DEPLOYDIR}
     install -m 0755 ${D}${bindir}/nvdla-kmd-smoke ${DEPLOYDIR}/nvdla-kmd-smoke
     install -m 0755 ${D}${bindir}/nvdla-flatbuf-client ${DEPLOYDIR}/nvdla-flatbuf-client
+    install -m 0755 ${D}${bindir}/nvdla-benchmark-launch ${DEPLOYDIR}/nvdla-benchmark-launch
     install -m 0755 ${D}${bindir}/nvdla-board-check ${DEPLOYDIR}/nvdla-board-check
     install -m 0755 ${D}${bindir}/nvdla-board-workload ${DEPLOYDIR}/nvdla-board-workload
+    install -m 0755 ${D}${bindir}/nvdla-board-benchmark ${DEPLOYDIR}/nvdla-board-benchmark
 }
 addtask deploy after do_install before do_build
 

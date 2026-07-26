@@ -249,6 +249,10 @@ else
     CLASSIFICATION="module-load-failure"
     finish
 fi
+if [ -w /sys/module/opendla/parameters/firmware_log ]; then
+    printf '1\n' >/sys/module/opendla/parameters/firmware_log
+fi
+capture firmware-log.txt cat /sys/module/opendla/parameters/firmware_log
 PLATFORM_DEVICE=""
 for device in /sys/bus/platform/devices/a0000000.*; do
     if [ -e "$device" ]; then
