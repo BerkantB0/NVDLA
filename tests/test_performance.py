@@ -53,7 +53,7 @@ class PerformanceTests(unittest.TestCase):
             write_samples(power / "idle-readings.csv", idle_rows)
             write_samples(power / "readings.csv", active_rows)
 
-            profile_dir = root / "power-1"
+            profile_dir = root / "steady-1"
             profile_dir.mkdir()
             (profile_dir / "profile.json").write_text(
                 json.dumps(
@@ -107,6 +107,7 @@ class PerformanceTests(unittest.TestCase):
             "\n".join(
                 [
                     "schema_version=1",
+                    "benchmark_interface=cli-v1",
                     "model=lenet",
                     "status=0",
                     "classification=exact-performance-pass",

@@ -1,97 +1,210 @@
 #!/bin/sh
 set -eu
 
+usage() {
+    cat <<'EOF'
+usage: nvdla-board-benchmark {lenet|resnet50} PAYLOAD_ROOT [OPTIONS]
+
+Latency options:
+  --regime {all|cold|warm|steady}  Latency regimes to run (default: all)
+  --cold-starts N                  Cold process samples
+  --warm-starts N                  Warm process samples
+  --warmups N                      Warm-ups before measured steady samples
+  --steady-samples N               Measured steady-state submissions
+  --settle-seconds N               Delay before measurement (default: 30)
+  --runtime-timeout-seconds N      Per-process watchdog timeout
+  --benchmark-cpu {N|none}         Runtime CPU affinity (default: 2)
+  --firmware-log                   Enable diagnostic firmware progress logging
+
+Power options:
+  --power                          Sample power during the steady phase
+  --power-idle-seconds N           Idle baseline duration (default: 10)
+  --power-interval-ms N            Sampling interval (default: 50)
+  --power-sampler-cpu N            Sampler CPU affinity (default: 3)
+
+Other:
+  --help                           Show this help
+EOF
+}
+
+fail_usage() {
+    echo "nvdla-board-benchmark: $*" >&2
+    usage >&2
+    exit 2
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    usage
+    exit 0
+fi
+if [ "$#" -lt 2 ]; then
+    fail_usage "model and payload root are required"
+fi
+
 MODEL="${1:-}"
 PAYLOAD_ROOT="${2:-}"
 case "$MODEL" in
     lenet|resnet50) ;;
-    *)
-        echo "usage: nvdla-board-benchmark {lenet|resnet50} PAYLOAD_ROOT" >&2
-        exit 2
-        ;;
+    *) fail_usage "model must be lenet or resnet50" ;;
 esac
-if [ -z "$PAYLOAD_ROOT" ] || [ ! -d "$PAYLOAD_ROOT" ]; then
-    echo "payload root does not exist: $PAYLOAD_ROOT" >&2
-    exit 2
-fi
+shift 2
 
-REGIME="${REGIME:-all}"
-POWER_SAMPLE="${POWER_SAMPLE:-0}"
-FIRMWARE_LOG="${FIRMWARE_LOG:-0}"
-BENCH_CPU="${BENCH_CPU:-2}"
-SETTLE_SECONDS="${SETTLE_SECONDS:-30}"
-POWER_IDLE_SECONDS="${POWER_IDLE_SECONDS:-10}"
-POWER_INTERVAL_MS="${POWER_INTERVAL_MS:-50}"
-POWER_SAMPLER_CPU="${POWER_SAMPLER_CPU:-3}"
+REGIME="all"
+POWER_SAMPLE=0
+FIRMWARE_LOG=0
+BENCH_CPU=2
+SETTLE_SECONDS=30
+POWER_IDLE_SECONDS=10
+POWER_INTERVAL_MS=50
+POWER_SAMPLER_CPU=3
+POWER_OPTIONS_SET=0
+POWER_PHASE="disabled"
+POWER_SCOPE="disabled"
+SEEN_OPTIONS=""
 if [ "$MODEL" = "resnet50" ]; then
-    RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-300}"
-else
-    RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-60}"
-fi
-case "$REGIME" in
-    all|cold|warm|steady) ;;
-    *) echo "REGIME must be all, cold, warm, or steady" >&2; exit 2 ;;
-esac
-case "$POWER_SAMPLE" in 0|1) ;; *) echo "POWER_SAMPLE must be 0 or 1" >&2; exit 2 ;; esac
-case "$FIRMWARE_LOG" in 0|1) ;; *) echo "FIRMWARE_LOG must be 0 or 1" >&2; exit 2 ;; esac
-case "$BENCH_CPU" in
-    none) ;;
-    *[!0-9]*|"") echo "BENCH_CPU must be an online CPU number or none" >&2; exit 2 ;;
-    *)
-        if [ ! -d "/sys/devices/system/cpu/cpu$BENCH_CPU" ] ||
-           { [ -r "/sys/devices/system/cpu/cpu$BENCH_CPU/online" ] &&
-             [ "$(cat "/sys/devices/system/cpu/cpu$BENCH_CPU/online")" != "1" ]; }; then
-            echo "BENCH_CPU is not online: $BENCH_CPU" >&2
-            exit 2
-        fi
-        ;;
-esac
-
-if [ "$MODEL" = "lenet" ]; then
-    COLD_STARTS="${COLD_STARTS:-10}"
-    WARM_STARTS="${WARM_STARTS:-30}"
-    WARMUPS="${WARMUPS:-20}"
-    STEADY_SAMPLES="${STEADY_SAMPLES:-200}"
-    POWER_ITERATIONS="${POWER_ITERATIONS:-10000}"
-    WORKLOAD="$PAYLOAD_ROOT/lenet_small"
-    LOADABLE="$WORKLOAD/loadable.nvdla"
-    INPUT="$WORKLOAD/input.pgm"
-    GOLDEN="$WORKLOAD/expected-output.txt"
-else
-    COLD_STARTS="${COLD_STARTS:-5}"
-    WARM_STARTS="${WARM_STARTS:-10}"
-    WARMUPS="${WARMUPS:-5}"
-    STEADY_SAMPLES="${STEADY_SAMPLES:-30}"
-    POWER_ITERATIONS="${POWER_ITERATIONS:-30}"
+    RUNTIME_TIMEOUT=300
+    COLD_STARTS=5
+    WARM_STARTS=10
+    WARMUPS=5
+    STEADY_SAMPLES=30
     WORKLOAD="$PAYLOAD_ROOT/resnet50_small"
     LOADABLE="$WORKLOAD/loadable.nvdla"
     INPUT="$WORKLOAD/input.jpg"
     GOLDEN="$WORKLOAD/golden-output.dimg"
+else
+    RUNTIME_TIMEOUT=60
+    COLD_STARTS=10
+    WARM_STARTS=30
+    WARMUPS=20
+    STEADY_SAMPLES=200
+    WORKLOAD="$PAYLOAD_ROOT/lenet_small"
+    LOADABLE="$WORKLOAD/loadable.nvdla"
+    INPUT="$WORKLOAD/input.pgm"
+    GOLDEN="$WORKLOAD/expected-output.txt"
 fi
 
-for value in "$SETTLE_SECONDS" "$POWER_IDLE_SECONDS" "$POWER_INTERVAL_MS" "$POWER_ITERATIONS" "$RUNTIME_TIMEOUT" "$COLD_STARTS" "$WARM_STARTS" "$WARMUPS" "$STEADY_SAMPLES"; do
-    case "$value" in *[!0-9]*|"") echo "benchmark counts must be non-negative integers" >&2; exit 2 ;; esac
+mark_option() {
+    case " $SEEN_OPTIONS " in
+        *" $1 "*) fail_usage "option specified more than once: $1" ;;
+    esac
+    SEEN_OPTIONS="$SEEN_OPTIONS $1"
+}
+
+while [ "$#" -gt 0 ]; do
+    option="$1"
+    case "$option" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --power)
+            mark_option "$option"
+            POWER_SAMPLE=1
+            POWER_PHASE="steady"
+            POWER_SCOPE="concurrent-steady-process-launch-through-exit"
+            shift
+            ;;
+        --firmware-log)
+            mark_option "$option"
+            FIRMWARE_LOG=1
+            shift
+            ;;
+        --regime|--cold-starts|--warm-starts|--warmups|--steady-samples|\
+        --settle-seconds|--runtime-timeout-seconds|--benchmark-cpu|\
+        --power-idle-seconds|--power-interval-ms|--power-sampler-cpu)
+            mark_option "$option"
+            if [ "$#" -lt 2 ]; then
+                fail_usage "$option requires a value"
+            fi
+            value="$2"
+            case "$option" in
+                --regime) REGIME="$value" ;;
+                --cold-starts) COLD_STARTS="$value" ;;
+                --warm-starts) WARM_STARTS="$value" ;;
+                --warmups) WARMUPS="$value" ;;
+                --steady-samples) STEADY_SAMPLES="$value" ;;
+                --settle-seconds) SETTLE_SECONDS="$value" ;;
+                --runtime-timeout-seconds) RUNTIME_TIMEOUT="$value" ;;
+                --benchmark-cpu) BENCH_CPU="$value" ;;
+                --power-idle-seconds)
+                    POWER_IDLE_SECONDS="$value"
+                    POWER_OPTIONS_SET=1
+                    ;;
+                --power-interval-ms)
+                    POWER_INTERVAL_MS="$value"
+                    POWER_OPTIONS_SET=1
+                    ;;
+                --power-sampler-cpu)
+                    POWER_SAMPLER_CPU="$value"
+                    POWER_OPTIONS_SET=1
+                    ;;
+            esac
+            shift 2
+            ;;
+        --)
+            shift
+            [ "$#" -eq 0 ] || fail_usage "unexpected positional argument: $1"
+            ;;
+        --*) fail_usage "unknown option: $option" ;;
+        *) fail_usage "unexpected positional argument: $option" ;;
+    esac
+done
+
+if [ -z "$PAYLOAD_ROOT" ] || [ ! -d "$PAYLOAD_ROOT" ]; then
+    fail_usage "payload root does not exist: $PAYLOAD_ROOT"
+fi
+case "$REGIME" in
+    all|cold|warm|steady) ;;
+    *) fail_usage "--regime must be all, cold, warm, or steady" ;;
+esac
+if [ "$POWER_SAMPLE" -eq 0 ] && [ "$POWER_OPTIONS_SET" -eq 1 ]; then
+    fail_usage "power tuning options require --power"
+fi
+if [ "$POWER_SAMPLE" -eq 1 ]; then
+    case "$REGIME" in
+        all|steady) ;;
+        *) fail_usage "--power requires a regime that includes steady" ;;
+    esac
+fi
+case "$BENCH_CPU" in
+    none) ;;
+    *[!0-9]*|"") fail_usage "--benchmark-cpu must be an online CPU number or none" ;;
+    *)
+        if [ ! -d "/sys/devices/system/cpu/cpu$BENCH_CPU" ] ||
+           { [ -r "/sys/devices/system/cpu/cpu$BENCH_CPU/online" ] &&
+             [ "$(cat "/sys/devices/system/cpu/cpu$BENCH_CPU/online")" != "1" ]; }; then
+            fail_usage "--benchmark-cpu is not online: $BENCH_CPU"
+        fi
+        ;;
+esac
+
+for value in "$SETTLE_SECONDS" "$POWER_IDLE_SECONDS" "$POWER_INTERVAL_MS" "$RUNTIME_TIMEOUT" "$COLD_STARTS" "$WARM_STARTS" "$WARMUPS" "$STEADY_SAMPLES"; do
+    case "$value" in
+        *[!0-9]*|"") fail_usage "counts and durations must be non-negative integers" ;;
+    esac
 done
 if [ "$POWER_SAMPLE" -eq 1 ]; then
-    if [ "$POWER_INTERVAL_MS" -eq 0 ] || [ "$POWER_ITERATIONS" -eq 0 ]; then
-        echo "power interval and iterations must be positive" >&2
-        exit 2
+    if [ "$POWER_IDLE_SECONDS" -eq 0 ] ||
+       [ "$POWER_INTERVAL_MS" -eq 0 ] ||
+       [ "$STEADY_SAMPLES" -eq 0 ]; then
+        fail_usage "power idle duration, interval, and steady samples must be positive"
     fi
     case "$POWER_SAMPLER_CPU" in
-        *[!0-9]*|"") echo "POWER_SAMPLER_CPU must be an online CPU number" >&2; exit 2 ;;
+        *[!0-9]*|"") fail_usage "--power-sampler-cpu must be an online CPU number" ;;
         *)
             if [ ! -d "/sys/devices/system/cpu/cpu$POWER_SAMPLER_CPU" ] ||
                { [ -r "/sys/devices/system/cpu/cpu$POWER_SAMPLER_CPU/online" ] &&
                  [ "$(cat "/sys/devices/system/cpu/cpu$POWER_SAMPLER_CPU/online")" != "1" ]; }; then
-                echo "POWER_SAMPLER_CPU is not online: $POWER_SAMPLER_CPU" >&2
-                exit 2
+                fail_usage "--power-sampler-cpu is not online: $POWER_SAMPLER_CPU"
             fi
             ;;
     esac
 fi
+if [ "$RUNTIME_TIMEOUT" -eq 0 ]; then
+    fail_usage "runtime timeout must be positive"
+fi
 if [ ! -f "$LOADABLE" ] || [ ! -f "$INPUT" ] || [ ! -f "$GOLDEN" ]; then
-    echo "benchmark workload is incomplete: $WORKLOAD" >&2
-    exit 2
+    fail_usage "benchmark workload is incomplete: $WORKLOAD"
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -173,6 +286,7 @@ finish() {
     fi
     {
         echo "schema_version=1"
+        echo "benchmark_interface=cli-v1"
         echo "model=$MODEL"
         echo "regime=$REGIME"
         echo "status=$STATUS"
@@ -190,9 +304,9 @@ finish() {
         echo "benchmark_cpu=$BENCH_CPU"
         echo "power_idle_seconds=$POWER_IDLE_SECONDS"
         echo "power_interval_ms=$POWER_INTERVAL_MS"
-        echo "power_iterations=$POWER_ITERATIONS"
+        echo "power_phase=$POWER_PHASE"
         echo "power_sampler_cpu=$POWER_SAMPLER_CPU"
-        echo "power_scope=batch-process-launch-through-exit"
+        echo "power_scope=$POWER_SCOPE"
         echo "runtime_timeout_seconds=$RUNTIME_TIMEOUT"
         echo "irq_before=$IRQ_BEFORE"
         echo "irq_after=$IRQ_AFTER"
@@ -435,20 +549,7 @@ run_many() {
     done
 }
 
-case "$REGIME" in all|cold) run_many cold "$COLD_STARTS" ;; esac
-case "$REGIME" in all|warm) run_many warm "$WARM_STARTS" ;; esac
-case "$REGIME" in
-    all|steady)
-        cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime /usr/lib/libnvdla_runtime.so >/dev/null
-        if ! run_profile steady 1 "$WARMUPS" "$STEADY_SAMPLES"; then
-            STATUS=1
-            CLASSIFICATION="steady-run-failure"
-            finish
-        fi
-        ;;
-esac
-
-if [ "$POWER_SAMPLE" -eq 1 ]; then
+prepare_power_sampling() {
     POWER_OUT="$OUT/power-sampling"
     mkdir -p "$POWER_OUT"
     if ! /usr/bin/nvdla-power-sampler --list >"$POWER_OUT/sensors.csv" \
@@ -469,6 +570,9 @@ if [ "$POWER_SAMPLE" -eq 1 ]; then
     fi
     SAMPLER_STOP="$POWER_OUT/stop"
     rm -f "$SAMPLER_STOP"
+}
+
+start_power_sampling() {
     /usr/bin/nvdla-power-sampler \
         --output "$POWER_OUT/readings.csv" \
         --stop-file "$SAMPLER_STOP" \
@@ -476,23 +580,41 @@ if [ "$POWER_SAMPLE" -eq 1 ]; then
         --cpu "$POWER_SAMPLER_CPU" \
         2>"$POWER_OUT/active-sampler.stderr.log" &
     SAMPLER_PID=$!
-    if ! run_profile power 1 "$WARMUPS" "$POWER_ITERATIONS"; then
-        : >"$SAMPLER_STOP"
-        wait "$SAMPLER_PID" 2>/dev/null || true
-        SAMPLER_PID=""
-        STATUS=1
-        CLASSIFICATION="power-run-failure"
-        finish
-    fi
+}
+
+stop_power_sampling() {
     : >"$SAMPLER_STOP"
     if ! wait "$SAMPLER_PID"; then
         SAMPLER_PID=""
-        STATUS=1
-        CLASSIFICATION="power-active-sampling-failure"
-        finish
+        return 1
     fi
     SAMPLER_PID=""
-fi
+}
+
+case "$REGIME" in all|cold) run_many cold "$COLD_STARTS" ;; esac
+case "$REGIME" in all|warm) run_many warm "$WARM_STARTS" ;; esac
+case "$REGIME" in
+    all|steady)
+        cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime /usr/lib/libnvdla_runtime.so >/dev/null
+        if [ "$POWER_SAMPLE" -eq 1 ]; then
+            prepare_power_sampling
+            start_power_sampling
+        fi
+        if ! run_profile steady 1 "$WARMUPS" "$STEADY_SAMPLES"; then
+            if [ "$POWER_SAMPLE" -eq 1 ]; then
+                stop_power_sampling 2>/dev/null || true
+            fi
+            STATUS=1
+            CLASSIFICATION="steady-run-failure"
+            finish
+        fi
+        if [ "$POWER_SAMPLE" -eq 1 ] && ! stop_power_sampling; then
+            STATUS=1
+            CLASSIFICATION="power-active-sampling-failure"
+            finish
+        fi
+        ;;
+esac
 
 capture frequencies-after.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
 capture temperatures-after.txt sh -c 'for path in /sys/class/thermal/thermal_zone*/temp; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'

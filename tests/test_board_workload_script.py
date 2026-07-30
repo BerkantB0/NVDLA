@@ -42,6 +42,16 @@ class BoardWorkloadScriptTests(unittest.TestCase):
 
     def test_benchmark_has_controlled_measurement_boundaries(self) -> None:
         text = BENCHMARK_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("--regime {all|cold|warm|steady}", text)
+        self.assertIn("--cold-starts N", text)
+        self.assertIn("--warm-starts N", text)
+        self.assertIn("--steady-samples N", text)
+        self.assertIn("--benchmark-cpu {N|none}", text)
+        self.assertIn("--power", text)
+        self.assertIn("Sample power during the steady phase", text)
+        self.assertIn("power tuning options require --power", text)
+        self.assertIn("--power requires a regime that includes steady", text)
+        self.assertIn("option specified more than once", text)
         self.assertIn("nvdla-benchmark-launch", text)
         self.assertIn("--profile-json profile.json", text)
         self.assertIn("--warmup", text)
@@ -53,16 +63,91 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("CLOCK_EXPECTED_HZ", text)
         self.assertIn("outputs_consistent", text)
         self.assertIn("golden-output.dimg", text)
-        self.assertIn('BENCH_CPU="${BENCH_CPU:-2}"', text)
+        self.assertIn("BENCH_CPU=2", text)
         self.assertIn("--rusage rusage.env", text)
         self.assertIn('--cpu "$BENCH_CPU"', text)
         self.assertIn("nvdla-power-sampler", text)
-        self.assertIn('POWER_SAMPLER_CPU="${POWER_SAMPLER_CPU:-3}"', text)
-        self.assertIn('POWER_INTERVAL_MS="${POWER_INTERVAL_MS:-50}"', text)
-        self.assertIn('POWER_ITERATIONS="${POWER_ITERATIONS:-10000}"', text)
-        self.assertIn('POWER_ITERATIONS="${POWER_ITERATIONS:-30}"', text)
+        self.assertIn("POWER_SAMPLER_CPU=3", text)
+        self.assertIn("POWER_INTERVAL_MS=50", text)
+        self.assertIn('run_profile steady 1 "$WARMUPS" "$STEADY_SAMPLES"', text)
+        self.assertNotIn("run_profile power", text)
+        self.assertNotIn("POWER_ITERATIONS", text)
+        self.assertNotIn('REGIME="${REGIME:-all}"', text)
+        self.assertNotIn('POWER_SAMPLE="${POWER_SAMPLE:-0}"', text)
         self.assertNotIn("/dev/mem", text)
         self.assertNotIn("rmmod", text)
+
+    @unittest.skipUnless(shutil.which("dash"), "dash is required for CLI tests")
+    def test_benchmark_cli_help_and_validation(self) -> None:
+        help_result = subprocess.run(
+            ["dash", str(BENCHMARK_SCRIPT), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--power", help_result.stdout)
+        self.assertIn("--regime", help_result.stdout)
+
+        unknown = subprocess.run(
+            ["dash", str(BENCHMARK_SCRIPT), "lenet", "/tmp", "--unknown"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(unknown.returncode, 2)
+        self.assertIn("unknown option", unknown.stderr)
+
+        duplicate = subprocess.run(
+            [
+                "dash",
+                str(BENCHMARK_SCRIPT),
+                "lenet",
+                "/tmp",
+                "--regime",
+                "steady",
+                "--regime",
+                "warm",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(duplicate.returncode, 2)
+        self.assertIn("option specified more than once", duplicate.stderr)
+
+        unenabled_power = subprocess.run(
+            [
+                "dash",
+                str(BENCHMARK_SCRIPT),
+                "lenet",
+                "/tmp",
+                "--power-idle-seconds",
+                "10",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(unenabled_power.returncode, 2)
+        self.assertIn("power tuning options require --power", unenabled_power.stderr)
+
+        incompatible_regime = subprocess.run(
+            [
+                "dash",
+                str(BENCHMARK_SCRIPT),
+                "lenet",
+                "/tmp",
+                "--regime",
+                "cold",
+                "--power",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(incompatible_regime.returncode, 2)
+        self.assertIn("requires a regime that includes steady", incompatible_regime.stderr)
 
     def test_board_check_discovers_refined_xsa_node(self) -> None:
         text = CHECK_SCRIPT.read_text(encoding="utf-8")

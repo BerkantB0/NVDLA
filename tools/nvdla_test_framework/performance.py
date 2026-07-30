@@ -30,6 +30,7 @@ PHASES = (
 )
 ENGINES = ("Convolution", "SDP", "PDP", "CDP", "Rubik", "BDMA")
 PROVENANCE_KEYS = (
+    "benchmark_interface",
     "model",
     "input_sha256",
     "loadable_sha256",
@@ -46,7 +47,7 @@ PROVENANCE_KEYS = (
     "power_sample",
     "power_sampler_sha256",
     "power_interval_ms",
-    "power_iterations",
+    "power_phase",
     "power_sampler_cpu",
 )
 
@@ -126,6 +127,7 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
     ):
         raise ValueError("invalid NVDLA clock evidence")
     result = {
+        "benchmark_interface": env.get("benchmark_interface"),
         "model": env.get("model"),
         "input_sha256": str(image.get("sha256", "")).lower() or None,
         "loadable_sha256": str(loadable.get("sha256", "")).lower() or None,
@@ -150,8 +152,8 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
             if env.get("power_sample", "0") == "1"
             else "disabled"
         ),
-        "power_iterations": (
-            env.get("power_iterations")
+        "power_phase": (
+            env.get("power_phase")
             if env.get("power_sample", "0") == "1"
             else "disabled"
         ),
@@ -446,7 +448,7 @@ def _power_summary(root: Path) -> dict[str, Any]:
     if "domain/PS" not in active or "domain/PL" not in active:
         raise ValueError("power evidence must contain both PS and PL domains")
 
-    profile = _read_profile(root / "power-1" / "profile.json")
+    profile = _read_profile(root / "steady-1" / "profile.json")
     measured = int(profile["measured_iterations"])
     warmups = int(profile["warmup_iterations"])
     executed = measured + warmups
@@ -498,9 +500,10 @@ def _power_summary(root: Path) -> dict[str, Any]:
         "status": "available",
         "schema_version": 2,
         "measurement_scope": (
-            "batch process launch through exit; model setup and teardown are "
-            "amortized across all executed inferences"
+            "concurrent with steady process launch through exit; model setup "
+            "and teardown are amortized across all executed inferences"
         ),
+        "power_phase": "steady",
         "idle_scope": "driver-loaded board idle without a runtime process",
         "measured_iterations": measured,
         "warmup_iterations": warmups,
@@ -1484,6 +1487,7 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 power_rows.append(
                     {
                         "session": session["session"],
+                        "power_phase": power_result["power_phase"],
                         "scope_type": scope_type.removesuffix("s"),
                         "scope": scope,
                         "executed_iterations": power_result["executed_iterations"],
@@ -1660,10 +1664,11 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 "",
                 "## Power And Energy",
                 "",
-                "Power is sampled in a separate correctness-checked batch run. "
-                "PS includes software-stack and processing-system activity; PL includes "
-                "the FPGA fabric. Incremental values are active minus the driver-loaded "
-                "idle baseline and remain signed rather than being clamped to zero.",
+                "Power is sampled concurrently with the correctness-checked steady "
+                "profile. PS includes software-stack and processing-system activity; "
+                "PL includes the FPGA fabric. Incremental values are active minus the "
+                "driver-loaded idle baseline and remain signed rather than being "
+                "clamped to zero.",
                 "",
                 "| Session | Domain | Idle (W) | Active (W) | Incremental (W) | "
                 "Active energy/inference (mJ) | Incremental energy/inference (mJ) |",
