@@ -11,6 +11,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PetaLinuxDtsTests(unittest.TestCase):
+    def test_zcu102_power_fragment_uses_board_monitor_topology(self) -> None:
+        text = (
+            ROOT / "recipes/petalinux/device-tree/files/zcu102-power.dtsi"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('compatible = "nxp,pca9544";', text)
+        self.assertIn("reg = <0x75>;", text)
+        self.assertEqual(text.count('compatible = "ti,ina226";'), 18)
+        self.assertIn('label = "VCCINT";', text)
+        self.assertIn('label = "VCCBRAM";', text)
+        self.assertIn('label = "VCCAUX";', text)
+        self.assertIn('label = "VCCPSINTFP";', text)
+        self.assertIn("shunt-resistor = <2000>;", text)
+        self.assertEqual(text.count("shunt-resistor = <5000>;"), 17)
+
+        config = (
+            ROOT
+            / "recipes/petalinux/kernel/linux-xlnx/files/nvdla-power-monitor.cfg"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CONFIG_HWMON=y", config)
+        self.assertIn("CONFIG_I2C_MUX=y", config)
+        self.assertIn("CONFIG_I2C_MUX_PCA954x=y", config)
+        self.assertIn("CONFIG_SENSORS_INA2XX=y", config)
+
     def test_zcu102_ethernet_fragment_uses_board_phy_settings(self) -> None:
         text = (
             ROOT / "recipes/petalinux/device-tree/files/zcu102-ethernet.dtsi"

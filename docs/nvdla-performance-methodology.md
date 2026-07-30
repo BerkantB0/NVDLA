@@ -113,6 +113,7 @@ Run the PetaLinux build in Ubuntu 22.04 WSL:
 ```sh
 make patch-check
 make abi-check
+make petalinux-power
 NVDLA_KMD_CONFIG=small make petalinux-kmod
 make petalinux-runtime
 make petalinux-board-tools
@@ -121,6 +122,13 @@ make petalinux-rootfs-audit
 make vp-resnet50-small-golden-promote
 make petalinux-board-payload
 ```
+
+`make petalinux-power` installs the board-local ZCU102 PCA9544/INA226 device
+tree and enables the Linux mux and sensor drivers. Its build gate verifies the
+resolved kernel configuration and all 18 named monitor nodes in the deployed
+`system.dtb`. The primary accelerator-oriented subtotal uses `VCCINT`,
+`VCCBRAM`, and `VCCAUX`; PS and other board rails remain separate so monitored
+rails are not mistaken for total 12 V board-input power.
 
 Copy the generated `nvdla-tests` directory to the SD FAT partition. Use a fresh
 boot for every independent session. Do not run a correctness workload before

@@ -1,0 +1,156 @@
+/*
+ * Board-local ZCU102 power monitor description.
+ *
+ * Addresses and shunt values follow the Linux Xilinx
+ * zynqmp-zcu102-revA.dts board description inherited by later revisions.
+ * Human-readable labels identify the rails in benchmark evidence.
+ */
+&i2c0 {
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    nvdla_power_mux: i2c-mux@75 {
+        compatible = "nxp,pca9544";
+        #address-cells = <1>;
+        #size-cells = <0>;
+        reg = <0x75>;
+
+        i2c@0 {
+            #address-cells = <1>;
+            #size-cells = <0>;
+            reg = <0>;
+
+            ina226_psintfp: power-monitor@40 {
+                compatible = "ti,ina226";
+                label = "VCCPSINTFP";
+                reg = <0x40>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_psintlp: power-monitor@41 {
+                compatible = "ti,ina226";
+                label = "VCCPSINTLP";
+                reg = <0x41>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_psaux: power-monitor@42 {
+                compatible = "ti,ina226";
+                label = "VCCPSAUX";
+                reg = <0x42>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_pspll: power-monitor@43 {
+                compatible = "ti,ina226";
+                label = "VCCPSPLL";
+                reg = <0x43>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_mgtravcc: power-monitor@44 {
+                compatible = "ti,ina226";
+                label = "MGTRAVCC";
+                reg = <0x44>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_mgtravtt: power-monitor@45 {
+                compatible = "ti,ina226";
+                label = "MGTRAVTT";
+                reg = <0x45>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_psddr: power-monitor@46 {
+                compatible = "ti,ina226";
+                label = "VCCO_PSDDR_504";
+                reg = <0x46>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_ps: power-monitor@47 {
+                compatible = "ti,ina226";
+                label = "VCCOPS";
+                reg = <0x47>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_ps3: power-monitor@4a {
+                compatible = "ti,ina226";
+                label = "VCCOPS3";
+                reg = <0x4a>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_psddrpll: power-monitor@4b {
+                compatible = "ti,ina226";
+                label = "VCCPSDDRPLL";
+                reg = <0x4b>;
+                shunt-resistor = <5000>;
+            };
+        };
+
+        i2c@1 {
+            #address-cells = <1>;
+            #size-cells = <0>;
+            reg = <1>;
+
+            ina226_vccint: power-monitor@40 {
+                compatible = "ti,ina226";
+                label = "VCCINT";
+                reg = <0x40>;
+                shunt-resistor = <2000>;
+            };
+
+            ina226_vccbram: power-monitor@41 {
+                compatible = "ti,ina226";
+                label = "VCCBRAM";
+                reg = <0x41>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_vccaux: power-monitor@42 {
+                compatible = "ti,ina226";
+                label = "VCCAUX";
+                reg = <0x42>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_vcc1v2: power-monitor@43 {
+                compatible = "ti,ina226";
+                label = "VCC1V2";
+                reg = <0x43>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_vcc3v3: power-monitor@44 {
+                compatible = "ti,ina226";
+                label = "VCC3V3";
+                reg = <0x44>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_vadj_fmc: power-monitor@45 {
+                compatible = "ti,ina226";
+                label = "VADJ_FMC";
+                reg = <0x45>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_mgtavcc: power-monitor@46 {
+                compatible = "ti,ina226";
+                label = "MGTAVCC";
+                reg = <0x46>;
+                shunt-resistor = <5000>;
+            };
+
+            ina226_mgtavtt: power-monitor@47 {
+                compatible = "ti,ina226";
+                label = "MGTAVTT";
+                reg = <0x47>;
+                shunt-resistor = <5000>;
+            };
+        };
+    };
+};

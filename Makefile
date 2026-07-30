@@ -13,7 +13,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload vp-resnet50-small-golden vp-resnet50-small-golden-promote vp-resnet50-small-golden-start vp-resnet50-small-golden-status lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
-        petalinux-smoke petalinux-project petalinux-dts petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report \
+        petalinux-smoke petalinux-project petalinux-dts petalinux-power petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report \
         test report clean
 
 help:
@@ -73,6 +73,7 @@ help:
 	  '  make vp-trace-small-gate Run legacy, modern, and differential trace gates' \
 	  '  make petalinux-project Create/verify the Ubuntu-22.04 PetaLinux project and XSA import' \
 	  '  make petalinux-dts   Install the XSA-derived NVDLA device-tree fragment' \
+	  '  make petalinux-power Enable and build ZCU102 INA226 rail monitors' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
 	  '  make petalinux-kmod-diagnostic Build a standalone failure-only CSB trace module' \
 	  '  make petalinux-runtime Build and package the NVDLA userspace runtime' \
@@ -288,6 +289,9 @@ petalinux-project:
 
 petalinux-dts:
 	@scripts/petalinux_dts.sh
+
+petalinux-power:
+	@scripts/petalinux_power.sh
 
 petalinux-kmod:
 	@scripts/petalinux_kmod.sh

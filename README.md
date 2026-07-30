@@ -116,6 +116,7 @@ export PETALINUX_PROJECT=${PETALINUX_PROJECT:-$HOME/build/nvdla-peta/petalinux/z
 
 make petalinux-project
 make petalinux-dts
+make petalinux-power
 NVDLA_KMD_CONFIG=small make petalinux-kmod
 make petalinux-runtime
 make petalinux-board-tools

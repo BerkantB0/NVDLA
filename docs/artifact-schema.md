@@ -96,7 +96,7 @@ source-built VP binary, CMOD, DTB, and KMD hashes, the VP CMake
 `nvidia,nv_small` probe artifact.
 
 PetaLinux manifests use lanes such as `petalinux-project`, `petalinux-dts`,
-`petalinux-kmod`, `petalinux-runtime`, `petalinux-image`,
+`petalinux-power`, `petalinux-kmod`, `petalinux-runtime`, `petalinux-image`,
 `petalinux-board-tools`, `petalinux-rootfs-audit`, `petalinux-package`, and
 `petalinux-sd-bundle`. They include the Ubuntu WSL
 host facts, PetaLinux install path, default or explicit project path, settings
@@ -105,6 +105,11 @@ pass/fail/block reason. The DTS phase records the generated `nvdla-user.dtsi`
 hash and audit JSON; the KMD phase records `NVDLA_HW_CONFIG`, recipe files,
 `opendla.ko` path/hash, and module `vermagic`; image/package phases record
 produced boot artifact hashes.
+
+The power phase also records hashes for the board-local ZCU102 monitor DTS and
+kernel configuration fragment. Its `power-kernel-options.txt` and
+`power-dtb-audit.csv` prove that INA226/PCA954x support is enabled and that the
+deployed DTB contains the named PS and PL monitor nodes.
 
 The runtime phase records the pinned NVDLA source revision, patch queue, recipe,
 RPM, executable, and shared-library hashes. The rootfs audit stores
