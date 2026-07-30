@@ -212,13 +212,20 @@ The importer creates:
 - `session-variability.svg`.
 
 The latency figure retains every observation and overlays the median,
-interquartile range, and p5-p95 interval. The phase figure uses normalized
-horizontal bars with absolute mean latency totals, so composition and scale
-remain visible together. The throughput figure keeps the three measured timing
-definitions visually separate from the analytical stage-bottleneck upper
-bound. The session figure shows independent fresh-boot medians and their
-bootstrap interval; its per-regime panels use independent linear scales to
-make small between-boot differences visible.
+interquartile range, and p5-p95 interval. Each timing regime uses an independent
+linear scale so small within-regime differences remain visible; printed medians
+provide the valid cross-regime comparison.
+
+The phase figure uses one shared absolute-time axis. Bar lengths therefore
+compare total latency directly, while stacked colours show how each total is
+composed. The throughput figure keeps the three measured timing definitions
+visually separate from the analytical stage-bottleneck upper bound.
+
+With two or more independent fresh-boot sessions, the reproducibility figure
+shows each session median as a percentage difference from the cross-session
+median on one shared scale. With only one session, between-boot variability is
+not statistically defined, so the figure records that limitation instead of
+drawing a zero-spread result.
 
 It reports count, mean, median, standard deviation, coefficient of variation,
 minimum, maximum, IQR, p5, p95, aggregate and detailed phases, scheduler
