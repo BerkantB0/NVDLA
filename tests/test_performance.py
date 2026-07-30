@@ -198,15 +198,36 @@ class PerformanceTests(unittest.TestCase):
                     re.compile(r"(?<![a-z])(?:nan|inf)(?![a-z])"),
                 )
             self.assertIn(
-                "Points show every retained observation",
+                "How repeatable is each latency measurement?",
                 (output / "latency-distribution.svg").read_text(),
             )
             self.assertIn(
-                "Analytical stage upper bound",
+                "Bar length is proportional to mean elapsed time",
+                (output / "phase-breakdown.svg").read_text(),
+            )
+            phase_svg = (output / "phase-breakdown.svg").read_text()
+            phase_bar_ends = [
+                (float(total.replace(",", "")), float(x))
+                for x, total in re.findall(
+                    r'<text x="([0-9.]+)"[^>]*>([0-9.,]+) ms total</text>',
+                    phase_svg,
+                )
+            ]
+            self.assertEqual(len(phase_bar_ends), 3)
+            self.assertEqual(
+                [x for _total, x in sorted(phase_bar_ends)],
+                sorted(x for _total, x in phase_bar_ends),
+            )
+            self.assertIn(
+                "Calculated pipeline ceiling",
                 (output / "throughput-comparison.svg").read_text(),
             )
             self.assertIn(
-                "Fresh-boot session variability",
+                "Can results be reproduced after a fresh boot?",
+                (output / "session-variability.svg").read_text(),
+            )
+            self.assertIn(
+                "Difference from the cross-boot median",
                 (output / "session-variability.svg").read_text(),
             )
             summary = json.loads((output / "performance-summary.json").read_text())
@@ -256,6 +277,23 @@ class PerformanceTests(unittest.TestCase):
             self.assertLess(
                 summary["regimes"]["steady"]["maximum_clock_overhead_fraction"],
                 0.01,
+            )
+
+    def test_single_session_report_does_not_invent_boot_variability(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._archive(root, "session-a")
+            output = root / "report"
+            self.assertEqual(import_performance_archives([archive], output), 0)
+            figure = (output / "session-variability.svg").read_text()
+            report = (output / "performance-report.md").read_text()
+            self.assertIn(
+                "Not enough independent boots to measure variability",
+                figure,
+            )
+            self.assertIn(
+                "between-boot variability cannot be estimated",
+                report,
             )
 
     def test_rejects_mixed_provenance(self) -> None:

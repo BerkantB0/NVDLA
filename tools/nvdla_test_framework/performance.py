@@ -599,6 +599,11 @@ _REGIME_COLORS = {
     "warm": "#2A7F62",
     "steady": "#2B6EA6",
 }
+_REGIME_LABELS = {
+    "cold": ("Cold deployment", "new process; files read from storage"),
+    "warm": ("Warm deployment", "new process; files already cached"),
+    "steady": ("Repeated inference", "model and buffers remain resident"),
+}
 _PHASE_COLORS = {
     "runtime_initialization": "#6F4E7C",
     "model_loading": "#D55E00",
@@ -609,13 +614,13 @@ _PHASE_COLORS = {
     "unprofiled_process_and_launch": "#B8BEC5",
 }
 _PHASE_LABELS = {
-    "runtime_initialization": "Initialization",
-    "model_loading": "Model loading",
-    "buffer_preparation": "Buffer preparation",
-    "runtime_execution": "Runtime execution",
-    "result_handling": "Result handling",
-    "teardown": "Teardown",
-    "unprofiled_process_and_launch": "Unprofiled launch",
+    "runtime_initialization": "Create runtime and emulator",
+    "model_loading": "Read and prepare model",
+    "buffer_preparation": "Prepare input/output buffers",
+    "runtime_execution": "Execute accelerator workload",
+    "result_handling": "Extract and write result",
+    "teardown": "Unload and clean up",
+    "unprofiled_process_and_launch": "Process launch and other overhead",
 }
 _SVG_FONT = "Arial, Helvetica, sans-serif"
 _SVG_TEXT = "#17212B"
@@ -639,13 +644,22 @@ def _log_ticks(low: float, high: float) -> list[float]:
 
 
 def _format_ms(value: float) -> str:
-    if value >= 100:
-        return f"{value:,.0f}"
-    if value >= 10:
-        return f"{value:.1f}"
     if value >= 1:
-        return f"{value:.2f}"
-    return f"{value:.3f}"
+        return f"{value:,.3f}"
+    return f"{value:.4f}"
+
+
+def _format_axis_ms(value: float, step: float) -> str:
+    if step >= 1:
+        decimals = 0
+    else:
+        decimals = max(0, min(4, -math.floor(math.log10(step))))
+        scaled = step * (10**decimals)
+        if not math.isclose(scaled, round(scaled), rel_tol=0, abs_tol=1e-9):
+            decimals = min(decimals + 1, 4)
+    if decimals == 0:
+        return f"{value:,.0f}"
+    return f"{value:.{decimals}f}"
 
 
 def _format_rate(value: float) -> str:
@@ -658,76 +672,120 @@ def _format_rate(value: float) -> str:
     return f"{value:.3f}"
 
 
+def _linear_ticks(maximum: float, target_count: int = 5) -> list[float]:
+    if maximum <= 0:
+        return [0.0, 1.0]
+    rough_step = maximum / target_count
+    magnitude = 10.0 ** math.floor(math.log10(rough_step))
+    normalized = rough_step / magnitude
+    if normalized <= 1:
+        step = magnitude
+    elif normalized <= 2:
+        step = 2 * magnitude
+    elif normalized <= 5:
+        step = 5 * magnitude
+    else:
+        step = 10 * magnitude
+    axis_maximum = math.ceil(maximum / step) * step
+    return [index * step for index in range(int(round(axis_maximum / step)) + 1)]
+
+
 def _latency_svg(path: Path, grouped: dict[str, list[dict[str, Any]]]) -> None:
-    width, height = 1040, 600
-    left, right, top, bottom = 105.0, 1000.0, 112.0, 500.0
+    width, height = 1120, 610
     regimes = [name for name in ("cold", "warm", "steady") if grouped.get(name)]
-    all_ms = [row["latency_ns"] / 1e6 for name in regimes for row in grouped[name]]
-    lower = max(min(all_ms) * 0.72, 1e-6)
-    upper = max(max(all_ms) * 1.38, lower * 1.5)
-    min_log = math.log10(lower)
-    span = max(math.log10(upper) - min_log, 0.25)
-
-    def y_position(value: float) -> float:
-        fraction = (math.log10(max(value, 1e-6)) - min_log) / span
-        return bottom - fraction * (bottom - top)
-
     body = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
-        '<title id="title">Latency distributions by measurement regime</title>',
-        '<desc id="description">All retained observations with interquartile boxes, medians, and fifth to ninety-fifth percentile whiskers.</desc>',
+        '<title id="title">How repeatable is each latency measurement?</title>',
+        '<desc id="description">Three independently scaled panels show every observation, the median, the interquartile range, and the fifth to ninety-fifth percentile range.</desc>',
         '<rect width="100%" height="100%" fill="#FFFFFF"/>',
-        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Latency distributions by measurement regime</text>',
-        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Cold and warm use launch-to-exit latency; steady uses the runtime execution interval.</text>',
+        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">How repeatable is each latency measurement?</text>',
+        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Each panel expands its own observed range so small run-to-run differences remain visible.</text>',
     ]
-    ticks = _log_ticks(lower, upper)
-    for tick in ticks:
-        y = y_position(tick)
-        body.extend(
-            [
-                f'<line x1="{left:.0f}" y1="{y:.1f}" x2="{right:.0f}" y2="{y:.1f}" stroke="{_SVG_GRID}" stroke-width="1"/>',
-                f'<text x="{left - 12:.0f}" y="{y + 4:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">{_format_ms(tick)}</text>',
-            ]
-        )
-    body.extend(
-        [
-            f'<line x1="{left:.0f}" y1="{top:.0f}" x2="{left:.0f}" y2="{bottom:.0f}" stroke="{_SVG_TEXT}" stroke-width="1"/>',
-            f'<line x1="{left:.0f}" y1="{bottom:.0f}" x2="{right:.0f}" y2="{bottom:.0f}" stroke="{_SVG_TEXT}" stroke-width="1"/>',
-            f'<text x="25" y="{(top + bottom) / 2:.0f}" transform="rotate(-90 25 {(top + bottom) / 2:.0f})" text-anchor="middle" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_TEXT}">Latency (ms, logarithmic scale)</text>',
-        ]
-    )
-    spacing = (right - left) / max(len(regimes), 1)
+    panel_width = 340.0
+    gap = 24.0
+    first_left = 36.0
+    plot_top, plot_bottom = 145.0, 430.0
     for index, regime in enumerate(regimes):
-        center = left + spacing * (index + 0.5)
+        panel_left = first_left + index * (panel_width + gap)
+        plot_left = panel_left + 62
+        plot_right = panel_left + panel_width - 18
+        center = (plot_left + plot_right) / 2
         values = sorted(row["latency_ns"] / 1e6 for row in grouped[regime])
-        q1 = percentile(values, 0.25)
+        observed_min = min(values)
+        observed_max = max(values)
         median = percentile(values, 0.50)
+        observed_span = observed_max - observed_min
+        padding = max(observed_span * 0.35, abs(median) * 0.005, 0.001)
+        if len(values) == 1:
+            padding = max(abs(median) * 0.05, 0.001)
+        lower = max(0.0, observed_min - padding)
+        upper = observed_max + padding
+        scale_span = max(upper - lower, 1e-9)
+
+        def y_position(value: float) -> float:
+            return plot_bottom - (value - lower) / scale_span * (
+                plot_bottom - plot_top
+            )
+
+        q1 = percentile(values, 0.25)
         q3 = percentile(values, 0.75)
         p5 = percentile(values, 0.05)
         p95 = percentile(values, 0.95)
         color = _REGIME_COLORS[regime]
-        for point, value in enumerate(values):
-            jitter = (((point * 47) % 101) - 50) * 0.82
-            body.append(
-                f'<circle cx="{center + jitter:.1f}" cy="{y_position(value):.1f}" r="3.1" fill="{color}" fill-opacity="0.42"/>'
-            )
-        box_left = center - 48
-        box_top = y_position(q3)
-        box_bottom = y_position(q1)
+        title, subtitle = _REGIME_LABELS[regime]
         body.extend(
             [
-                f'<line x1="{center:.1f}" y1="{y_position(p95):.1f}" x2="{center:.1f}" y2="{y_position(p5):.1f}" stroke="{color}" stroke-width="2"/>',
-                f'<line x1="{center - 24:.1f}" y1="{y_position(p95):.1f}" x2="{center + 24:.1f}" y2="{y_position(p95):.1f}" stroke="{color}" stroke-width="2"/>',
-                f'<line x1="{center - 24:.1f}" y1="{y_position(p5):.1f}" x2="{center + 24:.1f}" y2="{y_position(p5):.1f}" stroke="{color}" stroke-width="2"/>',
-                f'<rect x="{box_left:.1f}" y="{box_top:.1f}" width="96" height="{max(box_bottom - box_top, 2):.1f}" fill="#FFFFFF" fill-opacity="0.88" stroke="{color}" stroke-width="2"/>',
-                f'<line x1="{box_left:.1f}" y1="{y_position(median):.1f}" x2="{box_left + 96:.1f}" y2="{y_position(median):.1f}" stroke="{color}" stroke-width="3"/>',
-                f'<text x="{center:.1f}" y="{bottom + 31:.0f}" text-anchor="middle" font-family="{_SVG_FONT}" font-size="15" font-weight="700" fill="{_SVG_TEXT}">{regime.title()}</text>',
-                f'<text x="{center:.1f}" y="{bottom + 51:.0f}" text-anchor="middle" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_MUTED}">median {_format_ms(median)} ms | n={len(values)}</text>',
+                f'<rect x="{panel_left:.1f}" y="96" width="{panel_width:.1f}" height="420" fill="#FAFBFC" stroke="#E5E9EC"/>',
+                f'<text x="{panel_left + panel_width / 2:.1f}" y="120" text-anchor="middle" font-family="{_SVG_FONT}" font-size="15" font-weight="700" fill="{_SVG_TEXT}">{title}</text>',
+                f'<text x="{panel_left + panel_width / 2:.1f}" y="138" text-anchor="middle" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">{subtitle}</text>',
+            ]
+        )
+        for tick_index in range(5):
+            tick = lower + scale_span * tick_index / 4
+            y = y_position(tick)
+            body.extend(
+                [
+                    f'<line x1="{plot_left:.1f}" y1="{y:.1f}" x2="{plot_right:.1f}" y2="{y:.1f}" stroke="{_SVG_GRID}" stroke-width="1"/>',
+                    f'<text x="{plot_left - 8:.1f}" y="{y + 4:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="10" fill="{_SVG_MUTED}">{_format_axis_ms(tick, scale_span / 4)}</text>',
+                ]
+            )
+        body.append(
+            f'<text x="{panel_left + 13:.1f}" y="{(plot_top + plot_bottom) / 2:.1f}" transform="rotate(-90 {panel_left + 13:.1f} {(plot_top + plot_bottom) / 2:.1f})" text-anchor="middle" font-family="{_SVG_FONT}" font-size="10" fill="{_SVG_TEXT}">Latency (ms)</text>'
+        )
+        for point, value in enumerate(values):
+            jitter = (((point * 47) % 101) - 50) * 0.9
+            body.append(
+                f'<circle cx="{center + jitter:.1f}" cy="{y_position(value):.1f}" r="3.5" fill="{color}" fill-opacity="0.50"/>'
+            )
+        if len(values) > 1:
+            box_left = center - 45
+            box_top = y_position(q3)
+            box_bottom = y_position(q1)
+            body.extend(
+                [
+                    f'<line x1="{center:.1f}" y1="{y_position(p95):.1f}" x2="{center:.1f}" y2="{y_position(p5):.1f}" stroke="{color}" stroke-width="2"/>',
+                    f'<line x1="{center - 22:.1f}" y1="{y_position(p95):.1f}" x2="{center + 22:.1f}" y2="{y_position(p95):.1f}" stroke="{color}" stroke-width="2"/>',
+                    f'<line x1="{center - 22:.1f}" y1="{y_position(p5):.1f}" x2="{center + 22:.1f}" y2="{y_position(p5):.1f}" stroke="{color}" stroke-width="2"/>',
+                    f'<rect x="{box_left:.1f}" y="{box_top:.1f}" width="90" height="{max(box_bottom - box_top, 2):.1f}" fill="#FFFFFF" fill-opacity="0.88" stroke="{color}" stroke-width="2"/>',
+                    f'<line x1="{box_left:.1f}" y1="{y_position(median):.1f}" x2="{box_left + 90:.1f}" y2="{y_position(median):.1f}" stroke="{color}" stroke-width="3"/>',
+                ]
+            )
+        spread_percentage = observed_span * 100.0 / median if median else 0.0
+        body.extend(
+            [
+                f'<text x="{panel_left + panel_width / 2:.1f}" y="458" text-anchor="middle" font-family="{_SVG_FONT}" font-size="13" font-weight="700" fill="{color}">Median: {_format_ms(median)} ms</text>',
+                f'<text x="{panel_left + panel_width / 2:.1f}" y="480" text-anchor="middle" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_TEXT}">Observed: {_format_ms(observed_min)} to {_format_ms(observed_max)} ms</text>',
+                (
+                    f'<text x="{panel_left + panel_width / 2:.1f}" y="500" text-anchor="middle" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">Spread: {_format_ms(observed_span)} ms ({spread_percentage:.3f}%) | {len(values)} observations</text>'
+                    if len(values) > 1
+                    else f'<text x="{panel_left + panel_width / 2:.1f}" y="500" text-anchor="middle" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">Only one observation; no distribution can be estimated</text>'
+                ),
             ]
         )
     body.extend(
         [
-            f'<text x="{left:.0f}" y="580" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Points show every retained observation. Boxes show IQR; whiskers show p5-p95; center lines show medians.</text>',
+            f'<text x="40" y="550" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_TEXT}">How to read: dots are runs; boxes cover the middle 50%; whiskers cover p5-p95; the dark line is the median.</text>',
+            f'<text x="40" y="574" font-family="{_SVG_FONT}" font-size="11" font-weight="700" fill="{_SVG_MUTED}">Panels use different linear scales. Compare printed medians for speed and each panel&apos;s spread for repeatability.</text>',
             "</svg>",
         ]
     )
@@ -735,72 +793,84 @@ def _latency_svg(path: Path, grouped: dict[str, list[dict[str, Any]]]) -> None:
 
 
 def _phase_svg(path: Path, phases: dict[str, dict[str, Any]]) -> None:
-    width, height = 1100, 550
-    left, right = 170.0, 930.0
+    width, height = 1120, 610
+    left, right = 300.0, 960.0
     bar_width = right - left
     regimes = [name for name in ("cold", "warm", "steady") if name in phases]
     selected = tuple(_PHASE_COLORS)
+    totals_ms = {
+        regime: sum(phases[regime]["aggregates_mean_ns"].values()) / 1e6
+        for regime in regimes
+    }
+    ticks = _linear_ticks(max(totals_ms.values()))
+    axis_maximum = ticks[-1]
     body = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
-        '<title id="title">Mean aggregate phase composition</title>',
-        '<desc id="description">Horizontal one hundred percent stacked bars compare the measured phase composition of each regime.</desc>',
+        '<title id="title">Where does the measured time go?</title>',
+        '<desc id="description">Absolute-time stacked bars compare deployment and repeated-inference latency while colours identify runtime phases.</desc>',
         '<rect width="100%" height="100%" fill="#FFFFFF"/>',
-        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Mean aggregate phase composition</text>',
-        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Normalized within each timing boundary; totals at right retain absolute latency context.</text>',
+        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Where does the measured time go?</text>',
+        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Bar length is proportional to mean elapsed time; colour shows how that time is spent.</text>',
     ]
-    for percentage in range(0, 101, 20):
-        x = left + bar_width * percentage / 100.0
+    for tick in ticks:
+        x = left + bar_width * tick / axis_maximum
         body.extend(
             [
-                f'<line x1="{x:.1f}" y1="100" x2="{x:.1f}" y2="366" stroke="{_SVG_GRID}" stroke-width="1"/>',
-                f'<text x="{x:.1f}" y="94" text-anchor="middle" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">{percentage}%</text>',
+                f'<line x1="{x:.1f}" y1="108" x2="{x:.1f}" y2="395" stroke="{_SVG_GRID}" stroke-width="1"/>',
+                f'<text x="{x:.1f}" y="100" text-anchor="middle" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">{_format_axis_ms(tick, ticks[1] - ticks[0])}</text>',
             ]
         )
     for index, regime in enumerate(regimes):
         values = phases[regime]["aggregates_mean_ns"]
-        total = sum(values.values())
-        y = 132.0 + index * 82
-        body.append(
-            f'<text x="{left - 18:.0f}" y="{y + 23:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="15" font-weight="700" fill="{_SVG_TEXT}">{regime.title()}</text>'
+        total_ms = totals_ms[regime]
+        y = 140.0 + index * 92
+        title, subtitle = _REGIME_LABELS[regime]
+        body.extend(
+            [
+                f'<text x="{left - 20:.0f}" y="{y + 17:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="14" font-weight="700" fill="{_SVG_TEXT}">{title}</text>',
+                f'<text x="{left - 20:.0f}" y="{y + 36:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">{subtitle}</text>',
+            ]
         )
         x = left
         for name in selected:
-            value = values.get(name, 0.0)
-            percentage = value * 100.0 / total if total else 0.0
-            segment = bar_width * percentage / 100.0
+            value_ms = values.get(name, 0.0) / 1e6
+            segment = bar_width * value_ms / axis_maximum
             if segment <= 0:
                 continue
             if segment >= 0.5:
                 body.append(
-                    f'<rect x="{x:.1f}" y="{y:.1f}" width="{segment:.1f}" height="42" fill="{_PHASE_COLORS[name]}"/>'
+                    f'<rect x="{x:.1f}" y="{y:.1f}" width="{segment:.1f}" height="48" fill="{_PHASE_COLORS[name]}"/>'
                 )
-                if percentage >= 8.0:
+                if segment >= 62:
                     text_color = _SVG_TEXT if name in (
                         "result_handling",
                         "unprofiled_process_and_launch",
                     ) else "#FFFFFF"
                     body.append(
-                        f'<text x="{x + segment / 2:.1f}" y="{y + 26:.1f}" text-anchor="middle" font-family="{_SVG_FONT}" font-size="11" font-weight="700" fill="{text_color}">{percentage:.1f}%</text>'
+                        f'<text x="{x + segment / 2:.1f}" y="{y + 29:.1f}" text-anchor="middle" font-family="{_SVG_FONT}" font-size="10.5" font-weight="700" fill="{text_color}">{_format_ms(value_ms)} ms</text>'
                     )
             x += segment
         body.append(
-            f'<text x="{right + 16:.0f}" y="{y + 26:.1f}" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_TEXT}">{_format_ms(total / 1e6)} ms total</text>'
+            f'<text x="{x + 12:.1f}" y="{y + 29:.1f}" font-family="{_SVG_FONT}" font-size="12" font-weight="700" fill="{_SVG_TEXT}">{_format_ms(total_ms)} ms total</text>'
         )
-    legend_y = 410
+    body.append(
+        f'<text x="{(left + right) / 2:.1f}" y="425" text-anchor="middle" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_TEXT}">Mean elapsed time (milliseconds)</text>'
+    )
+    legend_y = 475
     for index, name in enumerate(selected):
         column = index % 4
         row = index // 4
-        x = 80 + column * 255
-        y = legend_y + row * 34
+        x = 48 + column * 268
+        y = legend_y + row * 36
         body.extend(
             [
                 f'<rect x="{x}" y="{y - 13}" width="16" height="16" fill="{_PHASE_COLORS[name]}"/>',
-                f'<text x="{x + 25}" y="{y}" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_TEXT}">{_PHASE_LABELS[name]}</text>',
+                f'<text x="{x + 24}" y="{y}" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_TEXT}">{_PHASE_LABELS[name]}</text>',
             ]
         )
     body.extend(
         [
-            f'<text x="40" y="525" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Cold and warm totals are process launch-to-exit means. Steady is the profiled per-inference interval.</text>',
+            f'<text x="40" y="570" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Deployment bars include process startup and shutdown. Repeated inference measures execution with the model already loaded.</text>',
             "</svg>",
         ]
     )
@@ -816,19 +886,19 @@ def _throughput_svg(path: Path, throughput: dict[str, Any]) -> None:
             False,
         ),
         (
-            "Warm end-to-end",
+            "Warm deployment",
             "warm_end_to_end_images_per_second",
             _REGIME_COLORS["warm"],
             False,
         ),
         (
-            "Steady runtime execution",
+            "Repeated inference",
             "steady_runtime_execution_images_per_second",
             _REGIME_COLORS["steady"],
             False,
         ),
         (
-            "Analytical stage upper bound",
+            "Calculated pipeline ceiling",
             "theoretical_stage_bottleneck_upper_bound_images_per_second",
             "#6F4E7C",
             True,
@@ -852,11 +922,11 @@ def _throughput_svg(path: Path, throughput: dict[str, Any]) -> None:
 
     body = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
-        '<title id="title">Throughput by timing definition</title>',
-        '<desc id="description">Measured throughput definitions and a separately marked analytical stage upper bound on a logarithmic scale.</desc>',
+        '<title id="title">How many inferences fit into one second?</title>',
+        '<desc id="description">Measured deployment and repeated-inference throughput are compared with a separately marked calculated pipeline ceiling.</desc>',
         '<rect width="100%" height="100%" fill="#FFFFFF"/>',
-        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Throughput by timing definition</text>',
-        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Timing boundaries differ by definition; the outlined analytical value is not measured pipelined throughput.</text>',
+        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">How many inferences fit into one second?</text>',
+        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Higher is faster. Deployment includes model setup; repeated inference keeps the model loaded.</text>',
     ]
     for tick in _log_ticks(lower, upper):
         x = x_position(tick)
@@ -891,6 +961,7 @@ def _throughput_svg(path: Path, throughput: dict[str, Any]) -> None:
     body.extend(
         [
             f'<text x="{(left + right) / 2:.0f}" y="463" text-anchor="middle" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_TEXT}">Throughput (images/s, logarithmic scale)</text>',
+            f'<text x="40" y="486" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">The outlined diamond is a calculated ceiling, not throughput demonstrated by the current blocking runtime.</text>',
             "</svg>",
         ]
     )
@@ -906,73 +977,99 @@ def _session_variability_svg(path: Path, summaries: dict[str, Any]) -> None:
             for session in summaries[regime]["sessions"]
         }
     )
-    width = 1120
-    height = max(330, 225 + len(session_names) * 34)
-    panel_width = 300.0
-    gap = 52.0
-    first_left = 115.0
-    plot_top = 145.0
-    plot_bottom = plot_top + max(len(session_names) - 1, 1) * 34
-    body = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
-        '<title id="title">Fresh-boot session variability</title>',
-        '<desc id="description">Session medians are shown in three independently scaled panels with aggregate medians and bootstrap confidence intervals.</desc>',
-        '<rect width="100%" height="100%" fill="#FFFFFF"/>',
-        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Fresh-boot session variability</text>',
-        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Dots are independent session medians; diamonds and bars show aggregate median and bootstrap 95% CI.</text>',
-    ]
-    for row, _session in enumerate(session_names):
-        y = plot_top + row * 34
-        body.append(
-            f'<text x="{first_left - 18:.0f}" y="{y + 4:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Session {row + 1}</text>'
-        )
-    for index, regime in enumerate(regimes):
-        left = first_left + index * (panel_width + gap)
-        right = left + panel_width
+    width, height = 1120, 440
+    if len(session_names) < 2:
+        body = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="270" viewBox="0 0 {width} 270" role="img" aria-labelledby="title description">',
+            '<title id="title">Can results be reproduced after a fresh boot?</title>',
+            '<desc id="description">Fresh-boot variability cannot be estimated because this report contains only one independent boot session.</desc>',
+            '<rect width="100%" height="100%" fill="#FFFFFF"/>',
+            f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Can results be reproduced after a fresh boot?</text>',
+            f'<rect x="40" y="88" width="1040" height="118" fill="#FAFBFC" stroke="#D9DEE3"/>',
+            f'<text x="560" y="128" text-anchor="middle" font-family="{_SVG_FONT}" font-size="18" font-weight="700" fill="{_SVG_TEXT}">Not enough independent boots to measure variability</text>',
+            f'<text x="560" y="158" text-anchor="middle" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">This report contains 1 fresh-boot session. One result has no between-boot spread.</text>',
+            f'<text x="560" y="182" text-anchor="middle" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Use at least 2 sessions to estimate variability; the final campaign targets 5.</text>',
+            f'<text x="40" y="242" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Within-session repeatability is shown in the latency distribution figure instead.</text>',
+            "</svg>",
+        ]
+        path.write_text("\n".join(body) + "\n", encoding="utf-8")
+        return
+
+    variability: dict[str, dict[str, Any]] = {}
+    maximum_deviation = 0.0
+    for regime in regimes:
         medians = {
             session: summaries[regime]["sessions"][session]["median_ns"] / 1e6
             for session in summaries[regime]["sessions"]
         }
-        aggregate = summaries[regime]["latency"]["median_ns"] / 1e6
+        reference = statistics.median(medians.values())
+        deviations = {
+            session: (value / reference - 1.0) * 100.0
+            for session, value in medians.items()
+        }
         ci = summaries[regime]["session_median_bootstrap_95ci"]
-        ci_low = ci["lower_ns"] / 1e6
-        ci_high = ci["upper_ns"] / 1e6
-        scale_values = list(medians.values()) + [aggregate, ci_low, ci_high]
-        low, high = min(scale_values), max(scale_values)
-        padding = max((high - low) * 0.15, abs(aggregate) * 0.015, 1e-6)
-        low -= padding
-        high += padding
+        ci_low = (ci["lower_ns"] / 1e6 / reference - 1.0) * 100.0
+        ci_high = (ci["upper_ns"] / 1e6 / reference - 1.0) * 100.0
+        variability[regime] = {
+            "reference": reference,
+            "deviations": deviations,
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+        }
+        maximum_deviation = max(
+            maximum_deviation,
+            *(abs(value) for value in deviations.values()),
+            abs(ci_low),
+            abs(ci_high),
+        )
+    limit = max(1.0, math.ceil(maximum_deviation * 1.25 * 10.0) / 10.0)
+    left, right = 300.0, 1040.0
 
-        def x_position(value: float) -> float:
-            return left + (value - low) / (high - low) * panel_width
+    def x_position(value: float) -> float:
+        return left + (value + limit) / (2 * limit) * (right - left)
 
+    body = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
+        '<title id="title">Can results be reproduced after a fresh boot?</title>',
+        '<desc id="description">Each dot is one boot session median shown as a percentage difference from the cross-session median.</desc>',
+        '<rect width="100%" height="100%" fill="#FFFFFF"/>',
+        f'<text x="40" y="42" font-family="{_SVG_FONT}" font-size="24" font-weight="700" fill="{_SVG_TEXT}">Can results be reproduced after a fresh boot?</text>',
+        f'<text x="40" y="70" font-family="{_SVG_FONT}" font-size="13" fill="{_SVG_MUTED}">Each dot is one boot&apos;s median. Distance from 0% shows how much that boot differs from the typical boot.</text>',
+    ]
+    tick_values = (-limit, -limit / 2, 0.0, limit / 2, limit)
+    for tick in tick_values:
+        x = x_position(tick)
         body.extend(
             [
-                f'<text x="{(left + right) / 2:.1f}" y="102" text-anchor="middle" font-family="{_SVG_FONT}" font-size="15" font-weight="700" fill="{_SVG_TEXT}">{regime.title()}</text>',
-                f'<text x="{(left + right) / 2:.1f}" y="122" text-anchor="middle" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">median {_format_ms(aggregate)} ms</text>',
+                f'<line x1="{x:.1f}" y1="104" x2="{x:.1f}" y2="355" stroke="{"#8B959E" if tick == 0 else _SVG_GRID}" stroke-width="{"2" if tick == 0 else "1"}"/>',
+                f'<text x="{x:.1f}" y="96" text-anchor="middle" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">{tick:+.2f}%</text>',
             ]
         )
-        for row, session in enumerate(session_names):
-            y = plot_top + row * 34
-            body.append(
-                f'<line x1="{left:.1f}" y1="{y:.1f}" x2="{right:.1f}" y2="{y:.1f}" stroke="#EEF1F3" stroke-width="1"/>'
-            )
-            if session in medians:
-                body.append(
-                    f'<circle cx="{x_position(medians[session]):.1f}" cy="{y:.1f}" r="5.5" fill="{_REGIME_COLORS[regime]}" stroke="#FFFFFF" stroke-width="1.5"/>'
-                )
-        summary_y = plot_bottom + 39
+    for index, regime in enumerate(regimes):
+        y = 145.0 + index * 92
+        title, subtitle = _REGIME_LABELS[regime]
+        data = variability[regime]
         body.extend(
             [
-                f'<line x1="{x_position(ci_low):.1f}" y1="{summary_y:.1f}" x2="{x_position(ci_high):.1f}" y2="{summary_y:.1f}" stroke="{_REGIME_COLORS[regime]}" stroke-width="5" stroke-linecap="round"/>',
-                f'<rect x="{x_position(aggregate) - 5:.1f}" y="{summary_y - 5:.1f}" width="10" height="10" transform="rotate(45 {x_position(aggregate):.1f} {summary_y:.1f})" fill="{_REGIME_COLORS[regime]}"/>',
-                f'<text x="{left:.1f}" y="{summary_y + 28:.1f}" font-family="{_SVG_FONT}" font-size="10" fill="{_SVG_MUTED}">{_format_ms(low)} ms</text>',
-                f'<text x="{right:.1f}" y="{summary_y + 28:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="10" fill="{_SVG_MUTED}">{_format_ms(high)} ms</text>',
+                f'<text x="{left - 20:.1f}" y="{y - 2:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="14" font-weight="700" fill="{_SVG_TEXT}">{title}</text>',
+                f'<text x="{left - 20:.1f}" y="{y + 17:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">{subtitle}</text>',
+                f'<line x1="{x_position(data["ci_low"]):.1f}" y1="{y:.1f}" x2="{x_position(data["ci_high"]):.1f}" y2="{y:.1f}" stroke="{_REGIME_COLORS[regime]}" stroke-width="8" stroke-linecap="round" stroke-opacity="0.32"/>',
             ]
+        )
+        for session_index, session in enumerate(session_names):
+            if session in data["deviations"]:
+                point_y = y + (((session_index * 11) % 5) - 2) * 4
+                deviation = data["deviations"][session]
+                body.append(
+                    f'<circle cx="{x_position(deviation):.1f}" cy="{point_y:.1f}" r="6" fill="{_REGIME_COLORS[regime]}" stroke="#FFFFFF" stroke-width="1.5"><title>Session {session_index + 1}: {deviation:+.4f}%</title></circle>'
+                )
+        body.append(
+            f'<text x="{right:.1f}" y="{y + 25:.1f}" text-anchor="end" font-family="{_SVG_FONT}" font-size="10.5" fill="{_SVG_MUTED}">typical median: {_format_ms(data["reference"])} ms</text>'
         )
     body.extend(
         [
-            f'<text x="40" y="{height - 22}" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Each panel has an independent linear scale so small between-boot differences remain visible.</text>',
+            f'<text x="{(left + right) / 2:.1f}" y="382" text-anchor="middle" font-family="{_SVG_FONT}" font-size="12" fill="{_SVG_TEXT}">Difference from the cross-boot median (lower is faster)</text>',
+            f'<text x="40" y="418" font-family="{_SVG_FONT}" font-size="11" fill="{_SVG_MUTED}">Dots show independent boots; translucent bars show the bootstrap 95% confidence interval across boot medians.</text>',
             "</svg>",
         ]
     )
@@ -1272,6 +1369,18 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         out_dir / "session-variability.svg",
         summaries,
     )
+    if len(sessions) < 2:
+        session_figure_explanation = [
+            "This report contains only one independent fresh-boot session, so "
+            "between-boot variability cannot be estimated. The figure records this "
+            "limitation instead of presenting a meaningless spread.",
+        ]
+    else:
+        session_figure_explanation = [
+            "Each dot is one fresh boot's median expressed as a percentage difference "
+            "from the cross-boot median. Values close to zero indicate reproducible "
+            "performance after rebooting.",
+        ]
 
     report = [
         f"# NVDLA {baseline['model']} Performance Report",
@@ -1420,24 +1529,24 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
             "",
             "![Latency distribution](latency-distribution.svg)",
             "",
-            "Every retained observation is shown alongside the median, interquartile "
-            "range, and p5-p95 interval. The logarithmic scale accommodates the "
-            "different cold, warm, and steady timing boundaries.",
+            "Each timing regime has its own linear scale so its run-to-run spread is "
+            "visible. Compare the printed medians for speed; compare the dots, box, "
+            "and observed range within each panel for repeatability.",
             "",
             "![Phase breakdown](phase-breakdown.svg)",
             "",
-            "The phase chart is normalized within each regime; the absolute mean at "
-            "the right of each bar prevents the percentages from obscuring latency.",
+            "Bar length represents absolute mean elapsed time on one shared scale. "
+            "The coloured segments show which runtime phases account for that time.",
             "",
             "![Throughput comparison](throughput-comparison.svg)",
             "",
-            "The three measured throughput definitions are separated from the "
-            "outlined analytical stage-bottleneck upper bound.",
+            "Higher throughput is better. Deployment rates include setup; repeated "
+            "inference keeps the model resident. The outlined value is calculated, "
+            "not measured pipelined throughput.",
             "",
             "![Fresh-boot session variability](session-variability.svg)",
             "",
-            "Session panels use independent linear scales so between-boot variation "
-            "remains visible. Their horizontal scales must not be compared directly.",
+            *session_figure_explanation,
             "",
             "## Timing Boundaries",
             "",
