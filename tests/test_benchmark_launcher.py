@@ -35,6 +35,7 @@ class BenchmarkLauncherTests(unittest.TestCase):
             )
             self.assertEqual(build.returncode, 0, build.stderr)
             elapsed = root / "elapsed.txt"
+            interval = root / "interval.env"
             rusage = root / "rusage.env"
             affinity = root / "affinity.txt"
             cpu = min(os.sched_getaffinity(0))
@@ -43,6 +44,8 @@ class BenchmarkLauncherTests(unittest.TestCase):
                     str(binary),
                     "--elapsed-ns",
                     str(elapsed),
+                    "--interval",
+                    str(interval),
                     "--rusage",
                     str(rusage),
                     "--cpu",
@@ -56,6 +59,24 @@ class BenchmarkLauncherTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0)
             self.assertGreater(int(elapsed.read_text()), 0)
+            interval_fields = dict(
+                line.split("=", 1)
+                for line in interval.read_text().splitlines()
+            )
+            self.assertEqual(interval_fields["clock"], "CLOCK_MONOTONIC_RAW")
+            self.assertLess(
+                int(interval_fields["start_ns"]),
+                int(interval_fields["end_ns"]),
+            )
+            self.assertEqual(
+                int(interval_fields["elapsed_ns"]),
+                int(interval_fields["end_ns"])
+                - int(interval_fields["start_ns"]),
+            )
+            self.assertEqual(
+                int(interval_fields["elapsed_ns"]),
+                int(elapsed.read_text()),
+            )
             fields = dict(
                 line.split("=", 1)
                 for line in rusage.read_text().splitlines()

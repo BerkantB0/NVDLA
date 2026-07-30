@@ -5,6 +5,7 @@ import re
 import tarfile
 import tempfile
 import unittest
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -69,6 +70,19 @@ class PerformanceTests(unittest.TestCase):
                     }
                 )
             )
+            (profile_dir / "launch-elapsed-ns.txt").write_text("1500000000\n")
+            (profile_dir / "launch-interval.env").write_text(
+                "\n".join(
+                    [
+                        "schema_version=1",
+                        "clock=CLOCK_MONOTONIC_RAW",
+                        "start_ns=250000000",
+                        "end_ns=1750000000",
+                        "elapsed_ns=1500000000",
+                    ]
+                )
+                + "\n"
+            )
 
             result = _power_summary(root)
             self.assertEqual(result["status"], "available")
@@ -89,8 +103,35 @@ class PerformanceTests(unittest.TestCase):
                 result["domains"]["MONITORED"][
                     "incremental_energy_joules_per_inference"
                 ],
-                0.25,
+                0.1875,
             )
+            self.assertEqual(
+                result["integration"]["pre_boundary_margin_ns"],
+                250_000_000,
+            )
+            self.assertEqual(
+                result["integration"]["post_boundary_margin_ns"],
+                250_000_000,
+            )
+            self.assertEqual(
+                result["integration"]["launcher_duration_ns"],
+                1_500_000_000,
+            )
+            (profile_dir / "launch-interval.env").write_text(
+                "\n".join(
+                    [
+                        "schema_version=1",
+                        "clock=CLOCK_MONOTONIC_RAW",
+                        "start_ns=250000000",
+                        "end_ns=2250000000",
+                        "elapsed_ns=2000000000",
+                    ]
+                )
+                + "\n"
+            )
+            (profile_dir / "launch-elapsed-ns.txt").write_text("2000000000\n")
+            with self.assertRaisesRegex(ValueError, "does not bracket"):
+                _power_summary(root)
 
     def _archive(
         self,
@@ -100,17 +141,27 @@ class PerformanceTests(unittest.TestCase):
         runtime_hash: str = "3" * 64,
         outputs_consistent: bool = True,
         clock_pair_overhead_ns: int = 50,
+        boot_id: str | None = None,
+        ntp_synchronized: str = "yes",
     ) -> Path:
         session = root / name
         session.mkdir()
+        boot_id = boot_id or str(uuid.uuid5(uuid.NAMESPACE_DNS, name))
         (session / "benchmark.env").write_text(
             "\n".join(
                 [
-                    "schema_version=1",
+                    "schema_version=2",
                     "benchmark_interface=cli-v1",
                     "model=lenet",
                     "status=0",
                     "classification=exact-performance-pass",
+                    "timestamp_utc=20260730T120000Z",
+                    f"boot_id={boot_id}",
+                    f"ntp_synchronized={ntp_synchronized}",
+                    "temperature_before_status=unavailable",
+                    "temperature_after_status=unavailable",
+                    "temperature_before_sensor_count=0",
+                    "temperature_after_sensor_count=0",
                     "firmware_log=0",
                     "benchmark_cpu=2",
                     "nvdla_clock_status=verified-xsa-rate",
@@ -121,6 +172,22 @@ class PerformanceTests(unittest.TestCase):
             )
             + "\n"
         )
+        (session / "boot-id.txt").write_text(f"{boot_id}\n")
+        (session / "time-sync.env").write_text(
+            "\n".join(
+                [
+                    "schema_version=1",
+                    f"boot_id={boot_id}",
+                    f"ntp_synchronized={ntp_synchronized}",
+                    "observed_utc=2026-07-30T12:00:00Z",
+                ]
+            )
+            + "\n"
+        )
+        for phase in ("before", "after"):
+            (session / f"temperature-{phase}.env").write_text(
+                "schema_version=1\nstatus=unavailable\nsensor_count=0\n"
+            )
         (session / "workload-manifest.json").write_text(
             json.dumps(
                 {
@@ -308,9 +375,13 @@ class PerformanceTests(unittest.TestCase):
             )
             summary = json.loads((output / "performance-summary.json").read_text())
             self.assertEqual(summary["session_count"], 2)
-            self.assertEqual(summary["schema_version"], 2)
+            self.assertEqual(summary["schema_version"], 3)
             self.assertEqual(summary["regimes"]["steady"]["latency"]["count"], 4)
             self.assertEqual(summary["sessions"][0]["power"]["status"], "unavailable")
+            self.assertEqual(
+                summary["sessions"][0]["environment"]["ntp_synchronized"],
+                "yes",
+            )
             percentages = summary["regimes"]["steady"]["phases"]["percentages"]
             self.assertAlmostEqual(sum(percentages.values()), 100.0)
             self.assertEqual(summary["workload_complexity"]["hwl_count"], 10)
@@ -350,6 +421,12 @@ class PerformanceTests(unittest.TestCase):
             self.assertNotIn("blocking submit", report)
             self.assertIn("throughput-comparison.svg", report)
             self.assertIn("session-variability.svg", report)
+            self.assertIn("NTP synchronized", report)
+            self.assertIn("recorded explicitly", report)
+            self.assertIn(
+                "integrated over its exact launcher start/end interval",
+                report,
+            )
             self.assertLess(
                 summary["regimes"]["steady"]["maximum_clock_overhead_fraction"],
                 0.01,
@@ -381,6 +458,28 @@ class PerformanceTests(unittest.TestCase):
             ]
             with self.assertRaisesRegex(ValueError, "runtime_sha256"):
                 import_performance_archives(archives, root / "report")
+
+    def test_rejects_duplicate_boot_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            boot_id = str(uuid.uuid4())
+            archives = [
+                self._archive(root, "session-a", boot_id=boot_id),
+                self._archive(root, "session-b", boot_id=boot_id),
+            ]
+            with self.assertRaisesRegex(ValueError, "duplicate Linux boot ID"):
+                import_performance_archives(archives, root / "report")
+
+    def test_rejects_unsynchronized_wall_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._archive(
+                root,
+                "session-a",
+                ntp_synchronized="no",
+            )
+            with self.assertRaisesRegex(ValueError, "not verified as NTP"):
+                import_performance_archives([archive], root / "report")
 
     def test_rejects_output_inconsistency(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

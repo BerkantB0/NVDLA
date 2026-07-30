@@ -41,7 +41,7 @@ static uint64_t monotonic_raw_ns(void)
 static int usage(const char *program)
 {
 	fprintf(stderr,
-		"usage: %s --elapsed-ns FILE [--rusage FILE] [--cpu N] "
+		"usage: %s --elapsed-ns FILE [--interval FILE] [--rusage FILE] [--cpu N] "
 		"[--timeout-seconds N] -- COMMAND [ARG ...]\n",
 		program);
 	return 2;
@@ -85,9 +85,34 @@ static int write_rusage(const char *path, const struct rusage *value, int cpu)
 	return 0;
 }
 
+static int write_interval(const char *path, uint64_t before, uint64_t after)
+{
+	FILE *output;
+
+	if (!path)
+		return 0;
+	output = fopen(path, "w");
+	if (!output) {
+		perror(path);
+		return -1;
+	}
+	fprintf(output, "schema_version=1\n");
+	fprintf(output, "clock=CLOCK_MONOTONIC_RAW\n");
+	fprintf(output, "start_ns=%llu\n", (unsigned long long)before);
+	fprintf(output, "end_ns=%llu\n", (unsigned long long)after);
+	fprintf(output, "elapsed_ns=%llu\n",
+		(unsigned long long)(after - before));
+	if (fclose(output) != 0) {
+		perror(path);
+		return -1;
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *output_path;
+	const char *interval_path = NULL;
 	const char *rusage_path = NULL;
 	char **command;
 	uint64_t before;
@@ -107,7 +132,11 @@ int main(int argc, char **argv)
 	output_path = argv[2];
 	argument = 3;
 	while (argument < argc && strcmp(argv[argument], "--") != 0) {
-		if (strcmp(argv[argument], "--rusage") == 0) {
+		if (strcmp(argv[argument], "--interval") == 0) {
+			if (++argument >= argc)
+				return usage(argv[0]);
+			interval_path = argv[argument++];
+		} else if (strcmp(argv[argument], "--rusage") == 0) {
 			if (++argument >= argc)
 				return usage(argv[0]);
 			rusage_path = argv[argument++];
@@ -191,6 +220,8 @@ int main(int argc, char **argv)
 		perror(output_path);
 		return 2;
 	}
+	if (write_interval(interval_path, before, after) != 0)
+		return 2;
 	if (write_rusage(rusage_path, &child_usage, cpu) != 0)
 		return 2;
 

@@ -225,6 +225,13 @@ IRQ_BEFORE=0
 GOVERNORS_SAVED="$OUT/governors-before.txt"
 SAMPLER_PID=""
 SAMPLER_STOP=""
+SAMPLER_READY=""
+BOOT_ID=""
+NTP_SYNCHRONIZED="unavailable"
+TEMPERATURE_BEFORE_STATUS="not-captured"
+TEMPERATURE_AFTER_STATUS="not-captured"
+TEMPERATURE_BEFORE_COUNT=0
+TEMPERATURE_AFTER_COUNT=0
 
 mkdir -p "$OUT"
 
@@ -235,6 +242,49 @@ capture() {
         return 0
     fi
     printf '%s\n' "$?" >"$OUT/${name}.exit-status"
+}
+
+capture_temperatures() {
+    phase="$1"
+    output="$OUT/temperatures-$phase.txt"
+    status_file="$OUT/temperature-$phase.env"
+    temperature_count=0
+    : >"$output"
+    for path in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$path" ] || continue
+        printf 'source=thermal path=%s value_millicelsius=%s\n' \
+            "$path" "$(cat "$path")" >>"$output"
+        temperature_count=$((temperature_count + 1))
+    done
+    for path in /sys/class/hwmon/hwmon*/temp*_input; do
+        [ -r "$path" ] || continue
+        printf 'source=hwmon path=%s value_millicelsius=%s\n' \
+            "$path" "$(cat "$path")" >>"$output"
+        temperature_count=$((temperature_count + 1))
+    done
+    for path in /sys/bus/iio/devices/iio:device*/in_temp*_input; do
+        [ -r "$path" ] || continue
+        printf 'source=iio path=%s value_millicelsius=%s\n' \
+            "$path" "$(cat "$path")" >>"$output"
+        temperature_count=$((temperature_count + 1))
+    done
+    if [ "$temperature_count" -gt 0 ]; then
+        temperature_status="available"
+    else
+        temperature_status="unavailable"
+    fi
+    {
+        echo "schema_version=1"
+        echo "status=$temperature_status"
+        echo "sensor_count=$temperature_count"
+    } >"$status_file"
+    if [ "$phase" = "before" ]; then
+        TEMPERATURE_BEFORE_STATUS="$temperature_status"
+        TEMPERATURE_BEFORE_COUNT="$temperature_count"
+    else
+        TEMPERATURE_AFTER_STATUS="$temperature_status"
+        TEMPERATURE_AFTER_COUNT="$temperature_count"
+    fi
 }
 
 irq_total() {
@@ -285,13 +335,19 @@ finish() {
         : >"$OUT/bad-kernel-patterns.txt"
     fi
     {
-        echo "schema_version=1"
+        echo "schema_version=2"
         echo "benchmark_interface=cli-v1"
         echo "model=$MODEL"
         echo "regime=$REGIME"
         echo "status=$STATUS"
         echo "classification=$CLASSIFICATION"
         echo "timestamp_utc=$STAMP"
+        echo "boot_id=$BOOT_ID"
+        echo "ntp_synchronized=$NTP_SYNCHRONIZED"
+        echo "temperature_before_status=$TEMPERATURE_BEFORE_STATUS"
+        echo "temperature_after_status=$TEMPERATURE_AFTER_STATUS"
+        echo "temperature_before_sensor_count=$TEMPERATURE_BEFORE_COUNT"
+        echo "temperature_after_sensor_count=$TEMPERATURE_AFTER_COUNT"
         echo "payload_root=$PAYLOAD_ROOT"
         echo "render_node=$NODE"
         echo "cold_starts=$COLD_STARTS"
@@ -326,6 +382,28 @@ finish() {
     exit "$STATUS"
 }
 trap restore_environment EXIT HUP INT TERM
+
+BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+NTP_SYNCHRONIZED="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+[ -n "$NTP_SYNCHRONIZED" ] || NTP_SYNCHRONIZED="unavailable"
+printf '%s\n' "$BOOT_ID" >"$OUT/boot-id.txt"
+capture timedatectl.txt timedatectl show
+{
+    echo "schema_version=1"
+    echo "boot_id=$BOOT_ID"
+    echo "ntp_synchronized=$NTP_SYNCHRONIZED"
+    echo "observed_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} >"$OUT/time-sync.env"
+if [ -z "$BOOT_ID" ]; then
+    STATUS=1
+    CLASSIFICATION="boot-id-unavailable"
+    finish
+fi
+if [ "$NTP_SYNCHRONIZED" != "yes" ]; then
+    STATUS=1
+    CLASSIFICATION="time-sync-unverified"
+    finish
+fi
 
 if (
     cd "$PAYLOAD_ROOT"
@@ -413,7 +491,7 @@ for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
 done
 capture governors-active.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
 capture frequencies-before.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
-capture temperatures-before.txt sh -c 'for path in /sys/class/thermal/thermal_zone*/temp; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+capture_temperatures before
 
 if [ ! -r /sys/kernel/debug/clk/clk_summary ]; then
     mount -t debugfs debugfs /sys/kernel/debug >"$OUT/debugfs-mount.log" 2>&1 || true
@@ -494,6 +572,7 @@ run_profile() {
         cd "$run_dir"
         set -- nvdla-benchmark-launch \
             --elapsed-ns launch-elapsed-ns.txt \
+            --interval launch-interval.env \
             --rusage rusage.env
         if [ "$BENCH_CPU" != "none" ]; then
             set -- "$@" --cpu "$BENCH_CPU"
@@ -569,17 +648,33 @@ prepare_power_sampling() {
         finish
     fi
     SAMPLER_STOP="$POWER_OUT/stop"
+    SAMPLER_READY="$POWER_OUT/ready"
     rm -f "$SAMPLER_STOP"
+    rm -f "$SAMPLER_READY"
 }
 
 start_power_sampling() {
     /usr/bin/nvdla-power-sampler \
         --output "$POWER_OUT/readings.csv" \
         --stop-file "$SAMPLER_STOP" \
+        --ready-file "$SAMPLER_READY" \
         --interval-ms "$POWER_INTERVAL_MS" \
         --cpu "$POWER_SAMPLER_CPU" \
         2>"$POWER_OUT/active-sampler.stderr.log" &
     SAMPLER_PID=$!
+    ready_attempt=0
+    while [ ! -e "$SAMPLER_READY" ]; do
+        if ! kill -0 "$SAMPLER_PID" 2>/dev/null; then
+            wait "$SAMPLER_PID" 2>/dev/null || true
+            SAMPLER_PID=""
+            return 1
+        fi
+        ready_attempt=$((ready_attempt + 1))
+        if [ "$ready_attempt" -ge 200 ]; then
+            return 1
+        fi
+        sleep 0.01
+    done
 }
 
 stop_power_sampling() {
@@ -598,7 +693,11 @@ case "$REGIME" in
         cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime /usr/lib/libnvdla_runtime.so >/dev/null
         if [ "$POWER_SAMPLE" -eq 1 ]; then
             prepare_power_sampling
-            start_power_sampling
+            if ! start_power_sampling; then
+                STATUS=1
+                CLASSIFICATION="power-active-sampler-start-failure"
+                finish
+            fi
         fi
         if ! run_profile steady 1 "$WARMUPS" "$STEADY_SAMPLES"; then
             if [ "$POWER_SAMPLE" -eq 1 ]; then
@@ -617,7 +716,7 @@ case "$REGIME" in
 esac
 
 capture frequencies-after.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
-capture temperatures-after.txt sh -c 'for path in /sys/class/thermal/thermal_zone*/temp; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'
+capture_temperatures after
 capture loadavg-after.txt cat /proc/loadavg
 capture meminfo-after.txt cat /proc/meminfo
 STATUS=0

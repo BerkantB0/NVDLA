@@ -170,6 +170,58 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
     return result
 
 
+def _environment_evidence(root: Path, env: dict[str, str]) -> dict[str, Any]:
+    if env.get("schema_version") != "2":
+        raise ValueError("unsupported benchmark environment schema")
+    boot_id = env.get("boot_id", "")
+    ntp_synchronized = env.get("ntp_synchronized", "")
+    temperature_before = env.get("temperature_before_status", "")
+    temperature_after = env.get("temperature_after_status", "")
+    temperature_before_count = int(
+        env.get("temperature_before_sensor_count", "-1")
+    )
+    temperature_after_count = int(
+        env.get("temperature_after_sensor_count", "-1")
+    )
+    timestamp_utc = env.get("timestamp_utc", "")
+    boot_id_file = (root / "boot-id.txt").read_text(
+        encoding="utf-8", errors="replace"
+    ).strip()
+    time_sync = _parse_env(root / "time-sync.env")
+    if not boot_id or boot_id != boot_id_file:
+        raise ValueError("missing or inconsistent Linux boot ID evidence")
+    if time_sync.get("boot_id") != boot_id:
+        raise ValueError("time synchronization evidence has a different boot ID")
+    if ntp_synchronized != "yes" or time_sync.get("ntp_synchronized") != "yes":
+        raise ValueError("benchmark clock was not verified as NTP synchronized")
+    for phase, status, count in (
+        ("before", temperature_before, temperature_before_count),
+        ("after", temperature_after, temperature_after_count),
+    ):
+        if status not in {"available", "unavailable"}:
+            raise ValueError(f"temperature {phase} availability was not recorded")
+        recorded = _parse_env(root / f"temperature-{phase}.env")
+        if recorded.get("status") != status or int(
+            recorded.get("sensor_count", "-1")
+        ) != count:
+            raise ValueError(f"inconsistent temperature {phase} evidence")
+        if (status == "available" and count <= 0) or (
+            status == "unavailable" and count != 0
+        ):
+            raise ValueError(f"invalid temperature {phase} sensor count")
+    if not timestamp_utc:
+        raise ValueError("benchmark UTC timestamp is missing")
+    return {
+        "boot_id": boot_id,
+        "ntp_synchronized": ntp_synchronized,
+        "timestamp_utc": timestamp_utc,
+        "temperature_before_status": temperature_before,
+        "temperature_after_status": temperature_after,
+        "temperature_before_sensor_count": temperature_before_count,
+        "temperature_after_sensor_count": temperature_after_count,
+    }
+
+
 def _read_profile(path: Path) -> dict[str, Any]:
     profile = read_json(path)
     if int(profile.get("schema_version", 0)) != 2:
@@ -374,7 +426,7 @@ def _power_summary(root: Path) -> dict[str, Any]:
     if (power / "unavailable.txt").is_file() or not power.is_dir():
         return {"status": "unavailable"}
 
-    def parse(path: Path) -> dict[str, list[tuple[float, float]]]:
+    def parse(path: Path) -> dict[str, list[tuple[int, float]]]:
         if not path.is_file():
             return {}
         lines = [
@@ -399,7 +451,7 @@ def _power_summary(root: Path) -> dict[str, Any]:
         sweeps: dict[int, dict[str, Any]] = {}
         for row in reader:
             sample = int(row["sample_index"])
-            timestamp = int(row["timestamp_ns"]) / 1_000_000_000.0
+            timestamp = int(row["timestamp_ns"])
             domain = row["domain"]
             rail = row["rail"]
             watts = int(row["power_uw"]) / 1_000_000.0
@@ -418,7 +470,7 @@ def _power_summary(root: Path) -> dict[str, Any]:
         rail_sets = {frozenset(sweep["rails"]) for sweep in sweeps.values()}
         if len(rail_sets) != 1:
             raise ValueError(f"{path}: power rail set changed during sampling")
-        series: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        series: dict[str, list[tuple[int, float]]] = defaultdict(list)
         for sample in sorted(sweeps):
             sweep = sweeps[sample]
             timestamp = sweep["timestamp"]
@@ -431,13 +483,40 @@ def _power_summary(root: Path) -> dict[str, Any]:
             )
         return dict(series)
 
-    def integrate(series: list[tuple[float, float]]) -> float:
+    def integrate(series: list[tuple[int, float]]) -> float:
         return sum(
             (series[index - 1][1] + series[index][1])
             * 0.5
             * (series[index][0] - series[index - 1][0])
+            / 1_000_000_000.0
             for index in range(1, len(series))
         )
+
+    def interpolate(series: list[tuple[int, float]], timestamp: int) -> float:
+        for left, right in zip(series, series[1:]):
+            if timestamp == left[0]:
+                return left[1]
+            if left[0] < timestamp < right[0]:
+                fraction = (timestamp - left[0]) / (right[0] - left[0])
+                return left[1] + fraction * (right[1] - left[1])
+        if timestamp == series[-1][0]:
+            return series[-1][1]
+        raise ValueError("power integration boundary is outside the sampled interval")
+
+    def clip(
+        series: list[tuple[int, float]], start_ns: int, end_ns: int
+    ) -> list[tuple[int, float]]:
+        if start_ns < series[0][0] or end_ns > series[-1][0]:
+            raise ValueError(
+                "active power trace does not bracket the benchmark launcher interval"
+            )
+        clipped = [(start_ns, interpolate(series, start_ns))]
+        clipped.extend(
+            sample for sample in series if start_ns < sample[0] < end_ns
+        )
+        if end_ns != start_ns:
+            clipped.append((end_ns, interpolate(series, end_ns)))
+        return clipped
 
     idle = parse(power / "idle-readings.csv")
     active = parse(power / "readings.csv")
@@ -452,17 +531,46 @@ def _power_summary(root: Path) -> dict[str, Any]:
     measured = int(profile["measured_iterations"])
     warmups = int(profile["warmup_iterations"])
     executed = measured + warmups
+    interval = _parse_env(root / "steady-1" / "launch-interval.env")
+    if (
+        interval.get("schema_version") != "1"
+        or interval.get("clock") != "CLOCK_MONOTONIC_RAW"
+    ):
+        raise ValueError("missing or unsupported benchmark launcher interval")
+    start_ns = int(interval.get("start_ns", "0"))
+    end_ns = int(interval.get("end_ns", "0"))
+    elapsed_ns = int(interval.get("elapsed_ns", "0"))
+    if start_ns <= 0 or end_ns <= start_ns or elapsed_ns != end_ns - start_ns:
+        raise ValueError("invalid benchmark launcher interval")
+    elapsed_file = int(
+        (root / "steady-1" / "launch-elapsed-ns.txt").read_text().strip()
+    )
+    if elapsed_file != elapsed_ns:
+        raise ValueError("launcher interval and elapsed-time evidence differ")
 
     def summarize_scope(scope: str) -> dict[str, Any]:
         idle_series = idle[scope]
-        active_series = active[scope]
-        if len(idle_series) < 2 or len(active_series) < 2:
+        raw_active_series = active[scope]
+        if len(idle_series) < 2 or len(raw_active_series) < 2:
             raise ValueError(f"insufficient power samples for {scope}")
-        idle_mean = statistics.fmean(value for _, value in idle_series)
-        duration = active_series[-1][0] - active_series[0][0]
-        if duration <= 0:
+        if any(
+            right[0] <= left[0]
+            for left, right in zip(idle_series, idle_series[1:])
+        ) or any(
+            right[0] <= left[0]
+            for left, right in zip(raw_active_series, raw_active_series[1:])
+        ):
+            raise ValueError(f"non-monotonic power timestamps for {scope}")
+        active_series = clip(raw_active_series, start_ns, end_ns)
+        idle_duration_ns = idle_series[-1][0] - idle_series[0][0]
+        duration_ns = end_ns - start_ns
+        if idle_duration_ns <= 0 or duration_ns <= 0:
             raise ValueError(f"non-positive active duration for {scope}")
+        idle_mean = integrate(idle_series) / (
+            idle_duration_ns / 1_000_000_000.0
+        )
         energy = integrate(active_series)
+        duration = duration_ns / 1_000_000_000.0
         active_mean = energy / duration
         dynamic_mean = active_mean - idle_mean
         dynamic_energy = energy - idle_mean * duration
@@ -482,7 +590,8 @@ def _power_summary(root: Path) -> dict[str, Any]:
                 executed / energy if energy > 0 and executed else None
             ),
             "active_duration_seconds": duration,
-            "active_samples": len(active_series),
+            "active_samples": len(raw_active_series),
+            "integration_samples": len(active_series),
             "idle_samples": len(idle_series),
         }
 
@@ -498,10 +607,26 @@ def _power_summary(root: Path) -> dict[str, Any]:
     }
     return {
         "status": "available",
-        "schema_version": 2,
+        "schema_version": 3,
+        "integration": {
+            "method": "linear-boundary-interpolation and trapezoidal integration",
+            "clock": "CLOCK_MONOTONIC_RAW",
+            "launcher_start_ns": start_ns,
+            "launcher_end_ns": end_ns,
+            "launcher_duration_ns": elapsed_ns,
+            "raw_trace_start_ns": active["domain/MONITORED"][0][0],
+            "raw_trace_end_ns": active["domain/MONITORED"][-1][0],
+            "pre_boundary_margin_ns": (
+                start_ns - active["domain/MONITORED"][0][0]
+            ),
+            "post_boundary_margin_ns": (
+                active["domain/MONITORED"][-1][0] - end_ns
+            ),
+        },
         "measurement_scope": (
-            "concurrent with steady process launch through exit; model setup "
-            "and teardown are amortized across all executed inferences"
+            "sampled concurrently and integrated over the exact steady process "
+            "launch-through-exit interval; model setup and teardown are amortized "
+            "across all executed inferences"
         ),
         "power_phase": "steady",
         "idle_scope": "driver-loaded board idle without a runtime process",
@@ -1348,6 +1473,7 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
     all_rows: list[dict[str, Any]] = []
     sessions: list[dict[str, Any]] = []
     baseline: dict[str, Any] | None = None
+    boot_ids: set[str] = set()
 
     with tempfile.TemporaryDirectory() as temporary:
         extraction_root = Path(temporary)
@@ -1360,6 +1486,13 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 raise ValueError(
                     f"{archive}: target benchmark is not correctness-qualified"
                 )
+            environment = _environment_evidence(root, env)
+            if environment["boot_id"] in boot_ids:
+                raise ValueError(
+                    f"{archive}: duplicate Linux boot ID; sessions must come from "
+                    "independent fresh boots"
+                )
+            boot_ids.add(environment["boot_id"])
             provenance = _provenance(root, env)
             if baseline is None:
                 baseline = provenance
@@ -1387,6 +1520,7 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                     "archive": str(archive),
                     "archive_sha256": sha256_file(archive),
                     "provenance": provenance,
+                    "environment": environment,
                     "power": _power_summary(root),
                 }
             )
@@ -1423,7 +1557,7 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         }
 
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "provenance": baseline,
         "workload_complexity": baseline["workload_complexity"],
         "session_count": len(sessions),
@@ -1442,6 +1576,8 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 "every run has a positive NVDLA IRQ delta",
                 "no configured bad kernel pattern is present",
                 "the active NVDLA clock matches the XSA-derived rate",
+                "the Linux boot ID is unique across imported sessions",
+                "the system clock is verified as NTP synchronized",
             ],
         },
         "outlier_policy": (
@@ -1522,10 +1658,29 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
             "performance after rebooting.",
         ]
 
+    if any(
+        session["environment"]["temperature_before_status"] == "available"
+        or session["environment"]["temperature_after_status"] == "available"
+        for session in sessions
+    ):
+        temperature_summary = (
+            "available; before/after sensor counts by session: "
+            + ", ".join(
+                f"{session['environment']['temperature_before_sensor_count']}/"
+                f"{session['environment']['temperature_after_sensor_count']}"
+                for session in sessions
+            )
+        )
+    else:
+        temperature_summary = "unavailable on this image (recorded explicitly)"
+
     report = [
         f"# NVDLA {baseline['model']} Performance Report",
         "",
         f"- Independent fresh-boot sessions: {len(sessions)}",
+        "- Session identity: unique Linux boot IDs",
+        "- Wall-clock status: NTP synchronized for every accepted session",
+        f"- Temperature evidence: {temperature_summary}",
         f"- Kernel: `{baseline['kernel_release']}`",
         f"- NVDLA clock: `{baseline['nvdla_clock_hz']}` Hz observed; "
         f"`{baseline['nvdla_clock_expected_hz']}` Hz expected from XSA "
@@ -1737,8 +1892,8 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
             "which includes UMD submission, "
             "the KMD ioctl and scheduler, hardware execution, and IRQ completion.",
             "",
-            "Power results, when available, come from a separate run and are not mixed "
-            "with the primary latency observations.",
+            "Power results, when available, are sampled concurrently with the measured "
+            "steady run and integrated over its exact launcher start/end interval.",
         ]
     )
     (out_dir / "performance-report.md").write_text(

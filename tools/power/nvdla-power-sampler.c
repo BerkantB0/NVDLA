@@ -202,11 +202,24 @@ static int pin_cpu(int cpu)
     return sched_setaffinity(0, sizeof(set), &set);
 }
 
+static int write_ready_file(const char *path)
+{
+    FILE *output;
+
+    if (path == NULL)
+        return 0;
+    output = fopen(path, "w");
+    if (output == NULL)
+        return -1;
+    fprintf(output, "ready\n");
+    return fclose(output);
+}
+
 static void usage(FILE *stream, const char *program)
 {
     fprintf(stream,
             "usage: %s [--list] [--output FILE] [--duration-ms N | "
-            "--stop-file FILE] [--interval-ms N] [--cpu N] "
+            "--stop-file FILE] [--ready-file FILE] [--interval-ms N] [--cpu N] "
             "[--hwmon-root DIR]\n",
             program);
 }
@@ -215,6 +228,7 @@ int main(int argc, char **argv)
 {
     const char *output_path = NULL;
     const char *stop_file = NULL;
+    const char *ready_file = NULL;
     const char *hwmon_root = "/sys/class/hwmon";
     long duration_ms = -1;
     long interval_ms = 50;
@@ -241,6 +255,9 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[index], "--stop-file") == 0 &&
                    index + 1 < (size_t)argc) {
             stop_file = argv[++index];
+        } else if (strcmp(argv[index], "--ready-file") == 0 &&
+                   index + 1 < (size_t)argc) {
+            ready_file = argv[++index];
         } else if (strcmp(argv[index], "--interval-ms") == 0 &&
                    index + 1 < (size_t)argc) {
             interval_ms = strtol(argv[++index], NULL, 10);
@@ -268,7 +285,8 @@ int main(int argc, char **argv)
     }
     if (output_path == NULL || interval_ms <= 0 ||
         (duration_ms <= 0 && stop_file == NULL) ||
-        (duration_ms > 0 && stop_file != NULL)) {
+        (duration_ms > 0 && stop_file != NULL) ||
+        (ready_file != NULL && stop_file == NULL)) {
         usage(stderr, argv[0]);
         status = 2;
         goto close_sensors;
@@ -303,10 +321,11 @@ int main(int argc, char **argv)
     }
     while (!stop_requested) {
         struct timespec timestamp;
+        bool final_sample = false;
 
         if (sample_index > 0 && stop_file != NULL &&
             access(stop_file, F_OK) == 0)
-            break;
+            final_sample = true;
         if (clock_gettime(CLOCK_MONOTONIC_RAW, &timestamp) != 0) {
             status = 4;
             break;
@@ -331,6 +350,16 @@ int main(int argc, char **argv)
                     sensors[index].label, (long long)power_uw);
         }
         sample_index++;
+        if (sample_index == 1 && ready_file != NULL) {
+            if (fflush(output) != 0 || write_ready_file(ready_file) != 0) {
+                fprintf(stderr, "could not create ready file %s: %s\n",
+                        ready_file, strerror(errno));
+                status = 4;
+                break;
+            }
+        }
+        if (final_sample)
+            break;
         sleep_deadline.tv_nsec += (interval_ms % 1000) * 1000000L;
         sleep_deadline.tv_sec += interval_ms / 1000 +
                                  sleep_deadline.tv_nsec / 1000000000L;

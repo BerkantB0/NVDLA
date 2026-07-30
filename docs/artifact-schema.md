@@ -176,17 +176,23 @@ unversioned host-side clock override.
 Target archives named `nvdla-board-benchmark-<model>-<timestamp>.tar.gz`
 contain:
 
-- `benchmark.env`: campaign parameters, status, XSA-derived expected clock,
-  observed Linux clock, accepted tolerance, and IRQ totals;
+- `benchmark.env` (schema 2): campaign parameters, status, Linux boot ID,
+  NTP synchronization result, explicit temperature availability,
+  XSA-derived expected clock, observed Linux clock, accepted tolerance, and
+  IRQ totals;
+- `boot-id.txt`, `time-sync.env`, and `timedatectl.txt`: independent-session
+  identity and wall-clock provenance;
 - `cold-N/`, `warm-N/`, and `steady-1/`: runtime profile JSON, external
-  launch timing, runtime logs, exact output, output hash, verification, and IRQ
-  delta. Profiles include monotonic clock resolution and measured timing-pair
-  overhead;
+  launch timing, `launch-interval.env` start/end timestamps, runtime logs,
+  exact output, output hash, verification, and IRQ delta. Profiles include
+  monotonic clock resolution and measured timing-pair overhead;
 - `software-hashes.txt`, `module-hash.txt`, `workload-manifest.json`, and
   `payload-manifest.json`: provenance;
-- CPU governor/frequency, NVDLA clock, temperature, load average, memory, and
-  kernel log evidence;
+- CPU governor/frequency, NVDLA clock, temperature readings or explicit
+  unavailability, load average, memory, and kernel log evidence;
 - optional `power-sampling/`: sensor labels plus raw idle and active readings.
+  The active trace must bracket the steady launcher interval; host analysis
+  interpolates its endpoints and integrates only over that exact interval.
 
 The host importer produces `performance-raw.csv`,
 `performance-summary.json`, `performance-summary.csv`,

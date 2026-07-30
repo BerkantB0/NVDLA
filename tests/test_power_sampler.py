@@ -4,6 +4,7 @@ import csv
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -97,6 +98,49 @@ class PowerSamplerTests(unittest.TestCase):
             {int(row["power_uw"]) for row in rows},
             {1_000_000, 500_000, 25_000},
         )
+
+    def test_stop_file_sampling_brackets_ready_interval(self) -> None:
+        self._sensor(0, "VCCPSINTFP", 1_000_000)
+        self._sensor(1, "VCCINT", 500_000)
+        output = self.root / "power.csv"
+        stop = self.root / "stop"
+        ready = self.root / "ready"
+        process = subprocess.Popen(
+            [
+                str(self.binary),
+                "--output",
+                str(output),
+                "--stop-file",
+                str(stop),
+                "--ready-file",
+                str(ready),
+                "--interval-ms",
+                "20",
+                "--hwmon-root",
+                str(self.root / "hwmon"),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 2
+        while not ready.exists() and time.monotonic() < deadline:
+            self.assertIsNone(process.poll(), "sampler exited before becoming ready")
+            time.sleep(0.01)
+        self.assertTrue(ready.exists())
+        time.sleep(0.03)
+        stop.touch()
+        _stdout, stderr = process.communicate(timeout=2)
+        self.assertEqual(process.returncode, 0, stderr)
+        rows = list(
+            csv.DictReader(
+                line
+                for line in output.read_text().splitlines()
+                if not line.startswith("#")
+            )
+        )
+        samples = {int(row["sample_index"]) for row in rows}
+        self.assertGreaterEqual(len(samples), 3)
 
 
 if __name__ == "__main__":

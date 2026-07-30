@@ -118,6 +118,14 @@ Power is sampled concurrently with the correctness-qualified steady run:
   consume energy inside the sampled window;
 - no second runtime process or separate power workload is launched.
 
+The sampler takes and flushes an initial reading before declaring itself ready.
+After the launcher exits, it takes one final reading before stopping. The
+launcher records its exact `CLOCK_MONOTONIC_RAW` start and end timestamps.
+Analysis requires the power trace to bracket both timestamps, linearly
+interpolates power at those two boundaries, and applies trapezoidal integration
+only over that exact launch-to-exit interval. Raw pre/post samples and boundary
+margins remain archived for audit.
+
 The resulting energy per inference is therefore **steady-batch end-to-end
 energy**.
 It includes model setup and teardown amortized over the batch, PS runtime/KMD
@@ -179,6 +187,17 @@ date -u '+%Y-%m-%dT%H:%M:%SZ'
 
 Wall-clock synchronization provides meaningful artifact timestamps;
 `CLOCK_MONOTONIC_RAW` remains the measurement clock.
+The runner enforces `NTPSynchronized=yes`, archives
+`/proc/sys/kernel/random/boot_id`, and the importer rejects duplicate boot IDs
+when multiple archives are presented as independent fresh-boot sessions.
+
+Temperature is recorded before and after measurement from any readable Linux
+thermal-zone, hwmon, or IIO processed temperature input. The IIO path covers
+the ZynqMP AMS die-temperature channel and, like the other standard interfaces,
+reports millidegrees Celsius. The archive records each source, path, value, and
+sensor count. If the image exposes no such source, the archive and report
+explicitly state `unavailable`; absence does not invalidate latency or power
+evidence, but it remains a documented environmental limitation.
 
 ## Pilot
 
