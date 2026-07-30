@@ -17,6 +17,7 @@ COLLECTOR_MEMBER = "usr/bin/nvdla-board-check"
 WORKLOAD_RUNNER_MEMBER = "usr/bin/nvdla-board-workload"
 BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-benchmark"
 BENCHMARK_LAUNCHER_MEMBER = "usr/bin/nvdla-benchmark-launch"
+POWER_SAMPLER_MEMBER = "usr/bin/nvdla-power-sampler"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
 TIMESYNC_MEMBER = "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
@@ -84,6 +85,7 @@ def audit_petalinux_rootfs(
             "workload_runner": WORKLOAD_RUNNER_MEMBER,
             "benchmark_runner": BENCHMARK_RUNNER_MEMBER,
             "benchmark_launcher": BENCHMARK_LAUNCHER_MEMBER,
+            "power_sampler": POWER_SAMPLER_MEMBER,
             "serial_autologin": AUTOLOGIN_MEMBER,
             "network_profile": NETWORK_MEMBER,
             "timesync_profile": TIMESYNC_MEMBER,

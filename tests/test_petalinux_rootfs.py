@@ -47,6 +47,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla-board-workload",
             "usr/bin/nvdla-board-benchmark",
             "usr/bin/nvdla-benchmark-launch",
+            "usr/bin/nvdla-power-sampler",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
             "etc/systemd/timesyncd.conf.d/nvdla-host.conf",
@@ -115,6 +116,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                 "nvdla-kmd-smoke",
                 "nvdla-flatbuf-client",
                 "nvdla-benchmark-launch",
+                "nvdla-power-sampler",
             }:
                 needed = SMOKE_NEEDED
             return {
@@ -179,6 +181,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/bin/nvdla-benchmark-launch"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing benchmark_launcher from rootfs", result["errors"])
+
+    def test_rejects_missing_power_sampler(self) -> None:
+        result = self._audit({"usr/bin/nvdla-power-sampler"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing power_sampler from rootfs", result["errors"])
 
     def test_rejects_missing_serial_autologin_override(self) -> None:
         result = self._audit({"etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"})

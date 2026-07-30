@@ -43,6 +43,11 @@ PROVENANCE_KEYS = (
     "payload_sha256",
     "firmware_log",
     "benchmark_cpu",
+    "power_sample",
+    "power_sampler_sha256",
+    "power_interval_ms",
+    "power_iterations",
+    "power_sampler_cpu",
 )
 
 
@@ -134,6 +139,27 @@ def _provenance(root: Path, env: dict[str, str]) -> dict[str, Any]:
         "payload_sha256": payload_hash,
         "firmware_log": env.get("firmware_log"),
         "benchmark_cpu": env.get("benchmark_cpu"),
+        "power_sample": env.get("power_sample", "0"),
+        "power_sampler_sha256": (
+            software.get("nvdla-power-sampler")
+            if env.get("power_sample", "0") == "1"
+            else "disabled"
+        ),
+        "power_interval_ms": (
+            env.get("power_interval_ms")
+            if env.get("power_sample", "0") == "1"
+            else "disabled"
+        ),
+        "power_iterations": (
+            env.get("power_iterations")
+            if env.get("power_sample", "0") == "1"
+            else "disabled"
+        ),
+        "power_sampler_cpu": (
+            env.get("power_sampler_cpu")
+            if env.get("power_sample", "0") == "1"
+            else "disabled"
+        ),
         "workload_complexity": complexity,
     }
     missing = [key for key in PROVENANCE_KEYS if result.get(key) in {None, ""}]
@@ -346,49 +372,141 @@ def _power_summary(root: Path) -> dict[str, Any]:
     if (power / "unavailable.txt").is_file() or not power.is_dir():
         return {"status": "unavailable"}
 
-    def parse(path: Path) -> list[tuple[float, float]]:
-        by_time: dict[float, float] = defaultdict(float)
+    def parse(path: Path) -> dict[str, list[tuple[float, float]]]:
         if not path.is_file():
-            return []
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            fields = line.split(",", 2)
-            if len(fields) != 3:
-                continue
-            by_time[float(fields[0])] += float(fields[2]) / 1_000_000.0
-        return sorted(by_time.items())
+            return {}
+        lines = [
+            line
+            for line in path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+            if line and not line.startswith("#")
+        ]
+        if not lines:
+            return {}
+        reader = csv.DictReader(lines)
+        expected = {
+            "sample_index",
+            "timestamp_ns",
+            "domain",
+            "rail",
+            "power_uw",
+        }
+        if set(reader.fieldnames or ()) != expected:
+            raise ValueError(f"{path}: unsupported power sampler schema")
+        sweeps: dict[int, dict[str, Any]] = {}
+        for row in reader:
+            sample = int(row["sample_index"])
+            timestamp = int(row["timestamp_ns"]) / 1_000_000_000.0
+            domain = row["domain"]
+            rail = row["rail"]
+            watts = int(row["power_uw"]) / 1_000_000.0
+            sweep = sweeps.setdefault(
+                sample,
+                {"timestamp": timestamp, "domains": defaultdict(float), "rails": {}},
+            )
+            if not math.isclose(sweep["timestamp"], timestamp):
+                raise ValueError(f"{path}: inconsistent sweep timestamp")
+            rail_key = f"{domain}:{rail}"
+            if rail_key in sweep["rails"]:
+                raise ValueError(f"{path}: duplicate rail {rail_key} in one sweep")
+            sweep["rails"][rail_key] = watts
+            sweep["domains"][domain] += watts
+
+        rail_sets = {frozenset(sweep["rails"]) for sweep in sweeps.values()}
+        if len(rail_sets) != 1:
+            raise ValueError(f"{path}: power rail set changed during sampling")
+        series: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        for sample in sorted(sweeps):
+            sweep = sweeps[sample]
+            timestamp = sweep["timestamp"]
+            for rail, watts in sweep["rails"].items():
+                series[f"rail/{rail}"].append((timestamp, watts))
+            for domain, watts in sweep["domains"].items():
+                series[f"domain/{domain}"].append((timestamp, watts))
+            series["domain/MONITORED"].append(
+                (timestamp, sum(sweep["rails"].values()))
+            )
+        return dict(series)
+
+    def integrate(series: list[tuple[float, float]]) -> float:
+        return sum(
+            (series[index - 1][1] + series[index][1])
+            * 0.5
+            * (series[index][0] - series[index - 1][0])
+            for index in range(1, len(series))
+        )
 
     idle = parse(power / "idle-readings.csv")
     active = parse(power / "readings.csv")
-    if not active:
+    if not active or "domain/MONITORED" not in active:
         return {"status": "unavailable"}
-    idle_watts = statistics.fmean(value for _, value in idle) if idle else None
-    energy = sum(
-        (active[index - 1][1] + active[index][1])
-        * 0.5
-        * (active[index][0] - active[index - 1][0])
-        for index in range(1, len(active))
-    )
-    duration = active[-1][0] - active[0][0] if len(active) > 1 else 0.0
+    if set(idle) != set(active):
+        raise ValueError("idle and active power rail sets differ")
+    if "domain/PS" not in active or "domain/PL" not in active:
+        raise ValueError("power evidence must contain both PS and PL domains")
+
     profile = _read_profile(root / "power-1" / "profile.json")
     measured = int(profile["measured_iterations"])
-    dynamic = (
-        max(0.0, energy - idle_watts * duration)
-        if idle_watts is not None
-        else None
-    )
+    warmups = int(profile["warmup_iterations"])
+    executed = measured + warmups
+
+    def summarize_scope(scope: str) -> dict[str, Any]:
+        idle_series = idle[scope]
+        active_series = active[scope]
+        if len(idle_series) < 2 or len(active_series) < 2:
+            raise ValueError(f"insufficient power samples for {scope}")
+        idle_mean = statistics.fmean(value for _, value in idle_series)
+        duration = active_series[-1][0] - active_series[0][0]
+        if duration <= 0:
+            raise ValueError(f"non-positive active duration for {scope}")
+        energy = integrate(active_series)
+        active_mean = energy / duration
+        dynamic_mean = active_mean - idle_mean
+        dynamic_energy = energy - idle_mean * duration
+        return {
+            "idle_mean_watts": idle_mean,
+            "active_mean_watts": active_mean,
+            "incremental_mean_watts": dynamic_mean,
+            "active_energy_joules": energy,
+            "active_energy_joules_per_inference": (
+                energy / executed if executed else None
+            ),
+            "incremental_energy_joules": dynamic_energy,
+            "incremental_energy_joules_per_inference": (
+                dynamic_energy / executed if executed else None
+            ),
+            "inferences_per_active_joule": (
+                executed / energy if energy > 0 and executed else None
+            ),
+            "active_duration_seconds": duration,
+            "active_samples": len(active_series),
+            "idle_samples": len(idle_series),
+        }
+
+    domains = {
+        scope.removeprefix("domain/"): summarize_scope(scope)
+        for scope in sorted(active)
+        if scope.startswith("domain/")
+    }
+    rails = {
+        scope.removeprefix("rail/"): summarize_scope(scope)
+        for scope in sorted(active)
+        if scope.startswith("rail/")
+    }
     return {
         "status": "available",
-        "idle_mean_watts": idle_watts,
-        "active_duration_seconds": duration,
-        "active_energy_joules": energy,
-        "active_energy_joules_per_inference": energy / measured if measured else None,
-        "dynamic_energy_joules": dynamic,
-        "dynamic_energy_joules_per_inference": (
-            dynamic / measured if dynamic is not None and measured else None
+        "schema_version": 2,
+        "measurement_scope": (
+            "batch process launch through exit; model setup and teardown are "
+            "amortized across all executed inferences"
         ),
+        "idle_scope": "driver-loaded board idle without a runtime process",
         "measured_iterations": measured,
-        "raw_active_samples": len(active),
-        "raw_idle_samples": len(idle),
+        "warmup_iterations": warmups,
+        "executed_iterations": executed,
+        "domains": domains,
+        "rails": rails,
     }
 
 
@@ -1356,6 +1474,24 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
             }
         )
     _write_csv(out_dir / "performance-summary.csv", summary_rows)
+    power_rows: list[dict[str, Any]] = []
+    for session in sessions:
+        power_result = session["power"]
+        if power_result.get("status") != "available":
+            continue
+        for scope_type in ("domains", "rails"):
+            for scope, metrics in power_result[scope_type].items():
+                power_rows.append(
+                    {
+                        "session": session["session"],
+                        "scope_type": scope_type.removesuffix("s"),
+                        "scope": scope,
+                        "executed_iterations": power_result["executed_iterations"],
+                        **metrics,
+                    }
+                )
+    if power_rows:
+        _write_csv(out_dir / "power-summary.csv", power_rows)
     _latency_svg(out_dir / "latency-distribution.svg", grouped)
     _phase_svg(
         out_dir / "phase-breakdown.svg",
@@ -1512,6 +1648,47 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 f"- Median overhead: `{overhead['overhead_ns']['median_ns'] / 1e6:.3f}` ms",
                 f"- Median share of warm end-to-end latency: "
                 f"`{overhead['overhead_percentage']['median']:.3f}%`",
+            ]
+        )
+
+    available_power = [
+        session for session in sessions if session["power"].get("status") == "available"
+    ]
+    if available_power:
+        report.extend(
+            [
+                "",
+                "## Power And Energy",
+                "",
+                "Power is sampled in a separate correctness-checked batch run. "
+                "PS includes software-stack and processing-system activity; PL includes "
+                "the FPGA fabric. Incremental values are active minus the driver-loaded "
+                "idle baseline and remain signed rather than being clamped to zero.",
+                "",
+                "| Session | Domain | Idle (W) | Active (W) | Incremental (W) | "
+                "Active energy/inference (mJ) | Incremental energy/inference (mJ) |",
+                "|---|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for session in available_power:
+            for domain in ("PS", "PL", "MONITORED"):
+                metrics = session["power"]["domains"].get(domain)
+                if not metrics:
+                    continue
+                report.append(
+                    f"| {session['session']} | {domain} | "
+                    f"{metrics['idle_mean_watts']:.6f} | "
+                    f"{metrics['active_mean_watts']:.6f} | "
+                    f"{metrics['incremental_mean_watts']:.6f} | "
+                    f"{metrics['active_energy_joules_per_inference'] * 1000:.6f} | "
+                    f"{metrics['incremental_energy_joules_per_inference'] * 1000:.6f} |"
+                )
+        report.extend(
+            [
+                "",
+                "The monitored total is the sum of exposed rails, not 12 V board-input "
+                "power. Per-rail results and raw sample counts are retained in "
+                "`power-summary.csv` and `performance-summary.json`.",
             ]
         )
 

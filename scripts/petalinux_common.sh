@@ -159,6 +159,7 @@ board_check_script_path = os.environ.get("BOARD_CHECK_SCRIPT_PATH") or None
 board_workload_script_path = os.environ.get("BOARD_WORKLOAD_SCRIPT_PATH") or None
 board_benchmark_script_path = os.environ.get("BOARD_BENCHMARK_SCRIPT_PATH") or None
 board_benchmark_launch_path = os.environ.get("BOARD_BENCHMARK_LAUNCH_PATH") or None
+board_power_sampler_path = os.environ.get("BOARD_POWER_SAMPLER_PATH") or None
 sd_bundle_path = os.environ.get("SD_BUNDLE_PATH") or None
 sd_bundle_manifest_path = os.environ.get("SD_BUNDLE_MANIFEST_PATH") or None
 image_dir = Path(os.environ["PETALINUX_PROJECT"]) / "images" / "linux"
@@ -178,6 +179,7 @@ library_elf = rootfs_audit.get("elf", {}).get("library", {})
 smoke_elf = rootfs_audit.get("elf", {}).get("smoke", {})
 flatbuf_client_elf = rootfs_audit.get("elf", {}).get("flatbuf_client", {})
 benchmark_launcher_elf = rootfs_audit.get("elf", {}).get("benchmark_launcher", {})
+power_sampler_elf = rootfs_audit.get("elf", {}).get("power_sampler", {})
 
 manifest = {
     "schema_version": 1,
@@ -279,6 +281,8 @@ manifest = {
         "benchmark_runner_sha256": sha256(board_benchmark_script_path),
         "benchmark_launcher_path": board_benchmark_launch_path,
         "benchmark_launcher_sha256": sha256(board_benchmark_launch_path),
+        "power_sampler_path": board_power_sampler_path,
+        "power_sampler_sha256": sha256(board_power_sampler_path),
         "smoke_elf_machine": smoke_elf.get("machine"),
         "smoke_needed": smoke_elf.get("needed", []),
         "smoke_rpaths": smoke_elf.get("rpaths", []),
@@ -302,6 +306,12 @@ manifest = {
         "benchmark_launcher_elf_machine": benchmark_launcher_elf.get("machine"),
         "benchmark_launcher_needed": benchmark_launcher_elf.get("needed", []),
         "benchmark_launcher_rpaths": benchmark_launcher_elf.get("rpaths", []),
+        "power_sampler_in_rootfs": rootfs_audit.get("members", {}).get("power_sampler")
+        if rootfs_audit
+        else None,
+        "power_sampler_elf_machine": power_sampler_elf.get("machine"),
+        "power_sampler_needed": power_sampler_elf.get("needed", []),
+        "power_sampler_rpaths": power_sampler_elf.get("rpaths", []),
         "serial_autologin_in_rootfs": rootfs_audit.get("members", {}).get("serial_autologin")
         if rootfs_audit
         else None,

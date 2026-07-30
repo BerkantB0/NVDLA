@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from nvdla_test_framework.performance import (
+    _power_summary,
     bootstrap_session_medians,
     import_performance_archives,
     percentile,
@@ -17,6 +18,80 @@ from nvdla_test_framework.performance import (
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_power_summary_keeps_ps_and_pl_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            power = root / "power-sampling"
+            power.mkdir()
+
+            def write_samples(path: Path, values: list[tuple[int, int, str, str, int]]) -> None:
+                path.write_text(
+                    "# nvdla-power-sampler schema=1\n"
+                    "sample_index,timestamp_ns,domain,rail,power_uw\n"
+                    + "".join(
+                        f"{sample},{timestamp},{domain},{rail},{watts}\n"
+                        for sample, timestamp, domain, rail, watts in values
+                    )
+                )
+
+            idle_rows = []
+            active_rows = []
+            for sample in range(3):
+                timestamp = sample * 1_000_000_000
+                idle_rows.extend(
+                    [
+                        (sample, timestamp, "PS", "VCCPSINTFP", 1_000_000),
+                        (sample, timestamp, "PL", "VCCINT", 500_000),
+                    ]
+                )
+                active_rows.extend(
+                    [
+                        (sample, timestamp, "PS", "VCCPSINTFP", 1_200_000),
+                        (sample, timestamp, "PL", "VCCINT", 800_000),
+                    ]
+                )
+            write_samples(power / "idle-readings.csv", idle_rows)
+            write_samples(power / "readings.csv", active_rows)
+
+            profile_dir = root / "power-1"
+            profile_dir.mkdir()
+            (profile_dir / "profile.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "clock": "CLOCK_MONOTONIC_RAW",
+                        "clock_resolution_ns": 1,
+                        "clock_pair_overhead_ns": 1,
+                        "warmup_iterations": 1,
+                        "measured_iterations": 3,
+                        "outputs_consistent": True,
+                        "status": 0,
+                    }
+                )
+            )
+
+            result = _power_summary(root)
+            self.assertEqual(result["status"], "available")
+            self.assertEqual(result["executed_iterations"], 4)
+            self.assertAlmostEqual(
+                result["domains"]["PS"]["incremental_mean_watts"],
+                0.2,
+            )
+            self.assertAlmostEqual(
+                result["domains"]["PL"]["incremental_mean_watts"],
+                0.3,
+            )
+            self.assertAlmostEqual(
+                result["domains"]["MONITORED"]["active_mean_watts"],
+                2.0,
+            )
+            self.assertAlmostEqual(
+                result["domains"]["MONITORED"][
+                    "incremental_energy_joules_per_inference"
+                ],
+                0.25,
+            )
+
     def _archive(
         self,
         root: Path,

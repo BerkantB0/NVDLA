@@ -3,6 +3,10 @@
 This skeleton is copied into the generated PetaLinux `meta-user` layer by
 `make petalinux-board-tools`.
 
+The package includes `nvdla-power-sampler`, a small native hwmon collector used
+by the performance benchmark to capture labelled PS and PL INA226 rails with
+monotonic timestamps.
+
 The build script adds the complete pinned `patches/nvdla-sw/` queue and copies
 the tracked `nvdla-kmd-smoke.c` and `nvdla-board-check` sources into the
 recipe's `files/` directory. Generated recipe copies and build outputs remain

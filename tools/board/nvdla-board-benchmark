@@ -21,6 +21,8 @@ FIRMWARE_LOG="${FIRMWARE_LOG:-0}"
 BENCH_CPU="${BENCH_CPU:-2}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-30}"
 POWER_IDLE_SECONDS="${POWER_IDLE_SECONDS:-10}"
+POWER_INTERVAL_MS="${POWER_INTERVAL_MS:-50}"
+POWER_SAMPLER_CPU="${POWER_SAMPLER_CPU:-3}"
 if [ "$MODEL" = "resnet50" ]; then
     RUNTIME_TIMEOUT="${RUNTIME_TIMEOUT:-300}"
 else
@@ -50,6 +52,7 @@ if [ "$MODEL" = "lenet" ]; then
     WARM_STARTS="${WARM_STARTS:-30}"
     WARMUPS="${WARMUPS:-20}"
     STEADY_SAMPLES="${STEADY_SAMPLES:-200}"
+    POWER_ITERATIONS="${POWER_ITERATIONS:-10000}"
     WORKLOAD="$PAYLOAD_ROOT/lenet_small"
     LOADABLE="$WORKLOAD/loadable.nvdla"
     INPUT="$WORKLOAD/input.pgm"
@@ -59,15 +62,33 @@ else
     WARM_STARTS="${WARM_STARTS:-10}"
     WARMUPS="${WARMUPS:-5}"
     STEADY_SAMPLES="${STEADY_SAMPLES:-30}"
+    POWER_ITERATIONS="${POWER_ITERATIONS:-30}"
     WORKLOAD="$PAYLOAD_ROOT/resnet50_small"
     LOADABLE="$WORKLOAD/loadable.nvdla"
     INPUT="$WORKLOAD/input.jpg"
     GOLDEN="$WORKLOAD/golden-output.dimg"
 fi
 
-for value in "$SETTLE_SECONDS" "$POWER_IDLE_SECONDS" "$RUNTIME_TIMEOUT" "$COLD_STARTS" "$WARM_STARTS" "$WARMUPS" "$STEADY_SAMPLES"; do
+for value in "$SETTLE_SECONDS" "$POWER_IDLE_SECONDS" "$POWER_INTERVAL_MS" "$POWER_ITERATIONS" "$RUNTIME_TIMEOUT" "$COLD_STARTS" "$WARM_STARTS" "$WARMUPS" "$STEADY_SAMPLES"; do
     case "$value" in *[!0-9]*|"") echo "benchmark counts must be non-negative integers" >&2; exit 2 ;; esac
 done
+if [ "$POWER_SAMPLE" -eq 1 ]; then
+    if [ "$POWER_INTERVAL_MS" -eq 0 ] || [ "$POWER_ITERATIONS" -eq 0 ]; then
+        echo "power interval and iterations must be positive" >&2
+        exit 2
+    fi
+    case "$POWER_SAMPLER_CPU" in
+        *[!0-9]*|"") echo "POWER_SAMPLER_CPU must be an online CPU number" >&2; exit 2 ;;
+        *)
+            if [ ! -d "/sys/devices/system/cpu/cpu$POWER_SAMPLER_CPU" ] ||
+               { [ -r "/sys/devices/system/cpu/cpu$POWER_SAMPLER_CPU/online" ] &&
+                 [ "$(cat "/sys/devices/system/cpu/cpu$POWER_SAMPLER_CPU/online")" != "1" ]; }; then
+                echo "POWER_SAMPLER_CPU is not online: $POWER_SAMPLER_CPU" >&2
+                exit 2
+            fi
+            ;;
+    esac
+fi
 if [ ! -f "$LOADABLE" ] || [ ! -f "$INPUT" ] || [ ! -f "$GOLDEN" ]; then
     echo "benchmark workload is incomplete: $WORKLOAD" >&2
     exit 2
@@ -89,6 +110,8 @@ CLOCK_STATUS="not-checked"
 DMESG_LINES=0
 IRQ_BEFORE=0
 GOVERNORS_SAVED="$OUT/governors-before.txt"
+SAMPLER_PID=""
+SAMPLER_STOP=""
 
 mkdir -p "$OUT"
 
@@ -116,6 +139,12 @@ irq_total() {
 }
 
 restore_environment() {
+    if [ -n "$SAMPLER_PID" ]; then
+        [ -n "$SAMPLER_STOP" ] && : >"$SAMPLER_STOP"
+        kill "$SAMPLER_PID" 2>/dev/null || true
+        wait "$SAMPLER_PID" 2>/dev/null || true
+        SAMPLER_PID=""
+    fi
     if [ -n "$PRINTK_ORIGINAL" ] && [ -w /proc/sys/kernel/printk ]; then
         printf '%s\n' "$PRINTK_ORIGINAL" >/proc/sys/kernel/printk 2>/dev/null || true
     fi
@@ -160,6 +189,10 @@ finish() {
         echo "firmware_log=$FIRMWARE_LOG"
         echo "benchmark_cpu=$BENCH_CPU"
         echo "power_idle_seconds=$POWER_IDLE_SECONDS"
+        echo "power_interval_ms=$POWER_INTERVAL_MS"
+        echo "power_iterations=$POWER_ITERATIONS"
+        echo "power_sampler_cpu=$POWER_SAMPLER_CPU"
+        echo "power_scope=batch-process-launch-through-exit"
         echo "runtime_timeout_seconds=$RUNTIME_TIMEOUT"
         echo "irq_before=$IRQ_BEFORE"
         echo "irq_after=$IRQ_AFTER"
@@ -214,6 +247,7 @@ capture software-hashes.txt sha256sum \
     /usr/lib/libnvdla_runtime.so \
     /usr/bin/nvdla-board-benchmark \
     /usr/bin/nvdla-benchmark-launch \
+    /usr/bin/nvdla-power-sampler \
     "$LOADABLE" "$INPUT" "$GOLDEN" \
     "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS"
 MODULE_PATH="$(modinfo -n opendla 2>/dev/null || true)"
@@ -417,54 +451,47 @@ esac
 if [ "$POWER_SAMPLE" -eq 1 ]; then
     POWER_OUT="$OUT/power-sampling"
     mkdir -p "$POWER_OUT"
-    : >"$POWER_OUT/sensor-files.txt"
-    : >"$POWER_OUT/sensor-labels.txt"
-    for sensor in /sys/class/hwmon/hwmon*/power*_input; do
-        [ -r "$sensor" ] || continue
-        label_path="${sensor%_input}_label"
-        device_label="$(dirname "$sensor")/device/of_node/label"
-        label=""
-        if [ -r "$label_path" ]; then
-            label="$(cat "$label_path")"
-        elif [ -r "$device_label" ]; then
-            label="$(tr -d '\000' <"$device_label")"
-        fi
-        [ -n "$label" ] || continue
-        printf '%s\n' "$sensor" >>"$POWER_OUT/sensor-files.txt"
-        printf '%s=%s\n' "$sensor" "$label" >>"$POWER_OUT/sensor-labels.txt"
-    done
-    if [ -s "$POWER_OUT/sensor-files.txt" ]; then
-        idle_end=$(( $(cut -d '.' -f 1 /proc/uptime) + POWER_IDLE_SECONDS ))
-        while [ "$(cut -d '.' -f 1 /proc/uptime)" -lt "$idle_end" ]; do
-            timestamp="$(cut -d ' ' -f 1 /proc/uptime)"
-            while IFS= read -r sensor; do
-                [ -r "$sensor" ] && printf '%s,%s,%s\n' "$timestamp" "$sensor" "$(cat "$sensor")"
-            done <"$POWER_OUT/sensor-files.txt"
-            sleep 1
-        done >"$POWER_OUT/idle-readings.csv"
-        stop_file="$POWER_OUT/stop"
-        (
-            while [ ! -f "$stop_file" ]; do
-                timestamp="$(cut -d ' ' -f 1 /proc/uptime)"
-                while IFS= read -r sensor; do
-                    [ -r "$sensor" ] && printf '%s,%s,%s\n' "$timestamp" "$sensor" "$(cat "$sensor")"
-                done <"$POWER_OUT/sensor-files.txt"
-                sleep 1
-            done
-        ) >"$POWER_OUT/readings.csv" &
-        sampler_pid=$!
-        if ! run_profile power 1 "$WARMUPS" "$STEADY_SAMPLES"; then
-            touch "$stop_file"
-            wait "$sampler_pid" 2>/dev/null || true
-            STATUS=1
-            CLASSIFICATION="power-run-failure"
-            finish
-        fi
-        touch "$stop_file"
-        wait "$sampler_pid" 2>/dev/null || true
-    else
-        echo "labelled hwmon power rails unavailable" >"$POWER_OUT/unavailable.txt"
+    if ! /usr/bin/nvdla-power-sampler --list >"$POWER_OUT/sensors.csv" \
+        2>"$POWER_OUT/sampler-list.stderr.log"; then
+        STATUS=1
+        CLASSIFICATION="power-sensor-discovery-failure"
+        finish
     fi
+    if ! /usr/bin/nvdla-power-sampler \
+        --output "$POWER_OUT/idle-readings.csv" \
+        --duration-ms "$((POWER_IDLE_SECONDS * 1000))" \
+        --interval-ms "$POWER_INTERVAL_MS" \
+        --cpu "$POWER_SAMPLER_CPU" \
+        2>"$POWER_OUT/idle-sampler.stderr.log"; then
+        STATUS=1
+        CLASSIFICATION="power-idle-sampling-failure"
+        finish
+    fi
+    SAMPLER_STOP="$POWER_OUT/stop"
+    rm -f "$SAMPLER_STOP"
+    /usr/bin/nvdla-power-sampler \
+        --output "$POWER_OUT/readings.csv" \
+        --stop-file "$SAMPLER_STOP" \
+        --interval-ms "$POWER_INTERVAL_MS" \
+        --cpu "$POWER_SAMPLER_CPU" \
+        2>"$POWER_OUT/active-sampler.stderr.log" &
+    SAMPLER_PID=$!
+    if ! run_profile power 1 "$WARMUPS" "$POWER_ITERATIONS"; then
+        : >"$SAMPLER_STOP"
+        wait "$SAMPLER_PID" 2>/dev/null || true
+        SAMPLER_PID=""
+        STATUS=1
+        CLASSIFICATION="power-run-failure"
+        finish
+    fi
+    : >"$SAMPLER_STOP"
+    if ! wait "$SAMPLER_PID"; then
+        SAMPLER_PID=""
+        STATUS=1
+        CLASSIFICATION="power-active-sampling-failure"
+        finish
+    fi
+    SAMPLER_PID=""
 fi
 
 capture frequencies-after.txt sh -c 'for path in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$path" ] && printf "%s=%s\n" "$path" "$(cat "$path")"; done'

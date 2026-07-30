@@ -97,6 +97,38 @@ The board benchmark:
   context switches after each process exits;
 - archives raw profiles, outputs, environment, hashes, and logs.
 
+### Power measurement
+
+The ZCU102 INA226 monitors are sampled by the native
+`nvdla-power-sampler` utility. It opens every labelled hwmon power file once,
+uses `CLOCK_MONOTONIC_RAW` timestamps, groups rails as PS or PL from the
+device-tree topology, and buffers CSV output away from UART. The default
+50 ms interval is deliberately moderate to limit I2C and CPU observer
+effects. The sampler runs on A53 CPU 3 while the runtime remains on CPU 2.
+
+Power is a separate correctness-qualified batch run:
+
+- idle sampling observes the driver-loaded board without a runtime process;
+- active sampling starts immediately before the runtime process and ends after
+  it exits;
+- LeNet executes 10,000 iterations and ResNet-50 executes 30 by default;
+- warm-ups and measured iterations are both counted because both consume
+  energy inside the sampled window.
+
+The resulting energy per inference is therefore **batch end-to-end energy**.
+It includes model setup and teardown amortized over the batch, PS runtime/KMD
+activity, memory-system activity visible on monitored rails, and PL execution.
+It is not presented as NVDLA-core-only energy.
+
+The importer reports each rail plus these first-class domains:
+
+- `PS`: processing system and software-stack delivery cost;
+- `PL`: FPGA fabric power, including NVDLA and other instantiated PL logic;
+- `MONITORED`: all exposed rails, explicitly not total 12 V board power.
+
+Incremental power and energy are active minus idle and remain signed. Negative
+values are retained as measurement evidence rather than silently clamped.
+
 Set `BENCH_CPU=none` only for an explicitly labelled scheduling control.
 Process scheduler totals are also normalized by all executed inferences,
 including warm-ups, because the process-level `wait4()` evidence includes
@@ -194,9 +226,29 @@ POWER_SAMPLE=1 REGIME=steady \
   nvdla-board-benchmark resnet50 /run/media/ROOT-mmcblk0p1/nvdla-tests
 ```
 
-When explicitly labelled hwmon power rails exist, the runner records the
-path-to-label map plus raw idle and active samples. Unlabelled or missing
-sensors are reported as unavailable and do not fail latency measurement.
+For a short power pilot:
+
+```sh
+POWER_SAMPLE=1 POWER_IDLE_SECONDS=5 POWER_ITERATIONS=10 \
+  COLD_STARTS=0 WARM_STARTS=0 STEADY_SAMPLES=3 WARMUPS=1 \
+  nvdla-board-benchmark resnet50 /run/media/ROOT-mmcblk0p1/nvdla-tests
+```
+
+The sampler can also be checked independently:
+
+```sh
+nvdla-power-sampler --list
+nvdla-power-sampler \
+  --output /tmp/power-idle.csv \
+  --duration-ms 10000 \
+  --interval-ms 50 \
+  --cpu 3
+```
+
+With `POWER_SAMPLE=1`, the runner records the path-to-label map plus raw idle
+and active samples. Missing or unlabelled PS/PL rails fail that dedicated power
+run so incomplete energy evidence cannot be accepted silently. Latency-only
+runs keep power sampling disabled and are unaffected.
 
 ## Host Analysis
 

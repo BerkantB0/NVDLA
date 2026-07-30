@@ -10,6 +10,7 @@ SRC_URI = " \
     file://nvdla-kmd-smoke.c \
     file://nvdla-flatbuf-client.c \
     file://nvdla-benchmark-launch.c \
+    file://nvdla-power-sampler.c \
     file://nvdla-board-check \
     file://nvdla-board-workload \
     file://nvdla-board-benchmark \
@@ -37,6 +38,10 @@ do_compile() {
         ${WORKDIR}/nvdla-benchmark-launch.c \
         ${LDFLAGS} \
         -o ${B}/nvdla-benchmark-launch
+    ${CC} ${CPPFLAGS} ${CFLAGS} ${DEBUG_PREFIX_MAP} -g0 \
+        ${WORKDIR}/nvdla-power-sampler.c \
+        ${LDFLAGS} \
+        -o ${B}/nvdla-power-sampler
 }
 
 do_install() {
@@ -47,6 +52,7 @@ do_install() {
     install -m 0755 ${B}/nvdla-kmd-smoke ${D}${bindir}/nvdla-kmd-smoke
     install -m 0755 ${B}/nvdla-flatbuf-client ${D}${bindir}/nvdla-flatbuf-client
     install -m 0755 ${B}/nvdla-benchmark-launch ${D}${bindir}/nvdla-benchmark-launch
+    install -m 0755 ${B}/nvdla-power-sampler ${D}${bindir}/nvdla-power-sampler
     install -m 0755 ${WORKDIR}/nvdla-board-check ${D}${bindir}/nvdla-board-check
     install -m 0755 ${WORKDIR}/nvdla-board-workload ${D}${bindir}/nvdla-board-workload
     install -m 0755 ${WORKDIR}/nvdla-board-benchmark ${D}${bindir}/nvdla-board-benchmark
@@ -63,6 +69,7 @@ do_deploy() {
     install -m 0755 ${D}${bindir}/nvdla-kmd-smoke ${DEPLOYDIR}/nvdla-kmd-smoke
     install -m 0755 ${D}${bindir}/nvdla-flatbuf-client ${DEPLOYDIR}/nvdla-flatbuf-client
     install -m 0755 ${D}${bindir}/nvdla-benchmark-launch ${DEPLOYDIR}/nvdla-benchmark-launch
+    install -m 0755 ${D}${bindir}/nvdla-power-sampler ${DEPLOYDIR}/nvdla-power-sampler
     install -m 0755 ${D}${bindir}/nvdla-board-check ${DEPLOYDIR}/nvdla-board-check
     install -m 0755 ${D}${bindir}/nvdla-board-workload ${DEPLOYDIR}/nvdla-board-workload
     install -m 0755 ${D}${bindir}/nvdla-board-benchmark ${DEPLOYDIR}/nvdla-board-benchmark

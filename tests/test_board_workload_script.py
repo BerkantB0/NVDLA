@@ -56,6 +56,11 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn('BENCH_CPU="${BENCH_CPU:-2}"', text)
         self.assertIn("--rusage rusage.env", text)
         self.assertIn('--cpu "$BENCH_CPU"', text)
+        self.assertIn("nvdla-power-sampler", text)
+        self.assertIn('POWER_SAMPLER_CPU="${POWER_SAMPLER_CPU:-3}"', text)
+        self.assertIn('POWER_INTERVAL_MS="${POWER_INTERVAL_MS:-50}"', text)
+        self.assertIn('POWER_ITERATIONS="${POWER_ITERATIONS:-10000}"', text)
+        self.assertIn('POWER_ITERATIONS="${POWER_ITERATIONS:-30}"', text)
         self.assertNotIn("/dev/mem", text)
         self.assertNotIn("rmmod", text)
 
