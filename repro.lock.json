@@ -54,6 +54,12 @@
       "commit": "771f20cc9e69759d7277978eb41e8d47f1547374",
       "branch": "nv_small",
       "local_path": ".external/sources/nvdla-hw"
+    },
+    "onnxruntime": {
+      "url": "https://github.com/microsoft/onnxruntime.git",
+      "commit": "387127404e6c1d84b3468c387d864877ed1c67fe",
+      "tag": "v1.18.1",
+      "local_path": ".external/sources/onnxruntime"
     }
   },
   "docker": {
@@ -168,6 +174,48 @@
     "install_dir": "/opt/pkg/petalinux/2024.1",
     "base_version": "2024.1",
     "metadata_revision": "b31575b49f230b006aa3193cb564368e357777ed"
+  },
+  "cpu_benchmark": {
+    "runtime": {
+      "name": "ONNX Runtime",
+      "version": "1.18.1",
+      "execution_provider": "CPUExecutionProvider",
+      "primary_threads": 4,
+      "secondary_threads": 1
+    },
+    "conversion": {
+      "container": "python:3.10-slim",
+      "container_digest": "sha256:c1e4e6c01eb489c422288b2de34b0761ca316f7a2d98e2c33f47659a73ed108a",
+      "packages": {
+        "caffe2onnx": "2.0.1",
+        "onnx": "1.16.1",
+        "onnxruntime": "1.18.1",
+        "opencv-python-headless": "4.6.0.66",
+        "numpy": "1.26.4",
+        "protobuf": "3.20.3"
+      }
+    },
+    "quantization": {
+      "format": "QDQ",
+      "activation_type": "QInt8",
+      "weight_type": "QInt8",
+      "per_channel": true,
+      "operators": [
+        "Conv",
+        "Gemm",
+        "MatMul",
+        "Softmax"
+      ],
+      "calibration_policy": "deterministic-augmentations-of-pinned-workload-input-performance-only"
+    },
+    "expected_fp32_model_sha256": {
+      "lenet": "8D3140CFA3950A65403BA2B4D9C26D7045599040C544121924A9A20CDD903804",
+      "resnet50": "15EE723A8C69C93C32D4E290C029DDAAD1BE5CF437342F0DC338AC87A7B03F7C"
+    },
+    "expected_int8_model_sha256": {
+      "lenet": "8EF7B76DF4392CDFFCFC2C60D5CBA8A3C21F4C60D2D5CE74342DC8AF194536E5",
+      "resnet50": "27A00402F94BCF87BFC436CD049E00E9CC0E5E78296C0DC964F5B4DEFA8158A2"
+    }
   },
   "vp": {
     "reference": {

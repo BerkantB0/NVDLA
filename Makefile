@@ -6,7 +6,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-onnxruntime cpu-model-workloads \
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
@@ -36,6 +36,8 @@ help:
 	  '  make sources-vp      Fetch pinned nvdla/vp and nvdla/hw sources' \
 	  '  make sources-lenet   Fetch pinned LeNet/MNIST source files' \
 	  '  make sources-resnet50 Fetch pinned Caffe ResNet-50 source files' \
+	  '  make sources-onnxruntime Fetch pinned ONNX Runtime source files' \
+	  '  make cpu-model-workloads Convert and validate FP32/INT8 ONNX workloads' \
 	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
 	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
 	  '  make patch-format    Regenerate patches from the patched worktree commits' \
@@ -116,6 +118,12 @@ sources-lenet:
 
 sources-resnet50:
 	@$(PYTHON) -m nvdla_test_framework resnet50-sources --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}"
+
+sources-onnxruntime:
+	@scripts/fetch_sources.sh onnxruntime
+
+cpu-model-workloads: sources-lenet sources-resnet50 vp-resnet50-small-workload
+	@scripts/cpu_model_workloads.sh
 
 patch-prepare:
 	@scripts/nvdla_patch_queue.sh prepare
