@@ -6,14 +6,14 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-onnxruntime cpu-model-workloads \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-onnxruntime sources-eigen cpu-model-workloads cpu-onnxruntime \
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload vp-resnet50-small-golden vp-resnet50-small-golden-promote vp-resnet50-small-golden-start vp-resnet50-small-golden-status lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
-        petalinux-smoke petalinux-project petalinux-dts petalinux-power petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report \
+        petalinux-smoke petalinux-project petalinux-cpu-sdk petalinux-dts petalinux-power petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report \
         test report clean
 
 help:
@@ -37,7 +37,9 @@ help:
 	  '  make sources-lenet   Fetch pinned LeNet/MNIST source files' \
 	  '  make sources-resnet50 Fetch pinned Caffe ResNet-50 source files' \
 	  '  make sources-onnxruntime Fetch pinned ONNX Runtime source files' \
+	  '  make sources-eigen   Fetch pinned Eigen source files' \
 	  '  make cpu-model-workloads Convert and validate FP32/INT8 ONNX workloads' \
+	  '  make cpu-onnxruntime Cross-build standard ONNX Runtime CPU tools' \
 	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
 	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
 	  '  make patch-format    Regenerate patches from the patched worktree commits' \
@@ -74,6 +76,7 @@ help:
 	  '  make vp-trace-compare Compare reference and candidate CSB trace artifacts' \
 	  '  make vp-trace-small-gate Run legacy, modern, and differential trace gates' \
 	  '  make petalinux-project Create/verify the Ubuntu-22.04 PetaLinux project and XSA import' \
+	  '  make petalinux-cpu-sdk Export/install the memory-bounded PetaLinux ARM64 SDK' \
 	  '  make petalinux-dts   Install the XSA-derived NVDLA device-tree fragment' \
 	  '  make petalinux-power Enable and build ZCU102 INA226 rail monitors' \
 	  '  make petalinux-kmod  Build opendla.ko in a PetaLinux project' \
@@ -122,8 +125,14 @@ sources-resnet50:
 sources-onnxruntime:
 	@scripts/fetch_sources.sh onnxruntime
 
+sources-eigen:
+	@scripts/fetch_sources.sh eigen
+
 cpu-model-workloads: sources-lenet sources-resnet50 vp-resnet50-small-workload
 	@scripts/cpu_model_workloads.sh
+
+cpu-onnxruntime: sources-onnxruntime sources-eigen
+	@scripts/cpu_onnxruntime_build.sh
 
 patch-prepare:
 	@scripts/nvdla_patch_queue.sh prepare
@@ -294,6 +303,9 @@ petalinux-smoke:
 
 petalinux-project:
 	@scripts/petalinux_project.sh
+
+petalinux-cpu-sdk:
+	@scripts/petalinux_cpu_sdk.sh
 
 petalinux-dts:
 	@scripts/petalinux_dts.sh

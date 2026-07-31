@@ -60,6 +60,11 @@
       "commit": "387127404e6c1d84b3468c387d864877ed1c67fe",
       "tag": "v1.18.1",
       "local_path": ".external/sources/onnxruntime"
+    },
+    "eigen": {
+      "url": "https://gitlab.com/libeigen/eigen.git",
+      "commit": "e7248b26a1ed53fa030c5c459f7ea095dfd276ac",
+      "local_path": ".external/sources/eigen"
     }
   },
   "docker": {
@@ -182,6 +187,10 @@
       "execution_provider": "CPUExecutionProvider",
       "primary_threads": 4,
       "secondary_threads": 1
+    },
+    "build_tools": {
+      "cmake": "3.28.4",
+      "ninja": "1.11.1.1"
     },
     "conversion": {
       "container": "python:3.10-slim",

@@ -103,6 +103,9 @@ case "$WHAT" in
   onnxruntime)
     fetch_repo "ONNX Runtime" onnxruntime
     ;;
+  eigen)
+    fetch_repo "Eigen" eigen
+    ;;
   vp)
     fetch_repo "nvdla/vp" nvdla_vp
     fetch_submodules "$FETCHED_PATH"
@@ -124,7 +127,7 @@ case "$WHAT" in
     fetch_repo "nvdla/hw" nvdla_hw
     ;;
   *)
-    echo "Usage: $0 [nvdla-sw|linux-xlnx|buildroot|nvdla-vp|nvdla-hw|onnxruntime|vp|all|all-with-vp]" >&2
+    echo "Usage: $0 [nvdla-sw|linux-xlnx|buildroot|nvdla-vp|nvdla-hw|onnxruntime|eigen|vp|all|all-with-vp]" >&2
     exit 2
     ;;
 esac
