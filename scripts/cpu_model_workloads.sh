@@ -38,11 +38,6 @@ for path in "$LENET_SOURCE" "$RESNET_SOURCE" "$RESNET_WORKLOAD"; do
   fi
 done
 
-if [[ -d "$OUT_DIR" ]] && find "$OUT_DIR" -mindepth 1 -print -quit | grep -q .; then
-  echo "Refusing to overwrite non-empty CPU workload directory: $OUT_DIR" >&2
-  exit 2
-fi
-
 mkdir -p "$STAGE_DIR/lenet" "$STAGE_DIR/resnet50" "$ROOT/.work"
 cp "$LENET_SOURCE/lenet_mnist.prototxt" "$STAGE_DIR/lenet/"
 cp "$LENET_SOURCE/lenet_mnist.caffemodel" "$STAGE_DIR/lenet/"
@@ -64,6 +59,7 @@ OUT_HOST="$(docker_host_path "$BUILD_OUT")"
 "$DOCKER" build --pull=false -t "$IMAGE" "$CONTEXT_HOST"
 
 "$DOCKER" run --rm \
+  --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$TOOL_HOST,dst=/tool/prepare_cpu_models.py,readonly" \
   --mount "type=bind,src=$LOCK_HOST,dst=/tool/repro.lock.json,readonly" \
   --mount "type=bind,src=$STAGE_HOST,dst=/inputs,readonly" \
@@ -83,10 +79,23 @@ OUT_HOST="$(docker_host_path "$BUILD_OUT")"
   sha256sum lenet/*/model.onnx resnet50/*/model.onnx
 ) >"$BUILD_OUT/model-sha256.txt"
 
-if [[ -d "$OUT_DIR" ]]; then
-  rmdir "$OUT_DIR"
-fi
 mkdir -p "$(dirname "$OUT_DIR")"
-mv "$BUILD_OUT" "$OUT_DIR"
+BACKUP=""
+if [[ -e "$OUT_DIR" ]]; then
+  BACKUP="$ROOT/.work/cpu-onnx-previous.$$"
+  mv "$OUT_DIR" "$BACKUP"
+fi
+if ! mv "$BUILD_OUT" "$OUT_DIR"; then
+  [[ -z "$BACKUP" ]] || mv "$BACKUP" "$OUT_DIR"
+  exit 1
+fi
+if [[ -n "$BACKUP" ]]; then
+  WORK_ROOT_REAL="$(realpath "$ROOT/.work")"
+  BACKUP_REAL="$(realpath "$BACKUP")"
+  case "$BACKUP_REAL" in
+    "$WORK_ROOT_REAL"/*) rm -rf -- "$BACKUP_REAL" ;;
+    *) echo "Refusing to remove unexpected backup path: $BACKUP_REAL" >&2; exit 1 ;;
+  esac
+fi
 
 echo "CPU ONNX workloads ready: $OUT_DIR"

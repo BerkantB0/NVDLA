@@ -98,15 +98,30 @@ def tensor_shape(value_info: Any) -> list[int | str | None]:
     return shape
 
 
-def save_test_data(directory: Path, value: np.ndarray, output: np.ndarray) -> None:
+def save_test_data(directory: Path, value: np.ndarray, output: np.ndarray) -> dict[str, Any]:
     data = directory / "test_data_set_0"
     data.mkdir(parents=True, exist_ok=True)
-    (data / "input_0.pb").write_bytes(
+    input_path = data / "input_0.pb"
+    output_path = data / "output_0.pb"
+    input_path.write_bytes(
         numpy_helper.from_array(value).SerializeToString()
     )
-    (data / "output_0.pb").write_bytes(
+    output_path.write_bytes(
         numpy_helper.from_array(output).SerializeToString()
     )
+    return {
+        "path": data.name,
+        "input": {
+            "path": input_path.name,
+            "sha256": sha256_file(input_path),
+            "size_bytes": input_path.stat().st_size,
+        },
+        "output": {
+            "path": output_path.name,
+            "sha256": sha256_file(output_path),
+            "size_bytes": output_path.stat().st_size,
+        },
+    }
 
 
 def comparison(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -158,6 +173,14 @@ def inspect_model(path: Path) -> dict[str, Any]:
             for item in model.graph.output
         ],
     }
+
+
+def canonicalize_quantized_model(path: Path) -> None:
+    model = onnx.load(path)
+    value_info = sorted(model.graph.value_info, key=lambda item: item.name)
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(value_info)
+    path.write_bytes(model.SerializeToString(deterministic=True))
 
 
 def validate_quantization_scales(path: Path) -> dict[str, Any]:
@@ -238,7 +261,7 @@ def build_model(
         or fp32_comparison["cosine_similarity"] < 0.999999
     ):
         raise ValueError(f"{name}: converted FP32 model did not match Caffe")
-    save_test_data(fp32_dir, value, fp32_output)
+    fp32_test_data = save_test_data(fp32_dir, value, fp32_output)
 
     quant_pre_process(
         input_model=str(fp32_model),
@@ -264,6 +287,7 @@ def build_model(
         },
     )
     preprocessed_model.unlink()
+    canonicalize_quantized_model(int8_model)
     if expected_int8_hash:
         verify_file(int8_model, expected_int8_hash)
     quantization_scales = validate_quantization_scales(int8_model)
@@ -279,7 +303,7 @@ def build_model(
         or int8_comparison["cosine_similarity"] < 0.98
     ):
         raise ValueError(f"{name}: INT8 performance model failed the pinned-input check")
-    save_test_data(int8_dir, value, int8_output)
+    int8_test_data = save_test_data(int8_dir, value, int8_output)
 
     return {
         "schema_version": 1,
@@ -299,12 +323,12 @@ def build_model(
             "fp32": {
                 **inspect_model(fp32_model),
                 "caffe_comparison": fp32_comparison,
-                "test_data": "test_data_set_0",
+                "test_data": fp32_test_data,
             },
             "int8": {
                 **inspect_model(int8_model),
                 "fp32_comparison": int8_comparison,
-                "test_data": "test_data_set_0",
+                "test_data": int8_test_data,
                 "quantization": {
                     "format": "QDQ",
                     "activation_type": "QInt8",
@@ -314,6 +338,7 @@ def build_model(
                     "calibration_method": "MinMax",
                     "minimum_real_range": 1e-7,
                     "preprocessing": "ORT graph optimization and ONNX shape inference",
+                    "canonicalization": "graph.value_info sorted by tensor name; deterministic protobuf serialization",
                     "scale_validation": quantization_scales,
                     "calibration_samples": len(calibration_values),
                     "calibration_scope": (
