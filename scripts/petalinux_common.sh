@@ -158,10 +158,16 @@ board_flatbuf_client_path = os.environ.get("BOARD_FLATBUF_CLIENT_PATH") or None
 board_check_script_path = os.environ.get("BOARD_CHECK_SCRIPT_PATH") or None
 board_workload_script_path = os.environ.get("BOARD_WORKLOAD_SCRIPT_PATH") or None
 board_benchmark_script_path = os.environ.get("BOARD_BENCHMARK_SCRIPT_PATH") or None
+board_cpu_benchmark_script_path = os.environ.get("BOARD_CPU_BENCHMARK_SCRIPT_PATH") or None
 board_benchmark_launch_path = os.environ.get("BOARD_BENCHMARK_LAUNCH_PATH") or None
 board_power_sampler_path = os.environ.get("BOARD_POWER_SAMPLER_PATH") or None
 sd_bundle_path = os.environ.get("SD_BUNDLE_PATH") or None
 sd_bundle_manifest_path = os.environ.get("SD_BUNDLE_MANIFEST_PATH") or None
+cpu_runtime_recipe_path = os.environ.get("CPU_RUNTIME_RECIPE_PATH") or None
+cpu_runtime_package_path = os.environ.get("CPU_RUNTIME_PACKAGE_PATH") or None
+cpu_runtime_library_path = os.environ.get("CPU_RUNTIME_LIBRARY_PATH") or None
+cpu_test_runner_path = os.environ.get("CPU_TEST_RUNNER_PATH") or None
+cpu_perf_test_path = os.environ.get("CPU_PERF_TEST_PATH") or None
 image_dir = Path(os.environ["PETALINUX_PROJECT"]) / "images" / "linux"
 image_files = {}
 if image_dir.is_dir():
@@ -180,6 +186,9 @@ smoke_elf = rootfs_audit.get("elf", {}).get("smoke", {})
 flatbuf_client_elf = rootfs_audit.get("elf", {}).get("flatbuf_client", {})
 benchmark_launcher_elf = rootfs_audit.get("elf", {}).get("benchmark_launcher", {})
 power_sampler_elf = rootfs_audit.get("elf", {}).get("power_sampler", {})
+cpu_test_runner_elf = rootfs_audit.get("elf", {}).get("cpu_test_runner", {})
+cpu_perf_test_elf = rootfs_audit.get("elf", {}).get("cpu_perf_test", {})
+cpu_library_elf = rootfs_audit.get("elf", {}).get("cpu_library", {})
 
 manifest = {
     "schema_version": 1,
@@ -264,6 +273,37 @@ manifest = {
         "library_rpaths": library_elf.get("rpaths", []),
         "library_in_rootfs": rootfs_audit.get("members", {}).get("library") if rootfs_audit else None,
     },
+    "cpu_runtime": {
+        "source_commit": os.environ.get("CPU_RUNTIME_SOURCE_COMMIT") or None,
+        "recipe_path": cpu_runtime_recipe_path,
+        "recipe_sha256": sha256(cpu_runtime_recipe_path),
+        "package_path": cpu_runtime_package_path,
+        "package_sha256": sha256(cpu_runtime_package_path),
+        "library_path": cpu_runtime_library_path,
+        "library_sha256": sha256(cpu_runtime_library_path),
+        "test_runner_path": cpu_test_runner_path,
+        "test_runner_sha256": sha256(cpu_test_runner_path),
+        "performance_runner_path": cpu_perf_test_path,
+        "performance_runner_sha256": sha256(cpu_perf_test_path),
+        "test_runner_elf_machine": cpu_test_runner_elf.get("machine"),
+        "test_runner_needed": cpu_test_runner_elf.get("needed", []),
+        "test_runner_rpaths": cpu_test_runner_elf.get("rpaths", []),
+        "test_runner_in_rootfs": rootfs_audit.get("members", {}).get("cpu_test_runner")
+        if rootfs_audit
+        else None,
+        "performance_runner_elf_machine": cpu_perf_test_elf.get("machine"),
+        "performance_runner_needed": cpu_perf_test_elf.get("needed", []),
+        "performance_runner_rpaths": cpu_perf_test_elf.get("rpaths", []),
+        "performance_runner_in_rootfs": rootfs_audit.get("members", {}).get("cpu_perf_test")
+        if rootfs_audit
+        else None,
+        "library_elf_machine": cpu_library_elf.get("machine"),
+        "library_needed": cpu_library_elf.get("needed", []),
+        "library_rpaths": cpu_library_elf.get("rpaths", []),
+        "library_in_rootfs": rootfs_audit.get("members", {}).get("cpu_library")
+        if rootfs_audit
+        else None,
+    },
     "board_tools": {
         "recipe_path": board_tools_recipe_path,
         "recipe_sha256": sha256(board_tools_recipe_path),
@@ -298,6 +338,11 @@ manifest = {
         if rootfs_audit
         else None,
         "benchmark_runner_in_rootfs": rootfs_audit.get("members", {}).get("benchmark_runner")
+        if rootfs_audit
+        else None,
+        "cpu_benchmark_runner_path": board_cpu_benchmark_script_path,
+        "cpu_benchmark_runner_sha256": sha256(board_cpu_benchmark_script_path),
+        "cpu_benchmark_runner_in_rootfs": rootfs_audit.get("members", {}).get("cpu_benchmark_runner")
         if rootfs_audit
         else None,
         "benchmark_launcher_in_rootfs": rootfs_audit.get("members", {}).get("benchmark_launcher")

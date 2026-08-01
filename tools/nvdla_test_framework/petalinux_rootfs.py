@@ -16,14 +16,19 @@ FLATBUF_CLIENT_MEMBER = "usr/bin/nvdla-flatbuf-client"
 COLLECTOR_MEMBER = "usr/bin/nvdla-board-check"
 WORKLOAD_RUNNER_MEMBER = "usr/bin/nvdla-board-workload"
 BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-benchmark"
+CPU_BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-cpu-benchmark"
 BENCHMARK_LAUNCHER_MEMBER = "usr/bin/nvdla-benchmark-launch"
 POWER_SAMPLER_MEMBER = "usr/bin/nvdla-power-sampler"
+CPU_TEST_RUNNER_MEMBER = "usr/bin/onnx_test_runner"
+CPU_PERF_TEST_MEMBER = "usr/bin/onnxruntime_perf_test"
+CPU_LIBRARY_MEMBER = "usr/lib/libonnxruntime.so.1.18.1"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
 TIMESYNC_MEMBER = "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
 MODULE_PREFIX = "lib/modules/"
 MODULE_SUFFIX = "/extra/opendla.ko"
 FORBIDDEN_HOST_PREFIXES = ("/home/", "/mnt/", "/tmp/work/", "/build/tmp/")
+CPU_ELF_LABELS = {"cpu_test_runner", "cpu_perf_test", "cpu_library"}
 
 ElfInspector = Callable[[Path], dict[str, Any]]
 
@@ -84,8 +89,12 @@ def audit_petalinux_rootfs(
             "collector": COLLECTOR_MEMBER,
             "workload_runner": WORKLOAD_RUNNER_MEMBER,
             "benchmark_runner": BENCHMARK_RUNNER_MEMBER,
+            "cpu_benchmark_runner": CPU_BENCHMARK_RUNNER_MEMBER,
             "benchmark_launcher": BENCHMARK_LAUNCHER_MEMBER,
             "power_sampler": POWER_SAMPLER_MEMBER,
+            "cpu_test_runner": CPU_TEST_RUNNER_MEMBER,
+            "cpu_perf_test": CPU_PERF_TEST_MEMBER,
+            "cpu_library": CPU_LIBRARY_MEMBER,
             "serial_autologin": AUTOLOGIN_MEMBER,
             "network_profile": NETWORK_MEMBER,
             "timesync_profile": TIMESYNC_MEMBER,
@@ -109,7 +118,7 @@ def audit_petalinux_rootfs(
             with destination.open("wb") as output:
                 output.write(source.read())
             extracted[label] = destination
-            if label in {"collector", "workload_runner", "benchmark_runner"}:
+            if label in {"collector", "workload_runner", "benchmark_runner", "cpu_benchmark_runner"}:
                 if member.mode & 0o111 == 0:
                     errors.append(f"{label} is not executable")
                 if not destination.read_bytes().startswith(b"#!/bin/sh\n"):
@@ -156,6 +165,7 @@ def audit_petalinux_rootfs(
             "collector",
             "workload_runner",
             "benchmark_runner",
+            "cpu_benchmark_runner",
             "serial_autologin",
             "network_profile",
             "timesync_profile",
@@ -169,7 +179,9 @@ def audit_petalinux_rootfs(
         elf[label] = info
         if info.get("machine") != "AArch64":
             errors.append(f"{label} has unexpected ELF machine {info.get('machine')!r}")
-        if info.get("rpaths"):
+        rpaths = info.get("rpaths", [])
+        cpu_origin_only = label in CPU_ELF_LABELS and set(rpaths) == {"$ORIGIN"}
+        if rpaths and not cpu_origin_only:
             errors.append(f"{label} contains RPATH/RUNPATH entries: {info['rpaths']!r}")
         if info.get("host_paths"):
             errors.append(f"{label} contains host build paths")

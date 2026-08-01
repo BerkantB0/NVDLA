@@ -28,6 +28,20 @@ SMOKE_NEEDED = [
     "ld-linux-aarch64.so.1",
     "libc.so.6",
 ]
+CPU_TOOL_NEEDED = [
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libonnxruntime.so.1.18.1",
+    "libstdc++.so.6",
+]
+CPU_LIBRARY_NEEDED = [
+    "libc.so.6",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libstdc++.so.6",
+]
 
 
 class PetaLinuxRootfsTests(unittest.TestCase):
@@ -46,8 +60,13 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla-board-check",
             "usr/bin/nvdla-board-workload",
             "usr/bin/nvdla-board-benchmark",
+            "usr/bin/nvdla-board-cpu-benchmark",
             "usr/bin/nvdla-benchmark-launch",
             "usr/bin/nvdla-power-sampler",
+            "usr/bin/onnx_test_runner",
+            "usr/bin/onnxruntime_perf_test",
+            "usr/lib/libonnxruntime.so.1.18.1",
+            "usr/lib/libonnxruntime.so.1",
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
             "etc/systemd/timesyncd.conf.d/nvdla-host.conf",
@@ -68,6 +87,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                         "usr/bin/nvdla-board-check",
                         "usr/bin/nvdla-board-workload",
                         "usr/bin/nvdla-board-benchmark",
+                        "usr/bin/nvdla-board-cpu-benchmark",
                     }
                     else b"[Service]\nExecStart=-/sbin/agetty --autologin root ttyPS0\n"
                     if name == "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
@@ -104,6 +124,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
     def _inspector(
         machine: str = "AArch64",
         runtime_rpaths: list[str] | None = None,
+        cpu_rpaths: list[str] | None = None,
         host_paths: list[str] | None = None,
     ):
         def inspect(path: Path) -> dict[str, Any]:
@@ -119,12 +140,23 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                 "nvdla-power-sampler",
             }:
                 needed = SMOKE_NEEDED
-            return {
+            elif path.name in {"onnx_test_runner", "onnxruntime_perf_test"}:
+                needed = CPU_TOOL_NEEDED
+            elif path.name == "libonnxruntime.so.1.18.1":
+                needed = CPU_LIBRARY_NEEDED
+            result = {
                 "machine": machine,
                 "needed": needed,
                 "rpaths": runtime_rpaths or [] if path.name == "nvdla_runtime" else [],
                 "host_paths": host_paths or [],
             }
+            if path.name in {
+                "onnx_test_runner",
+                "onnxruntime_perf_test",
+                "libonnxruntime.so.1.18.1",
+            }:
+                result["rpaths"] = cpu_rpaths if cpu_rpaths is not None else ["$ORIGIN"]
+            return result
 
         return inspect
 
@@ -177,6 +209,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing benchmark_runner from rootfs", result["errors"])
 
+    def test_rejects_missing_cpu_benchmark_runner(self) -> None:
+        result = self._audit({"usr/bin/nvdla-board-cpu-benchmark"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing cpu_benchmark_runner from rootfs", result["errors"])
+
     def test_rejects_missing_benchmark_launcher(self) -> None:
         result = self._audit({"usr/bin/nvdla-benchmark-launch"})
         self.assertEqual(result["status"], "fail")
@@ -186,6 +223,21 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/bin/nvdla-power-sampler"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing power_sampler from rootfs", result["errors"])
+
+    def test_rejects_missing_cpu_test_runner(self) -> None:
+        result = self._audit({"usr/bin/onnx_test_runner"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing cpu_test_runner from rootfs", result["errors"])
+
+    def test_rejects_missing_cpu_performance_tool(self) -> None:
+        result = self._audit({"usr/bin/onnxruntime_perf_test"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing cpu_perf_test from rootfs", result["errors"])
+
+    def test_rejects_missing_cpu_runtime_library(self) -> None:
+        result = self._audit({"usr/lib/libonnxruntime.so.1.18.1"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing cpu_library from rootfs", result["errors"])
 
     def test_rejects_missing_serial_autologin_override(self) -> None:
         result = self._audit({"etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"})
@@ -235,6 +287,15 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit(inspector=self._inspector(runtime_rpaths=["."]))
         self.assertEqual(result["status"], "fail")
         self.assertTrue(any("RPATH/RUNPATH" in error for error in result["errors"]))
+
+    def test_allows_literal_origin_for_cpu_tools(self) -> None:
+        result = self._audit(inspector=self._inspector(cpu_rpaths=["$ORIGIN"]))
+        self.assertEqual(result["status"], "pass")
+
+    def test_rejects_unsafe_cpu_tool_rpath(self) -> None:
+        result = self._audit(inspector=self._inspector(cpu_rpaths=["."]))
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any("cpu_test_runner contains RPATH/RUNPATH" in error for error in result["errors"]))
 
     def test_rejects_missing_dynamic_dependency(self) -> None:
         result = self._audit({"usr/lib/libstdc++.so.6"})

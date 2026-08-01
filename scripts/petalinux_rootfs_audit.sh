@@ -24,8 +24,12 @@ BOARD_FLATBUF_CLIENT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-flatbuf-client"
 BOARD_CHECK_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-check"
 BOARD_WORKLOAD_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-workload"
 BOARD_BENCHMARK_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-benchmark"
+BOARD_CPU_BENCHMARK_SCRIPT_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-board-cpu-benchmark"
 BOARD_BENCHMARK_LAUNCH_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-benchmark-launch"
 BOARD_POWER_SAMPLER_PATH="$RUN_DIR/rootfs-files/usr/bin/nvdla-power-sampler"
+CPU_TEST_RUNNER_PATH="$RUN_DIR/rootfs-files/usr/bin/onnx_test_runner"
+CPU_PERF_TEST_PATH="$RUN_DIR/rootfs-files/usr/bin/onnxruntime_perf_test"
+CPU_RUNTIME_LIBRARY_PATH="$RUN_DIR/rootfs-files/usr/lib/libonnxruntime.so.1.18.1"
 RUNTIME_PACKAGE_PATH="$(
   { find "$PETALINUX_PROJECT/build/tmp/deploy/rpm" -type f -name 'nvdla-runtime-[0-9]*.rpm' -printf '%T@ %p\n' 2>/dev/null || true; } \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
@@ -34,12 +38,20 @@ BOARD_TOOLS_PACKAGE_PATH="$(
   { find "$PETALINUX_PROJECT/build/tmp/deploy/rpm" -type f -name 'nvdla-board-tools-[0-9]*.rpm' -printf '%T@ %p\n' 2>/dev/null || true; } \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
 )"
+CPU_RUNTIME_RECIPE_PATH="$PETALINUX_PROJECT/project-spec/meta-user/recipes-apps/onnxruntime-cpu-tools/onnxruntime-cpu-tools.bb"
+CPU_RUNTIME_PACKAGE_PATH="$(
+  { find "$PETALINUX_PROJECT/build/tmp/deploy/rpm" -type f -name 'onnxruntime-cpu-tools-[0-9]*.rpm' -printf '%T@ %p\n' 2>/dev/null || true; } \
+    | sort -n | tail -n 1 | cut -d ' ' -f 2-
+)"
 export ROOTFS_TAR_PATH ROOTFS_AUDIT_PATH IMAGE_APPEND_PATH RUNTIME_RECIPE_PATH BOARD_TOOLS_RECIPE_PATH
 export RUNTIME_BINARY_PATH RUNTIME_LIBRARY_PATH RUNTIME_PACKAGE_PATH
 export BOARD_SMOKE_BINARY_PATH BOARD_FLATBUF_CLIENT_PATH BOARD_CHECK_SCRIPT_PATH BOARD_TOOLS_PACKAGE_PATH
 export BOARD_WORKLOAD_SCRIPT_PATH
 export BOARD_BENCHMARK_SCRIPT_PATH BOARD_BENCHMARK_LAUNCH_PATH
+export BOARD_CPU_BENCHMARK_SCRIPT_PATH
 export BOARD_POWER_SAMPLER_PATH
+export CPU_TEST_RUNNER_PATH CPU_PERF_TEST_PATH CPU_RUNTIME_LIBRARY_PATH
+export CPU_RUNTIME_RECIPE_PATH CPU_RUNTIME_PACKAGE_PATH
 
 if [[ ! -f "$ROOTFS_TAR_PATH" ]]; then
   pl_finish_blocked "PetaLinux rootfs archive is missing; run make petalinux-image first"
@@ -49,6 +61,9 @@ if [[ -z "$RUNTIME_PACKAGE_PATH" || ! -f "$RUNTIME_PACKAGE_PATH" ]]; then
 fi
 if [[ -z "$BOARD_TOOLS_PACKAGE_PATH" || ! -f "$BOARD_TOOLS_PACKAGE_PATH" ]]; then
   pl_finish_fail "nvdla-board-tools RPM is missing; run make petalinux-board-tools first"
+fi
+if [[ -z "$CPU_RUNTIME_PACKAGE_PATH" || ! -f "$CPU_RUNTIME_PACKAGE_PATH" ]]; then
+  pl_finish_fail "onnxruntime-cpu-tools RPM is missing; run make petalinux-cpu-runtime first"
 fi
 
 if ! python3 -m nvdla_test_framework petalinux-rootfs-audit \
