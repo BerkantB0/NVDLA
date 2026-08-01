@@ -106,6 +106,56 @@ def _relative_file_records(root: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _copy_cpu_onnx_workloads(source: Path, destination: Path) -> dict[str, Any]:
+    manifest_path = source / "manifest.json"
+    manifest = read_json(manifest_path)
+    if manifest.get("status") != "pass":
+        raise ValueError("CPU ONNX workload manifest is not passing")
+    models = manifest.get("models")
+    if not isinstance(models, list) or not models:
+        raise ValueError("CPU ONNX workload manifest has no models")
+
+    for model in models:
+        name = model.get("name")
+        variants = model.get("models")
+        if not isinstance(name, str) or not isinstance(variants, dict):
+            raise ValueError("CPU ONNX workload manifest has an invalid model entry")
+        for precision in ("fp32", "int8"):
+            variant = variants.get(precision)
+            if not isinstance(variant, dict):
+                raise ValueError(f"CPU ONNX workload is missing {name}/{precision}")
+            test_data = variant.get("test_data")
+            if not isinstance(test_data, dict):
+                raise ValueError(f"CPU ONNX workload has unpinned test data for {name}/{precision}")
+            source_dir = source / name / precision
+            destination_dir = destination / name / precision
+            _copy_verified(
+                source_dir / variant["path"],
+                destination_dir / "model.onnx",
+                variant["sha256"],
+            )
+            for tensor in ("input", "output"):
+                record = test_data.get(tensor)
+                if not isinstance(record, dict):
+                    raise ValueError(
+                        f"CPU ONNX workload is missing {tensor} metadata for {name}/{precision}"
+                    )
+                _copy_verified(
+                    source_dir / test_data["path"] / record["path"],
+                    destination_dir / "test_data_set_0" / record["path"],
+                    record["sha256"],
+                )
+
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(manifest_path, destination / "manifest.json")
+    return {
+        "path": destination.name,
+        "manifest_sha256": sha256_file(destination / "manifest.json"),
+        "models": [model["name"] for model in models],
+        "precisions": ["fp32", "int8"],
+    }
+
+
 def build_board_payload(
     workloads_dir: Path,
     out_dir: Path,
@@ -119,6 +169,7 @@ def build_board_payload(
     sdp_source = workloads_dir / "sdp_regression_small"
     lenet_source = workloads_dir / "lenet_small"
     resnet_source = workloads_dir / "resnet50_small"
+    cpu_onnx_source = workloads_dir / "cpu_onnx"
     sdp_manifest = read_json(sdp_source / "generated-manifest.json")
     lenet_manifest = read_json(lenet_source / "generated-manifest.json")
     resnet_manifest = read_json(resnet_source / "generated-manifest.json")
@@ -154,6 +205,7 @@ def build_board_payload(
     sdp_out = out_dir / "sdp_regression_small"
     lenet_out = out_dir / "lenet_small"
     resnet_out = out_dir / "resnet50_small"
+    cpu_onnx_out = out_dir / "cpu_onnx"
 
     sdp_loadable = sdp_manifest["loadable"]
     sdp_golden = sdp_manifest["golden_outputs"][0]
@@ -304,9 +356,10 @@ def build_board_payload(
         },
     }
     write_json(resnet_out / "manifest.json", resnet_payload_manifest)
+    cpu_onnx_payload = _copy_cpu_onnx_workloads(cpu_onnx_source, cpu_onnx_out)
 
     payload_manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "board": "zcu102",
         "hardware_config": "nv_small",
         "delivery": "sd-fat-read-only",
@@ -333,6 +386,7 @@ def build_board_payload(
                 "path": "resnet50_small",
                 "manifest_sha256": sha256_file(resnet_out / "manifest.json"),
             },
+            "cpu_onnx": cpu_onnx_payload,
         },
     }
     write_json(out_dir / "PAYLOAD.json", payload_manifest)
@@ -353,6 +407,7 @@ def build_board_payload(
             "sdp_manifest": str(sdp_source / "generated-manifest.json"),
             "lenet_manifest": str(lenet_source / "generated-manifest.json"),
             "resnet50_manifest": str(resnet_source / "generated-manifest.json"),
+            "cpu_onnx_manifest": str(cpu_onnx_source / "manifest.json"),
         },
         "payload_dir": str(out_dir),
         "files": _relative_file_records(out_dir),

@@ -15,6 +15,7 @@ class BoardPayloadTests(unittest.TestCase):
         sdp = workloads / "sdp_regression_small"
         lenet = workloads / "lenet_small"
         resnet = workloads / "resnet50_small"
+        cpu_onnx = workloads / "cpu_onnx"
         (sdp / "golden").mkdir(parents=True)
         lenet.mkdir(parents=True)
         resnet.mkdir(parents=True)
@@ -156,6 +157,39 @@ class BoardPayloadTests(unittest.TestCase):
                 },
             },
         )
+        cpu_models = []
+        for model_name in ("lenet", "resnet50"):
+            variants = {}
+            for precision in ("fp32", "int8"):
+                model_dir = cpu_onnx / model_name / precision
+                data_dir = model_dir / "test_data_set_0"
+                data_dir.mkdir(parents=True)
+                model_path = model_dir / "model.onnx"
+                input_path = data_dir / "input_0.pb"
+                output_path = data_dir / "output_0.pb"
+                model_path.write_bytes(f"{model_name}-{precision}-model".encode())
+                input_path.write_bytes(f"{model_name}-input".encode())
+                output_path.write_bytes(f"{model_name}-{precision}-output".encode())
+                variants[precision] = {
+                    "path": "model.onnx",
+                    "sha256": sha256_file(model_path),
+                    "test_data": {
+                        "path": "test_data_set_0",
+                        "input": {
+                            "path": "input_0.pb",
+                            "sha256": sha256_file(input_path),
+                        },
+                        "output": {
+                            "path": "output_0.pb",
+                            "sha256": sha256_file(output_path),
+                        },
+                    },
+                }
+            cpu_models.append({"name": model_name, "models": variants})
+        write_json(
+            cpu_onnx / "manifest.json",
+            {"schema_version": 1, "status": "pass", "models": cpu_models},
+        )
         return workloads
 
     def test_builds_deterministic_payload(self) -> None:
@@ -190,13 +224,29 @@ class BoardPayloadTests(unittest.TestCase):
             payload = json.loads(
                 (root / "first" / "nvdla-tests" / "PAYLOAD.json").read_text()
             )
-            self.assertEqual(payload["schema_version"], 3)
+            self.assertEqual(payload["schema_version"], 4)
             self.assertEqual(payload["hardware"]["clock"]["expected_hz"], 149985016)
             self.assertEqual(
                 payload["hardware"]["clock"]["linux_tolerance_hz"],
                 1000,
             )
             self.assertIn("resnet50", payload["workloads"])
+            self.assertEqual(
+                payload["workloads"]["cpu_onnx"]["models"],
+                ["lenet", "resnet50"],
+            )
+            self.assertTrue(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "cpu_onnx"
+                    / "resnet50"
+                    / "int8"
+                    / "test_data_set_0"
+                    / "output_0.pb"
+                ).is_file()
+            )
             self.assertTrue(
                 (root / "first" / "nvdla-tests" / "resnet50_small" / "loadable.nvdla").is_file()
             )
