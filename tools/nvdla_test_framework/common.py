@@ -60,6 +60,7 @@ def is_wsl() -> bool:
 def docker_backend(image: str) -> tuple[list[str], str, str]:
     candidates = [(["docker"], "native")]
     if is_wsl():
+        candidates.append((["docker.exe"], "windows-docker-from-wsl"))
         candidates.append((["cmd.exe", "/c", "docker"], "windows-docker-from-wsl"))
     for prefix, name in candidates:
         try:

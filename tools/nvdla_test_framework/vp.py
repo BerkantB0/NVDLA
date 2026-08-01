@@ -10,7 +10,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .common import read_json, repo_root, run_command, sha256_file, utc_run_id, write_json
+from .common import (
+    docker_backend,
+    read_json,
+    repo_root,
+    run_command,
+    sha256_file,
+    utc_run_id,
+    write_json,
+)
 from .patches import patch_series_fingerprint
 from .workloads import compare_exact_files
 
@@ -86,10 +94,11 @@ def _bad_patterns(text: str) -> list[str]:
     return [pat for pat in KERNEL_BAD_PATTERNS if re.search(pat, text, flags=re.IGNORECASE)]
 
 
-def _stock_vp_boot(lock: dict[str, Any], timeout: int, out_dir: Path) -> dict[str, Any]:
-    image = lock["docker"]["vp_latest"]["image"]
+def _stock_vp_boot(
+    docker_prefix: list[str], image: str, timeout: int, out_dir: Path
+) -> dict[str, Any]:
     command = [
-        "docker",
+        *docker_prefix,
         "run",
         "--rm",
         image,
@@ -113,11 +122,12 @@ def _stock_vp_boot(lock: dict[str, Any], timeout: int, out_dir: Path) -> dict[st
     }
 
 
-def _compiler_smoke(lock: dict[str, Any], out_dir: Path) -> dict[str, Any]:
-    image = lock["docker"]["vp_latest"]["image"]
+def _compiler_smoke(
+    docker_prefix: list[str], image: str, out_dir: Path
+) -> dict[str, Any]:
     cp = run_command(
         [
-            "docker",
+            *docker_prefix,
             "run",
             "--rm",
             image,
@@ -1253,8 +1263,10 @@ def run_vp_test(
     out.mkdir(parents=True, exist_ok=True)
 
     if lane == "reference":
-        boot = _stock_vp_boot(lock, timeout, out)
-        compiler = _compiler_smoke(lock, out)
+        image = lock["docker"]["vp_latest"]["image"]
+        docker_prefix, docker_backend_name, docker_image_id = docker_backend(image)
+        boot = _stock_vp_boot(docker_prefix, image, timeout, out)
+        compiler = _compiler_smoke(docker_prefix, image, out)
         status = "pass" if boot["status"] == "pass" and compiler["status"] == "pass" else "fail"
         manifest = {
             "schema_version": 1,
@@ -1265,7 +1277,11 @@ def run_vp_test(
             "compiler": compiler,
             "sources": {"nvdla_sw": lock["sources"]["nvdla_sw"]["commit"]},
             "patch_series": patch_series_fingerprint(),
-            "docker": lock["docker"]["vp_latest"],
+            "docker": {
+                **lock["docker"]["vp_latest"],
+                "backend": docker_backend_name,
+                "actual_image_id": docker_image_id,
+            },
             "workloads": [],
         }
     else:
