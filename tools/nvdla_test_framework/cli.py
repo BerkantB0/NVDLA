@@ -6,6 +6,7 @@ from pathlib import Path
 from .abi import run_abi_check
 from .board_artifact import run_board_artifact_import
 from .board_payload import run_board_payload
+from .cpu_performance import import_cpu_performance_archives
 from .diagnostics import classify_sdp_small_diagnostic
 from .lenet import (
     DEFAULT_STOCK_DIR,
@@ -161,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
     performance.add_argument("--archive", required=True, action="append", type=Path)
     performance.add_argument("--out", required=True, type=Path)
 
+    cpu_performance = sub.add_parser(
+        "cpu-performance-import",
+        help="Analyze one ARM CPU ONNX Runtime benchmark campaign",
+    )
+    cpu_performance.add_argument("--archive", required=True, action="append", type=Path)
+    cpu_performance.add_argument("--out", required=True, type=Path)
+
     trace_parse = sub.add_parser("trace-parse", help="Canonicalize NVDLA VP SystemC transactions")
     trace_parse.add_argument("--input", required=True, type=Path)
     trace_parse.add_argument("--register-header", required=True, type=Path)
@@ -260,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "performance-import":
         return import_performance_archives(args.archive, args.out)
+    if args.command == "cpu-performance-import":
+        return import_cpu_performance_archives(args.archive, args.out)
     if args.command == "trace-parse":
         return run_trace_parse(
             args.input,
