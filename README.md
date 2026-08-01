@@ -54,9 +54,10 @@ non-coherent DMA path; those remain board-level acceptance criteria.
   client, staged workload runner, target-side evidence collector, serial-only
   root autologin, and deterministic SD handoffs. These are board-test
   facilities, not deployment policy.
-- Physical ZCU102 preflight, KMD probe, and GEM smoke have passed. Staged SDP,
-  single-LeNet, and repeat-stability gates remain; host build success and GEM
-  smoke are not treated as inference correctness.
+- Physical ZCU102 preflight, KMD probe, GEM smoke, LeNet correctness/repeat,
+  and ResNet-50 correctness gates have passed. The standalone SDP regression
+  remains diagnostic because it times out after programming the engine; host
+  build success and GEM smoke are not treated as inference correctness.
 
 ## Repository Structure
 
@@ -119,13 +120,21 @@ make petalinux-dts
 make petalinux-power
 NVDLA_KMD_CONFIG=small make petalinux-kmod
 make petalinux-runtime
+make petalinux-cpu-sdk
+make cpu-onnxruntime
+make cpu-model-workloads
+make petalinux-cpu-runtime
 make petalinux-board-tools
 make petalinux-image
 make petalinux-rootfs-audit
 make petalinux-package
-make petalinux-sd-bundle
 make petalinux-board-payload
+make petalinux-sd-bundle
 ```
+
+The SD bundle contains the boot files; `petalinux-board-payload` produces the
+separate `nvdla-tests` directory that is copied beside them on the FAT
+partition.
 
 The board payload also includes a pinned, NVDLA-supported Caffe ResNet-50
 workload compiled for `nv_small`. Build it independently with:
@@ -136,6 +145,11 @@ make vp-resnet50-small-workload
 
 See [docs/resnet50-board-gate.md](docs/resnet50-board-gate.md) for model
 provenance, staged pass criteria, and the board command.
+
+The same board image can also run pinned FP32 and INT8 ONNX Runtime CPU
+baselines for LeNet and ResNet-50. See
+[docs/arm-cpu-comparison-methodology.md](docs/arm-cpu-comparison-methodology.md)
+for the build, correctness, latency, power, and final campaign protocol.
 
 This installs the driver, runtime, C diagnostic client, and staged runner but
 deliberately does not autoload the module or start a runtime service. Model

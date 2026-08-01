@@ -111,13 +111,16 @@ kernel configuration fragment. Its `power-kernel-options.txt` and
 `power-dtb-audit.csv` prove that INA226/PCA954x support is enabled and that the
 deployed DTB contains the named PS and PL monitor nodes.
 
-The runtime phase records the pinned NVDLA source revision, patch queue, recipe,
-RPM, executable, and shared-library hashes. The rootfs audit stores
-`rootfs-audit.json` plus extracted copies of the three NVDLA ELF files. Its
+The runtime phases record pinned source revisions, recipes, RPMs, executables,
+and shared-library hashes for both NVDLA UMD and ONNX Runtime CPU tools. The
+rootfs audit stores `rootfs-audit.json` plus extracted copies of the audited
+ELF files. Its
 manifest records rootfs archive hashes, installed paths, AArch64 machine type,
 `NEEDED` libraries, RPATH results, dependency closure, module `vermagic`, and
 binary/library/module hashes. A missing component or dependency, wrong
-architecture, RPATH/RUNPATH, or embedded host build path makes this lane fail.
+architecture, unsafe RPATH/RUNPATH, or embedded host build path makes this lane
+fail. ONNX Runtime files may use literal `$ORIGIN`; other or relative search
+paths remain failures.
 The default project path is `$HOME/build/nvdla-peta/petalinux/zcu102-nvdla` so
 generated builds stay on WSL ext4 unless `PETALINUX_PROJECT` is overridden.
 
@@ -166,10 +169,12 @@ indices. `execution-pass-oracle-pending` has host status `pass` but
 `correctness_status: "inconclusive"`; only comparison with an independent
 `nv_small` VP golden promotes it to `exact-pass`.
 
-Board payload schema 3 records the checked-in XSA hash plus its expected
+Board payload schema 4 records the checked-in XSA hash plus its expected
 `csb_clk`/`m_axi_clk` frequency and the accepted Linux reporting tolerance.
 These fields are covered by `SHA256SUMS`; the benchmark does not accept an
-unversioned host-side clock override.
+unversioned host-side clock override. It also carries pinned FP32 and INT8 ONNX
+graphs with hash-recorded input and expected-output protobufs for LeNet and
+ResNet-50.
 
 ## Performance Campaign
 
@@ -199,5 +204,16 @@ The host importer produces `performance-raw.csv`,
 `performance-report.md`, `latency-distribution.svg`, and
 `phase-breakdown.svg`. Timing definitions and statistical policy are in
 `docs/nvdla-performance-methodology.md`.
+
+ARM CPU archives named
+`nvdla-board-cpu-benchmark-<model>-<precision>-<threads>t-<timestamp>.tar.gz`
+use standard ONNX Runtime CPU tools. Their schema-1 `benchmark.env` records
+model, precision, intra-op thread count, CPU affinity mask, fresh-boot/NTP
+identity, regimes, correctness tolerances, and power settings. Each run keeps
+the ORT raw result CSV, launcher interval, resource usage, and stdout phase
+summary. Correctness logs from `onnx_test_runner` bracket all measurements.
+The CPU importer emits `cpu-performance-raw.csv`, summary JSON/CSV, a Markdown
+report, and `cpu-latency-distribution.svg`; mixed model, precision, thread,
+software, payload, kernel, or power provenance is rejected.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.
