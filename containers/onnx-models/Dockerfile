@@ -7,4 +7,3 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
         --no-deps caffe2onnx==2.0.1
 
 WORKDIR /work
-
