@@ -14,6 +14,7 @@ SRC_URI = " \
     file://nvdla-board-check \
     file://nvdla-board-workload \
     file://nvdla-board-benchmark \
+    file://nvdla-board-cpu-benchmark \
     file://serial-root-autologin.conf \
     file://20-nvdla-direct.network \
     file://nvdla-host-timesync.conf \
@@ -56,6 +57,7 @@ do_install() {
     install -m 0755 ${WORKDIR}/nvdla-board-check ${D}${bindir}/nvdla-board-check
     install -m 0755 ${WORKDIR}/nvdla-board-workload ${D}${bindir}/nvdla-board-workload
     install -m 0755 ${WORKDIR}/nvdla-board-benchmark ${D}${bindir}/nvdla-board-benchmark
+    install -m 0755 ${WORKDIR}/nvdla-board-cpu-benchmark ${D}${bindir}/nvdla-board-cpu-benchmark
     install -m 0644 ${WORKDIR}/serial-root-autologin.conf \
         ${D}${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf
     install -m 0644 ${WORKDIR}/20-nvdla-direct.network \
@@ -73,6 +75,7 @@ do_deploy() {
     install -m 0755 ${D}${bindir}/nvdla-board-check ${DEPLOYDIR}/nvdla-board-check
     install -m 0755 ${D}${bindir}/nvdla-board-workload ${DEPLOYDIR}/nvdla-board-workload
     install -m 0755 ${D}${bindir}/nvdla-board-benchmark ${DEPLOYDIR}/nvdla-board-benchmark
+    install -m 0755 ${D}${bindir}/nvdla-board-cpu-benchmark ${DEPLOYDIR}/nvdla-board-cpu-benchmark
 }
 addtask deploy after do_install before do_build
 

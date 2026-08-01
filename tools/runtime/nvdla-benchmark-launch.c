@@ -42,6 +42,7 @@ static int usage(const char *program)
 {
 	fprintf(stderr,
 		"usage: %s --elapsed-ns FILE [--interval FILE] [--rusage FILE] [--cpu N] "
+		"[--cpu-mask MASK] "
 		"[--timeout-seconds N] -- COMMAND [ARG ...]\n",
 		program);
 	return 2;
@@ -53,7 +54,8 @@ static uint64_t timeval_ns(const struct timeval *value)
 	       (uint64_t)value->tv_usec * 1000ULL;
 }
 
-static int write_rusage(const char *path, const struct rusage *value, int cpu)
+static int write_rusage(const char *path, const struct rusage *value, int cpu,
+			unsigned long long cpu_mask)
 {
 	FILE *output;
 
@@ -65,7 +67,9 @@ static int write_rusage(const char *path, const struct rusage *value, int cpu)
 		return -1;
 	}
 	fprintf(output, "schema_version=1\n");
-	if (cpu >= 0)
+	if (cpu_mask)
+		fprintf(output, "cpu_affinity=mask:0x%llx\n", cpu_mask);
+	else if (cpu >= 0)
 		fprintf(output, "cpu_affinity=%d\n", cpu);
 	else
 		fprintf(output, "cpu_affinity=none\n");
@@ -121,6 +125,7 @@ int main(int argc, char **argv)
 	pid_t child;
 	int status;
 	int cpu = -1;
+	unsigned long long cpu_mask = 0;
 	int argument;
 	unsigned long timeout_seconds = 0;
 	long parsed;
@@ -147,7 +152,16 @@ int main(int argc, char **argv)
 			parsed = strtol(argv[argument++], &end, 10);
 			if (errno || *end || parsed < 0 || parsed >= CPU_SETSIZE)
 				return usage(argv[0]);
+			if (cpu_mask)
+				return usage(argv[0]);
 			cpu = (int)parsed;
+		} else if (strcmp(argv[argument], "--cpu-mask") == 0) {
+			if (++argument >= argc || cpu >= 0)
+				return usage(argv[0]);
+			errno = 0;
+			cpu_mask = strtoull(argv[argument++], &end, 0);
+			if (errno || *end || !cpu_mask)
+				return usage(argv[0]);
 		} else if (strcmp(argv[argument], "--timeout-seconds") == 0) {
 			if (++argument >= argc)
 				return usage(argv[0]);
@@ -175,11 +189,19 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	if (child == 0) {
-		if (cpu >= 0) {
+		if (cpu >= 0 || cpu_mask) {
 			cpu_set_t affinity;
+			unsigned int bit;
 
 			CPU_ZERO(&affinity);
-			CPU_SET(cpu, &affinity);
+			if (cpu >= 0) {
+				CPU_SET(cpu, &affinity);
+			} else {
+				for (bit = 0; bit < sizeof(cpu_mask) * 8; bit++) {
+					if (cpu_mask & (1ULL << bit))
+						CPU_SET(bit, &affinity);
+				}
+			}
 			if (sched_setaffinity(0, sizeof(affinity), &affinity) != 0) {
 				perror("sched_setaffinity");
 				_exit(126);
@@ -222,7 +244,7 @@ int main(int argc, char **argv)
 	}
 	if (write_interval(interval_path, before, after) != 0)
 		return 2;
-	if (write_rusage(rusage_path, &child_usage, cpu) != 0)
+	if (write_rusage(rusage_path, &child_usage, cpu, cpu_mask) != 0)
 		return 2;
 
 	if (timed_out)

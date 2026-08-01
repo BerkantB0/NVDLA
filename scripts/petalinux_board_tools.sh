@@ -23,6 +23,7 @@ cp "$ROOT/tools/power/nvdla-power-sampler.c" "$DEST/files/nvdla-power-sampler.c"
 cp "$ROOT/tools/board/nvdla-board-check" "$DEST/files/nvdla-board-check"
 cp "$ROOT/tools/board/nvdla-board-workload" "$DEST/files/nvdla-board-workload"
 cp "$ROOT/tools/board/nvdla-board-benchmark" "$DEST/files/nvdla-board-benchmark"
+cp "$ROOT/tools/board/nvdla-board-cpu-benchmark" "$DEST/files/nvdla-board-cpu-benchmark"
 cp "$ROOT/tools/board/serial-root-autologin.conf" "$DEST/files/serial-root-autologin.conf"
 cp "$ROOT/tools/board/20-nvdla-direct.network" "$DEST/files/20-nvdla-direct.network"
 cp "$ROOT/tools/board/nvdla-host-timesync.conf" "$DEST/files/nvdla-host-timesync.conf"
@@ -74,6 +75,10 @@ BOARD_BENCHMARK_SCRIPT_PATH="$(
   find "$PETALINUX_PROJECT/build/tmp/deploy/images" -type f -name nvdla-board-benchmark -printf '%T@ %p\n' 2>/dev/null \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
 )"
+BOARD_CPU_BENCHMARK_SCRIPT_PATH="$(
+  find "$PETALINUX_PROJECT/build/tmp/deploy/images" -type f -name nvdla-board-cpu-benchmark -printf '%T@ %p\n' 2>/dev/null \
+    | sort -n | tail -n 1 | cut -d ' ' -f 2-
+)"
 BOARD_BENCHMARK_LAUNCH_PATH="$(
   find "$PETALINUX_PROJECT/build/tmp/deploy/images" -type f -name nvdla-benchmark-launch -printf '%T@ %p\n' 2>/dev/null \
     | sort -n | tail -n 1 | cut -d ' ' -f 2-
@@ -89,6 +94,7 @@ BOARD_TOOLS_PACKAGE_PATH="$(
 export BOARD_SMOKE_BINARY_PATH BOARD_FLATBUF_CLIENT_PATH BOARD_CHECK_SCRIPT_PATH
 export BOARD_WORKLOAD_SCRIPT_PATH BOARD_TOOLS_PACKAGE_PATH
 export BOARD_BENCHMARK_SCRIPT_PATH BOARD_BENCHMARK_LAUNCH_PATH
+export BOARD_CPU_BENCHMARK_SCRIPT_PATH
 export BOARD_POWER_SAMPLER_PATH
 
 if [[ -z "$BOARD_SMOKE_BINARY_PATH" || ! -f "$BOARD_SMOKE_BINARY_PATH" ]]; then
@@ -105,6 +111,9 @@ if [[ -z "$BOARD_WORKLOAD_SCRIPT_PATH" || ! -f "$BOARD_WORKLOAD_SCRIPT_PATH" ]];
 fi
 if [[ -z "$BOARD_BENCHMARK_SCRIPT_PATH" || ! -f "$BOARD_BENCHMARK_SCRIPT_PATH" ]]; then
   pl_finish_fail "nvdla-board-benchmark was not deployed"
+fi
+if [[ -z "$BOARD_CPU_BENCHMARK_SCRIPT_PATH" || ! -f "$BOARD_CPU_BENCHMARK_SCRIPT_PATH" ]]; then
+  pl_finish_fail "nvdla-board-cpu-benchmark was not deployed"
 fi
 if [[ -z "$BOARD_BENCHMARK_LAUNCH_PATH" || ! -f "$BOARD_BENCHMARK_LAUNCH_PATH" ]]; then
   pl_finish_fail "nvdla-benchmark-launch was not deployed"
@@ -123,12 +132,14 @@ fi
   echo "  collector: $BOARD_CHECK_SCRIPT_PATH"
   echo "  workload runner: $BOARD_WORKLOAD_SCRIPT_PATH"
   echo "  benchmark runner: $BOARD_BENCHMARK_SCRIPT_PATH"
+  echo "  CPU benchmark runner: $BOARD_CPU_BENCHMARK_SCRIPT_PATH"
   echo "  benchmark launcher: $BOARD_BENCHMARK_LAUNCH_PATH"
   echo "  power sampler: $BOARD_POWER_SAMPLER_PATH"
   echo "  package: $BOARD_TOOLS_PACKAGE_PATH"
   sha256sum "$BOARD_SMOKE_BINARY_PATH" "$BOARD_FLATBUF_CLIENT_PATH" \
     "$BOARD_CHECK_SCRIPT_PATH" "$BOARD_WORKLOAD_SCRIPT_PATH" \
     "$BOARD_BENCHMARK_SCRIPT_PATH" "$BOARD_BENCHMARK_LAUNCH_PATH" \
+    "$BOARD_CPU_BENCHMARK_SCRIPT_PATH" \
     "$BOARD_POWER_SAMPLER_PATH" \
     "$BOARD_TOOLS_PACKAGE_PATH"
 } | tee -a "$BUILD_LOG"

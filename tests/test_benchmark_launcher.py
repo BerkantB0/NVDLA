@@ -89,6 +89,41 @@ class BenchmarkLauncherTests(unittest.TestCase):
                 str(cpu),
             )
 
+            mask_cpus = sorted(value for value in os.sched_getaffinity(0) if value < 64)[:2]
+            mask = sum(1 << value for value in mask_cpus)
+            mask_rusage = root / "mask-rusage.env"
+            mask_affinity = root / "mask-affinity.txt"
+            masked = subprocess.run(
+                [
+                    str(binary),
+                    "--elapsed-ns",
+                    str(elapsed),
+                    "--rusage",
+                    str(mask_rusage),
+                    "--cpu-mask",
+                    hex(mask),
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    f"grep '^Cpus_allowed_list:' /proc/self/status > {mask_affinity}",
+                ],
+                check=False,
+            )
+            self.assertEqual(masked.returncode, 0)
+            mask_fields = dict(
+                line.split("=", 1) for line in mask_rusage.read_text().splitlines()
+            )
+            self.assertEqual(mask_fields["cpu_affinity"], f"mask:0x{mask:x}")
+            allowed_text = mask_affinity.read_text().split(":", 1)[1].strip()
+            observed: set[int] = set()
+            for item in allowed_text.split(","):
+                if "-" in item:
+                    start, end = (int(value) for value in item.split("-", 1))
+                    observed.update(range(start, end + 1))
+                else:
+                    observed.add(int(item))
+            self.assertEqual(observed, set(mask_cpus))
+
             timed = subprocess.run(
                 [
                     str(binary),

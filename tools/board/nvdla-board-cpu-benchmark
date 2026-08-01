@@ -1,0 +1,397 @@
+#!/bin/sh
+set -eu
+
+usage() {
+    cat <<'EOF'
+usage: nvdla-board-cpu-benchmark {lenet|resnet50} PAYLOAD_ROOT [OPTIONS]
+
+  --precision {fp32|int8}         ONNX model precision (default: fp32)
+  --threads N                     ORT intra-op threads (default: 4)
+  --regime {all|cold|warm|steady} Measurement regimes (default: all)
+  --cold-starts N                 Cold process samples
+  --warm-starts N                 Cached process samples
+  --steady-samples N              Inferences in one loaded session
+  --settle-seconds N              Delay before measurement (default: 30)
+  --timeout-seconds N             Per-process watchdog timeout
+  --power                         Sample board rails during steady execution
+  --power-idle-seconds N          Idle baseline duration (default: 10)
+  --power-interval-ms N           Power sample interval (default: 50)
+  --power-sampler-cpu N           Sampler affinity (default: 3)
+  --help                          Show this help
+EOF
+}
+
+fail_usage() {
+    echo "nvdla-board-cpu-benchmark: $*" >&2
+    usage >&2
+    exit 2
+}
+
+[ "${1:-}" != "--help" ] && [ "${1:-}" != "-h" ] || { usage; exit 0; }
+[ "$#" -ge 2 ] || fail_usage "model and payload root are required"
+MODEL="$1"
+PAYLOAD_ROOT="$2"
+shift 2
+case "$MODEL" in lenet|resnet50) ;; *) fail_usage "model must be lenet or resnet50" ;; esac
+
+PRECISION=fp32
+THREADS=4
+REGIME=all
+POWER_SAMPLE=0
+SETTLE_SECONDS=30
+POWER_IDLE_SECONDS=10
+POWER_INTERVAL_MS=50
+POWER_SAMPLER_CPU=3
+SEEN_OPTIONS=""
+if [ "$MODEL" = "resnet50" ]; then
+    COLD_STARTS=5
+    WARM_STARTS=10
+    STEADY_SAMPLES=30
+    RUNTIME_TIMEOUT=600
+else
+    COLD_STARTS=10
+    WARM_STARTS=30
+    STEADY_SAMPLES=200
+    RUNTIME_TIMEOUT=120
+fi
+
+mark_option() {
+    case " $SEEN_OPTIONS " in *" $1 "*) fail_usage "option specified more than once: $1" ;; esac
+    SEEN_OPTIONS="$SEEN_OPTIONS $1"
+}
+
+while [ "$#" -gt 0 ]; do
+    option="$1"
+    case "$option" in
+        --help|-h) usage; exit 0 ;;
+        --power) mark_option "$option"; POWER_SAMPLE=1; shift ;;
+        --precision|--threads|--regime|--cold-starts|--warm-starts|--steady-samples|\
+        --settle-seconds|--timeout-seconds|--power-idle-seconds|--power-interval-ms|\
+        --power-sampler-cpu)
+            mark_option "$option"
+            [ "$#" -ge 2 ] || fail_usage "$option requires a value"
+            value="$2"
+            case "$option" in
+                --precision) PRECISION="$value" ;;
+                --threads) THREADS="$value" ;;
+                --regime) REGIME="$value" ;;
+                --cold-starts) COLD_STARTS="$value" ;;
+                --warm-starts) WARM_STARTS="$value" ;;
+                --steady-samples) STEADY_SAMPLES="$value" ;;
+                --settle-seconds) SETTLE_SECONDS="$value" ;;
+                --timeout-seconds) RUNTIME_TIMEOUT="$value" ;;
+                --power-idle-seconds) POWER_IDLE_SECONDS="$value" ;;
+                --power-interval-ms) POWER_INTERVAL_MS="$value" ;;
+                --power-sampler-cpu) POWER_SAMPLER_CPU="$value" ;;
+            esac
+            shift 2
+            ;;
+        --*) fail_usage "unknown option: $option" ;;
+        *) fail_usage "unexpected positional argument: $option" ;;
+    esac
+done
+
+case "$PRECISION" in fp32|int8) ;; *) fail_usage "--precision must be fp32 or int8" ;; esac
+case "$REGIME" in all|cold|warm|steady) ;; *) fail_usage "--regime must be all, cold, warm, or steady" ;; esac
+for value in "$THREADS" "$COLD_STARTS" "$WARM_STARTS" "$STEADY_SAMPLES" \
+    "$SETTLE_SECONDS" "$RUNTIME_TIMEOUT" "$POWER_IDLE_SECONDS" \
+    "$POWER_INTERVAL_MS" "$POWER_SAMPLER_CPU"; do
+    case "$value" in *[!0-9]*|"") fail_usage "counts and durations must be non-negative integers" ;; esac
+done
+[ "$THREADS" -gt 0 ] || fail_usage "--threads must be positive"
+[ "$RUNTIME_TIMEOUT" -gt 0 ] || fail_usage "--timeout-seconds must be positive"
+ONLINE_CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)"
+[ "$ONLINE_CPUS" -gt 0 ] || fail_usage "could not determine online CPU count"
+[ "$THREADS" -le "$ONLINE_CPUS" ] || fail_usage "--threads exceeds the online CPU count"
+CPU_MASK_DEC=$(( (1 << THREADS) - 1 ))
+CPU_MASK="$(printf '0x%x' "$CPU_MASK_DEC")"
+if [ "$POWER_SAMPLE" -eq 1 ]; then
+    case "$REGIME" in all|steady) ;; *) fail_usage "--power requires a regime containing steady" ;; esac
+    [ "$STEADY_SAMPLES" -gt 0 ] || fail_usage "--power requires steady samples"
+    [ "$POWER_IDLE_SECONDS" -gt 0 ] || fail_usage "power idle duration must be positive"
+    [ "$POWER_INTERVAL_MS" -gt 0 ] || fail_usage "power sample interval must be positive"
+    [ "$POWER_SAMPLER_CPU" -lt "$ONLINE_CPUS" ] || fail_usage "power sampler CPU is not online"
+fi
+
+WORKLOAD="$PAYLOAD_ROOT/cpu_onnx/$MODEL/$PRECISION"
+MODEL_PATH="$WORKLOAD/model.onnx"
+for path in "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS" "$MODEL_PATH" \
+    "$WORKLOAD/test_data_set_0/input_0.pb" "$WORKLOAD/test_data_set_0/output_0.pb" \
+    /usr/bin/onnx_test_runner /usr/bin/onnxruntime_perf_test \
+    /usr/bin/nvdla-benchmark-launch /usr/bin/nvdla-power-sampler; do
+    [ -f "$path" ] || fail_usage "required file is missing: $path"
+done
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="/tmp/nvdla-board-cpu-benchmark-${MODEL}-${PRECISION}-${THREADS}t-${STAMP}"
+ARCHIVE="${OUT}.tar.gz"
+LATEST="/tmp/nvdla-board-cpu-benchmark-latest.tar.gz"
+GOVERNORS_SAVED="$OUT/governors-before.txt"
+STATUS=1
+CLASSIFICATION=not-run
+PRINTK_ORIGINAL=""
+SAMPLER_PID=""
+SAMPLER_STOP=""
+SAMPLER_READY=""
+DMESG_LINES=0
+BOOT_ID=""
+NTP_SYNCHRONIZED=unavailable
+mkdir -p "$OUT"
+
+capture() {
+    name="$1"
+    shift
+    if "$@" >"$OUT/$name" 2>&1; then return 0; fi
+    printf '%s\n' "$?" >"$OUT/${name}.exit-status"
+}
+
+restore_environment() {
+    if [ -n "$SAMPLER_PID" ]; then
+        [ -n "$SAMPLER_STOP" ] && : >"$SAMPLER_STOP"
+        kill "$SAMPLER_PID" 2>/dev/null || true
+        wait "$SAMPLER_PID" 2>/dev/null || true
+        SAMPLER_PID=""
+    fi
+    if [ -n "$PRINTK_ORIGINAL" ] && [ -w /proc/sys/kernel/printk ]; then
+        printf '%s\n' "$PRINTK_ORIGINAL" >/proc/sys/kernel/printk 2>/dev/null || true
+    fi
+    if [ -f "$GOVERNORS_SAVED" ]; then
+        while IFS='=' read -r path value; do
+            [ -n "$path" ] && [ -w "$path" ] && printf '%s\n' "$value" >"$path" 2>/dev/null || true
+        done <"$GOVERNORS_SAVED"
+    fi
+}
+
+capture_temperatures() {
+    phase="$1"
+    output="$OUT/temperatures-$phase.txt"
+    : >"$output"
+    count=0
+    for path in /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input \
+        /sys/bus/iio/devices/iio:device*/in_temp*_input; do
+        [ -r "$path" ] || continue
+        printf 'path=%s value_millicelsius=%s\n' "$path" "$(cat "$path")" >>"$output"
+        count=$((count + 1))
+    done
+    printf 'status=%s\nsensor_count=%s\n' \
+        "$( [ "$count" -gt 0 ] && echo available || echo unavailable )" "$count" \
+        >"$OUT/temperature-$phase.env"
+}
+
+finish() {
+    restore_environment
+    dmesg >"$OUT/dmesg-after.log" 2>&1 || true
+    tail -n +"$((DMESG_LINES + 1))" "$OUT/dmesg-after.log" >"$OUT/dmesg-delta.log" 2>/dev/null || true
+    if grep -Ei 'Oops|BUG:|WARNING:|DMA-API|detected stalls|rcu.*stall|SError|External abort' \
+        "$OUT/dmesg-delta.log" >"$OUT/bad-kernel-patterns.txt"; then
+        STATUS=1
+        CLASSIFICATION=kernel-log-failure
+    else
+        : >"$OUT/bad-kernel-patterns.txt"
+    fi
+    {
+        echo "schema_version=1"
+        echo "implementation=onnxruntime-cpu-execution-provider"
+        echo "model=$MODEL"
+        echo "precision=$PRECISION"
+        echo "threads=$THREADS"
+        echo "cpu_affinity_mask=$CPU_MASK"
+        echo "regime=$REGIME"
+        echo "status=$STATUS"
+        echo "classification=$CLASSIFICATION"
+        echo "timestamp_utc=$STAMP"
+        echo "boot_id=$BOOT_ID"
+        echo "ntp_synchronized=$NTP_SYNCHRONIZED"
+        echo "cold_starts=$COLD_STARTS"
+        echo "warm_starts=$WARM_STARTS"
+        echo "steady_samples=$STEADY_SAMPLES"
+        echo "built_in_warmup_inferences=1"
+        echo "settle_seconds=$SETTLE_SECONDS"
+        echo "timeout_seconds=$RUNTIME_TIMEOUT"
+        echo "power_sample=$POWER_SAMPLE"
+        echo "power_scope=concurrent-steady-process-launch-through-exit"
+        echo "power_idle_seconds=$POWER_IDLE_SECONDS"
+        echo "power_interval_ms=$POWER_INTERVAL_MS"
+        echo "power_sampler_cpu=$POWER_SAMPLER_CPU"
+        echo "correctness_tolerance_absolute=1e-5"
+        echo "correctness_tolerance_relative=1e-5"
+    } >"$OUT/benchmark.env"
+    rm -f "$ARCHIVE" "$LATEST"
+    tar -czf "$ARCHIVE" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+    ln -s "$ARCHIVE" "$LATEST"
+    echo "NVDLA_CPU_BENCHMARK_MODEL=$MODEL"
+    echo "NVDLA_CPU_BENCHMARK_PRECISION=$PRECISION"
+    echo "NVDLA_CPU_BENCHMARK_STATUS=$STATUS"
+    echo "NVDLA_CPU_BENCHMARK_CLASSIFICATION=$CLASSIFICATION"
+    echo "NVDLA_CPU_BENCHMARK_ARTIFACT=$ARCHIVE"
+    exit "$STATUS"
+}
+trap restore_environment EXIT HUP INT TERM
+
+BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+NTP_SYNCHRONIZED="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+[ -n "$NTP_SYNCHRONIZED" ] || NTP_SYNCHRONIZED=unavailable
+printf '%s\n' "$BOOT_ID" >"$OUT/boot-id.txt"
+capture timedatectl.txt timedatectl show
+{
+    echo "schema_version=1"
+    echo "boot_id=$BOOT_ID"
+    echo "ntp_synchronized=$NTP_SYNCHRONIZED"
+    echo "observed_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} >"$OUT/time-sync.env"
+if [ -z "$BOOT_ID" ]; then CLASSIFICATION=boot-id-unavailable; finish; fi
+if [ "$NTP_SYNCHRONIZED" != yes ]; then CLASSIFICATION=time-sync-unverified; finish; fi
+if ! (cd "$PAYLOAD_ROOT" && sha256sum -c SHA256SUMS) >"$OUT/payload-verify.log" 2>&1; then
+    CLASSIFICATION=payload-verification-failure
+    finish
+fi
+
+capture uname.txt uname -a
+capture cpuinfo.txt cat /proc/cpuinfo
+capture cmdline.txt cat /proc/cmdline
+capture meminfo-before.txt cat /proc/meminfo
+capture loadavg-before.txt cat /proc/loadavg
+capture benchmark-runner-status.txt cat /proc/self/status
+capture software-hashes.txt sha256sum /usr/bin/onnx_test_runner \
+    /usr/bin/onnxruntime_perf_test /usr/lib/libonnxruntime.so.1.18.1 \
+    /usr/bin/nvdla-board-cpu-benchmark /usr/bin/nvdla-benchmark-launch \
+    /usr/bin/nvdla-power-sampler "$MODEL_PATH" \
+    "$WORKLOAD/test_data_set_0/input_0.pb" "$WORKLOAD/test_data_set_0/output_0.pb" \
+    "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS"
+cp "$PAYLOAD_ROOT/PAYLOAD.json" "$OUT/payload-manifest.json"
+cp "$PAYLOAD_ROOT/cpu_onnx/manifest.json" "$OUT/cpu-workload-manifest.json"
+
+dmesg >"$OUT/dmesg-before.log" 2>&1 || true
+DMESG_LINES="$(wc -l <"$OUT/dmesg-before.log" | tr -d ' ')"
+PRINTK_ORIGINAL="$(cat /proc/sys/kernel/printk 2>/dev/null || true)"
+dmesg -n 3
+: >"$GOVERNORS_SAVED"
+for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    [ -r "$governor" ] || continue
+    printf '%s=%s\n' "$governor" "$(cat "$governor")" >>"$GOVERNORS_SAVED"
+    if [ -w "$governor" ] && grep -qw performance "$(dirname "$governor")/scaling_available_governors"; then
+        printf 'performance\n' >"$governor"
+    fi
+done
+capture governors-active.txt sh -c 'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+capture frequencies-before.txt sh -c 'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+capture_temperatures before
+sleep "$SETTLE_SECONDS"
+
+run_correctness() {
+    phase="$1"
+    if nvdla-benchmark-launch --elapsed-ns "$OUT/correctness-$phase-elapsed-ns.txt" \
+        --rusage "$OUT/correctness-$phase-rusage.env" --cpu-mask "$CPU_MASK" \
+        --timeout-seconds "$RUNTIME_TIMEOUT" -- \
+        env LD_LIBRARY_PATH=/usr/lib onnx_test_runner -e cpu -j 1 -c 1 -r 1 \
+        -t 1e-5 -a 1e-5 "$WORKLOAD" >"$OUT/correctness-$phase.stdout.log" \
+        2>"$OUT/correctness-$phase.stderr.log"; then
+        echo pass >"$OUT/correctness-$phase.status"
+        return 0
+    fi
+    echo fail >"$OUT/correctness-$phase.status"
+    return 1
+}
+
+run_perf() {
+    regime="$1"
+    index="$2"
+    iterations="$3"
+    run_dir="$OUT/$regime-$index"
+    mkdir -p "$run_dir"
+    if (
+        cd "$run_dir"
+        nvdla-benchmark-launch --elapsed-ns launch-elapsed-ns.txt \
+            --interval launch-interval.env --rusage rusage.env \
+            --cpu-mask "$CPU_MASK" \
+            --timeout-seconds "$RUNTIME_TIMEOUT" -- \
+            env LD_LIBRARY_PATH=/usr/lib onnxruntime_perf_test \
+                -e cpu -m times -r "$iterations" -x "$THREADS" -y 1 -o 99 -s \
+                "$MODEL_PATH" result.csv
+    ) >"$run_dir/runtime.stdout.log" 2>"$run_dir/runtime.stderr.log"; then
+        measured="$(awk -F, 'NF == 5 && $2 ~ /^[0-9.]+$/ { count++ } END { print count + 0 }' "$run_dir/result.csv")"
+        printf 'runtime_status=0\nmeasured_samples=%s\n' "$measured" >"$run_dir/run.env"
+        [ "$measured" -eq "$iterations" ] || return 1
+        return 0
+    else
+        runtime_status=$?
+        printf 'runtime_status=%s\nmeasured_samples=0\n' "$runtime_status" >"$run_dir/run.env"
+        return 1
+    fi
+}
+
+run_many() {
+    regime="$1"
+    count="$2"
+    index=1
+    while [ "$index" -le "$count" ]; do
+        if [ "$regime" = cold ]; then
+            sync
+            printf '3\n' >/proc/sys/vm/drop_caches || return 1
+        else
+            cat "$MODEL_PATH" /usr/bin/onnxruntime_perf_test /usr/lib/libonnxruntime.so.1.18.1 >/dev/null
+        fi
+        run_perf "$regime" "$index" 1 || return 1
+        index=$((index + 1))
+    done
+}
+
+prepare_power() {
+    POWER_OUT="$OUT/power-sampling"
+    mkdir -p "$POWER_OUT"
+    /usr/bin/nvdla-power-sampler --list >"$POWER_OUT/sensors.csv" 2>"$POWER_OUT/list.stderr.log"
+    /usr/bin/nvdla-power-sampler --output "$POWER_OUT/idle-readings.csv" \
+        --duration-ms "$((POWER_IDLE_SECONDS * 1000))" --interval-ms "$POWER_INTERVAL_MS" \
+        --cpu "$POWER_SAMPLER_CPU" 2>"$POWER_OUT/idle.stderr.log"
+    SAMPLER_STOP="$POWER_OUT/stop"
+    SAMPLER_READY="$POWER_OUT/ready"
+    rm -f "$SAMPLER_STOP" "$SAMPLER_READY"
+}
+
+start_power() {
+    /usr/bin/nvdla-power-sampler --output "$POWER_OUT/readings.csv" \
+        --stop-file "$SAMPLER_STOP" --ready-file "$SAMPLER_READY" \
+        --interval-ms "$POWER_INTERVAL_MS" --cpu "$POWER_SAMPLER_CPU" \
+        2>"$POWER_OUT/active.stderr.log" &
+    SAMPLER_PID=$!
+    attempts=0
+    while [ ! -e "$SAMPLER_READY" ]; do
+        kill -0 "$SAMPLER_PID" 2>/dev/null || return 1
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 200 ] || return 1
+        sleep 0.01
+    done
+}
+
+stop_power() {
+    : >"$SAMPLER_STOP"
+    wait "$SAMPLER_PID"
+    SAMPLER_PID=""
+}
+
+if ! run_correctness before; then CLASSIFICATION=correctness-precheck-failure; finish; fi
+case "$REGIME" in all|cold) run_many cold "$COLD_STARTS" || { CLASSIFICATION=cold-run-failure; finish; } ;; esac
+case "$REGIME" in all|warm) run_many warm "$WARM_STARTS" || { CLASSIFICATION=warm-run-failure; finish; } ;; esac
+case "$REGIME" in
+    all|steady)
+        cat "$MODEL_PATH" /usr/bin/onnxruntime_perf_test /usr/lib/libonnxruntime.so.1.18.1 >/dev/null
+        if [ "$POWER_SAMPLE" -eq 1 ]; then
+            prepare_power || { CLASSIFICATION=power-setup-failure; finish; }
+            start_power || { CLASSIFICATION=power-sampler-start-failure; finish; }
+        fi
+        if ! run_perf steady 1 "$STEADY_SAMPLES"; then
+            [ "$POWER_SAMPLE" -eq 0 ] || stop_power 2>/dev/null || true
+            CLASSIFICATION=steady-run-failure
+            finish
+        fi
+        if [ "$POWER_SAMPLE" -eq 1 ] && ! stop_power; then CLASSIFICATION=power-sampling-failure; finish; fi
+        ;;
+esac
+if ! run_correctness after; then CLASSIFICATION=correctness-postcheck-failure; finish; fi
+capture frequencies-after.txt sh -c 'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+capture_temperatures after
+capture loadavg-after.txt cat /proc/loadavg
+capture meminfo-after.txt cat /proc/meminfo
+STATUS=0
+CLASSIFICATION=correctness-qualified-performance-pass
+finish
