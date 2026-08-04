@@ -218,6 +218,11 @@ distance accepts the uncertainty reported by Windows Time. It provides useful
 wall-clock timestamps for logs and manifests but is not sufficiently precise
 for accelerator latency, throughput, or cycle-level measurements.
 
+The service is enabled during early system startup. Performance runners record
+its status but neither wait for it nor require synchronization, so they can be
+started immediately after login. Their latency measurements use a monotonic
+clock and independent sessions are identified by Linux boot ID.
+
 For SSH retrieval, first assign or obtain an IP address and set a temporary
 password for the `petalinux` account from the serial root shell if required:
 

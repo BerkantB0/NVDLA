@@ -170,8 +170,14 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
     env = _parse_env(matches[0])
     if env.get("status") != "0" or env.get("classification") != "correctness-qualified-performance-pass":
         raise ValueError(f"{archive}: benchmark did not pass")
-    if env.get("ntp_synchronized") != "yes" or not env.get("boot_id"):
-        raise ValueError(f"{archive}: missing synchronized fresh-boot identity")
+    if not env.get("boot_id"):
+        raise ValueError(f"{archive}: missing fresh-boot identity")
+    time_sync = _parse_env(root / "time-sync.env")
+    if (
+        time_sync.get("boot_id") != env.get("boot_id")
+        or time_sync.get("ntp_synchronized") != env.get("ntp_synchronized")
+    ):
+        raise ValueError(f"{archive}: inconsistent time-status evidence")
     for phase in ("before", "after"):
         if (root / f"correctness-{phase}.status").read_text().strip() != "pass":
             raise ValueError(f"{archive}: {phase} correctness check did not pass")
@@ -305,6 +311,7 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
         "archive": str(archive),
         "boot_id": env["boot_id"],
         "timestamp_utc": env.get("timestamp_utc"),
+        "ntp_synchronized": env.get("ntp_synchronized"),
         "provenance": provenance,
         "power": _power_summary(root, int(env["steady_samples"]))
         if env.get("power_sample") == "1"
@@ -446,6 +453,9 @@ def import_cpu_performance_archives(archives: list[Path], out_dir: Path) -> int:
             )
             + "`",
             f"- Independent fresh-boot sessions: `{len(sessions)}`",
+            f"- Wall-clock synchronization: `"
+            f"{sum(session['ntp_synchronized'] == 'yes' for session in sessions)}/"
+            f"{len(sessions)}` sessions; not used for latency timing or acceptance",
             "- Correctness: standard `onnx_test_runner` passed before and after every session.",
             "",
             "| Regime | N | Median (ms) | Mean +/- SD (ms) | CV (%) | P5-P95 (ms) | Boot-median 95% CI (ms) | Images/s |",

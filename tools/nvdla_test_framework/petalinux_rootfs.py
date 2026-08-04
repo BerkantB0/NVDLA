@@ -25,6 +25,9 @@ CPU_LIBRARY_MEMBER = "usr/lib/libonnxruntime.so.1.18.1"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
 TIMESYNC_MEMBER = "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
+TIMESYNCD_ENABLE_MEMBER = (
+    "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
+)
 MODULE_PREFIX = "lib/modules/"
 MODULE_SUFFIX = "/extra/opendla.ko"
 FORBIDDEN_HOST_PREFIXES = ("/home/", "/mnt/", "/tmp/work/", "/build/tmp/")
@@ -100,6 +103,14 @@ def audit_petalinux_rootfs(
             "timesync_profile": TIMESYNC_MEMBER,
             "module": module_members[0] if module_members else None,
         }
+
+        timesync_enable = members.get(TIMESYNCD_ENABLE_MEMBER)
+        if timesync_enable is None:
+            errors.append("systemd-timesyncd is not enabled at boot")
+        elif not timesync_enable.issym() or not timesync_enable.linkname.endswith(
+            "/systemd-timesyncd.service"
+        ):
+            errors.append("systemd-timesyncd boot enablement is invalid")
 
         for label, member_name in selected.items():
             if not member_name or member_name not in members:

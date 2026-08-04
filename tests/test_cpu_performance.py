@@ -19,6 +19,7 @@ class CpuPerformanceTests(unittest.TestCase):
         power: bool = False,
         governor: str = "userspace",
         frequency_khz: int = 1_199_999,
+        ntp_synchronized: str = "yes",
     ) -> Path:
         session = root / name
         session.mkdir()
@@ -39,7 +40,7 @@ class CpuPerformanceTests(unittest.TestCase):
                     "classification=correctness-qualified-performance-pass",
                     "timestamp_utc=2026-07-31T12:00:00Z",
                     f"boot_id={boot_id}",
-                    "ntp_synchronized=yes",
+                    f"ntp_synchronized={ntp_synchronized}",
                     "steady_samples=2",
                     f"power_sample={1 if power else 0}",
                     "power_interval_ms=50",
@@ -51,6 +52,9 @@ class CpuPerformanceTests(unittest.TestCase):
         )
         for phase in ("before", "after"):
             (session / f"correctness-{phase}.status").write_text("pass\n")
+        (session / "time-sync.env").write_text(
+            f"boot_id={boot_id}\nntp_synchronized={ntp_synchronized}\n"
+        )
         (session / "bad-kernel-patterns.txt").write_text("")
         (session / "uname.txt").write_text("Linux board 6.6.10 #1 SMP aarch64\n")
         for phase in ("before", "after"):
@@ -186,6 +190,17 @@ class CpuPerformanceTests(unittest.TestCase):
             root = Path(temp)
             archive = self._archive(root, "session-1", "boot-1", governor="performance")
             self.assertEqual(import_cpu_performance_archives([archive], root / "report"), 1)
+
+    def test_accepts_recorded_unsynchronized_wall_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._archive(
+                root, "session-1", "boot-1", ntp_synchronized="no"
+            )
+            out = root / "report"
+            self.assertEqual(import_cpu_performance_archives([archive], out), 0)
+            summary = json.loads((out / "cpu-performance-summary.json").read_text())
+            self.assertEqual(summary["sessions"][0]["ntp_synchronized"], "no")
 
     def test_rejects_mixed_fixed_frequencies(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

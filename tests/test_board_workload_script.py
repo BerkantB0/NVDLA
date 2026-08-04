@@ -77,6 +77,8 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertNotIn('REGIME="${REGIME:-all}"', text)
         self.assertNotIn('POWER_SAMPLE="${POWER_SAMPLE:-0}"', text)
         self.assertIn("NTPSynchronized", text)
+        self.assertNotIn("wait_for_time_sync", text)
+        self.assertNotIn("time-sync-unverified", text)
         self.assertIn("/proc/sys/kernel/random/boot_id", text)
         self.assertIn("temperature_before_status", text)
         self.assertIn("/sys/bus/iio/devices/iio:device*/in_temp*_input", text)

@@ -421,7 +421,7 @@ class PerformanceTests(unittest.TestCase):
             self.assertNotIn("blocking submit", report)
             self.assertIn("throughput-comparison.svg", report)
             self.assertIn("session-variability.svg", report)
-            self.assertIn("NTP synchronized", report)
+            self.assertIn("NTP synchronized for 2/2 sessions", report)
             self.assertIn("recorded explicitly", report)
             self.assertIn(
                 "integrated over its exact launcher start/end interval",
@@ -470,7 +470,7 @@ class PerformanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate Linux boot ID"):
                 import_performance_archives(archives, root / "report")
 
-    def test_rejects_unsynchronized_wall_clock(self) -> None:
+    def test_accepts_recorded_unsynchronized_wall_clock(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             archive = self._archive(
@@ -478,8 +478,13 @@ class PerformanceTests(unittest.TestCase):
                 "session-a",
                 ntp_synchronized="no",
             )
-            with self.assertRaisesRegex(ValueError, "not verified as NTP"):
-                import_performance_archives([archive], root / "report")
+            output = root / "report"
+            self.assertEqual(import_performance_archives([archive], output), 0)
+            summary = json.loads((output / "performance-summary.json").read_text())
+            self.assertEqual(
+                summary["sessions"][0]["environment"]["ntp_synchronized"],
+                "no",
+            )
 
     def test_rejects_output_inconsistency(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

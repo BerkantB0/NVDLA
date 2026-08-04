@@ -177,8 +177,10 @@ rails are not mistaken for total 12 V board-input power.
 Copy the generated `nvdla-tests` directory to the SD FAT partition. Use a fresh
 boot for every independent session. Do not run a correctness workload before
 a performance session because that changes cache and accelerator state.
-Before starting a session, verify that the configured direct-link NTP source
-has synchronized the board:
+The image starts `systemd-timesyncd` during early boot and records its state in
+each artifact. Synchronization is useful for human-readable timestamps but is
+not an acceptance condition and requires no manual delay. Its state can be
+inspected with:
 
 ```sh
 timedatectl show -p NTPSynchronized --value
@@ -186,10 +188,9 @@ date -u '+%Y-%m-%dT%H:%M:%SZ'
 ```
 
 Wall-clock synchronization provides meaningful artifact timestamps;
-`CLOCK_MONOTONIC_RAW` remains the measurement clock.
-The runner enforces `NTPSynchronized=yes`, archives
-`/proc/sys/kernel/random/boot_id`, and the importer rejects duplicate boot IDs
-when multiple archives are presented as independent fresh-boot sessions.
+`CLOCK_MONOTONIC_RAW` remains the measurement clock. The runner records NTP
+status and `/proc/sys/kernel/random/boot_id`; the importer uses boot IDs to
+reject duplicate fresh-boot sessions without requiring NTP synchronization.
 
 Temperature is recorded before and after measurement from any readable Linux
 thermal-zone, hwmon, or IIO processed temperature input. The IIO path covers

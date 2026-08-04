@@ -81,6 +81,11 @@ suppresses console noise and records scheduling/resource evidence. Standard
 `onnx_test_runner` checks the pinned output with absolute and relative
 tolerances of `1e-5` before and after every measurement session.
 
+`systemd-timesyncd` starts during early boot and uses the pinned direct-link
+host source when Ethernet becomes usable. The wrapper records synchronization
+status but does not wait for it or require it: latency uses
+`CLOCK_MONOTONIC_RAW`, while Linux boot IDs establish independent sessions.
+
 ## Power
 
 `--power` adds concurrent INA226 sampling around the steady process. PS, PL,
@@ -110,7 +115,8 @@ nvdla-board-cpu-benchmark resnet50 /run/media/ROOT-mmcblk0p1/nvdla-tests \
 
 Use a fresh boot for every independent final session. Run separate campaigns
 for every model, precision, thread count, and power setting. The importer will
-reject mixed provenance and duplicate Linux boot IDs:
+reject mixed provenance and duplicate Linux boot IDs; NTP status remains
+reported metadata rather than an acceptance condition:
 
 ```sh
 ARCHIVES="session1.tar.gz session2.tar.gz session3.tar.gz session4.tar.gz session5.tar.gz" \

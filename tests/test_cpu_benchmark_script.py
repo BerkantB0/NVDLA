@@ -45,6 +45,12 @@ class CpuBenchmarkScriptTests(unittest.TestCase):
         self.assertLess(steady, after)
         self.assertIn("correctness_tolerance_absolute=1e-5", text)
 
+    def test_records_time_status_without_enforcing_synchronization(self) -> None:
+        text = SCRIPT.read_text(encoding="ascii")
+        self.assertIn("NTPSynchronized", text)
+        self.assertNotIn("wait_for_time_sync", text)
+        self.assertNotIn("time-sync-unverified", text)
+
     def test_requires_fixed_userspace_cpu_frequency_without_changing_it(self) -> None:
         text = SCRIPT.read_text(encoding="ascii")
         self.assertIn("CPU_NOMINAL_FREQUENCY_KHZ=1200000", text)

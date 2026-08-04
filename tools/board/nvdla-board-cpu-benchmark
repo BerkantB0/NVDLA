@@ -316,7 +316,6 @@ capture timedatectl.txt timedatectl show
     echo "observed_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >"$OUT/time-sync.env"
 if [ -z "$BOOT_ID" ]; then CLASSIFICATION=boot-id-unavailable; finish; fi
-if [ "$NTP_SYNCHRONIZED" != yes ]; then CLASSIFICATION=time-sync-unverified; finish; fi
 if ! (cd "$PAYLOAD_ROOT" && sha256sum -c SHA256SUMS) >"$OUT/payload-verify.log" 2>&1; then
     CLASSIFICATION=payload-verification-failure
     finish

@@ -192,8 +192,8 @@ def _environment_evidence(root: Path, env: dict[str, str]) -> dict[str, Any]:
         raise ValueError("missing or inconsistent Linux boot ID evidence")
     if time_sync.get("boot_id") != boot_id:
         raise ValueError("time synchronization evidence has a different boot ID")
-    if ntp_synchronized != "yes" or time_sync.get("ntp_synchronized") != "yes":
-        raise ValueError("benchmark clock was not verified as NTP synchronized")
+    if not ntp_synchronized or time_sync.get("ntp_synchronized") != ntp_synchronized:
+        raise ValueError("missing or inconsistent NTP status evidence")
     for phase, status, count in (
         ("before", temperature_before, temperature_before_count),
         ("after", temperature_after, temperature_after_count),
@@ -1577,7 +1577,7 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
                 "no configured bad kernel pattern is present",
                 "the active NVDLA clock matches the XSA-derived rate",
                 "the Linux boot ID is unique across imported sessions",
-                "the system clock is verified as NTP synchronized",
+                "wall-clock synchronization status is recorded",
             ],
         },
         "outlier_policy": (
@@ -1679,7 +1679,9 @@ def import_performance_archives(archives: list[Path], out_dir: Path) -> int:
         "",
         f"- Independent fresh-boot sessions: {len(sessions)}",
         "- Session identity: unique Linux boot IDs",
-        "- Wall-clock status: NTP synchronized for every accepted session",
+        f"- Wall-clock status: NTP synchronized for "
+        f"{sum(session['environment']['ntp_synchronized'] == 'yes' for session in sessions)}/"
+        f"{len(sessions)} sessions (not used for latency timing or acceptance)",
         f"- Temperature evidence: {temperature_summary}",
         f"- Kernel: `{baseline['kernel_release']}`",
         f"- NVDLA clock: `{baseline['nvdla_clock_hz']}` Hz observed; "

@@ -399,12 +399,6 @@ if [ -z "$BOOT_ID" ]; then
     CLASSIFICATION="boot-id-unavailable"
     finish
 fi
-if [ "$NTP_SYNCHRONIZED" != "yes" ]; then
-    STATUS=1
-    CLASSIFICATION="time-sync-unverified"
-    finish
-fi
-
 if (
     cd "$PAYLOAD_ROOT"
     sha256sum -c SHA256SUMS

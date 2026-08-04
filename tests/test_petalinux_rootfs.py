@@ -70,6 +70,7 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf",
             "etc/systemd/network/20-nvdla-direct.network",
             "etc/systemd/timesyncd.conf.d/nvdla-host.conf",
+            "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service",
             "lib/modules/6.6.10/extra/opendla.ko",
             "lib/ld-linux-aarch64.so.1",
             "usr/lib/libc.so.6",
@@ -80,6 +81,12 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         names -= omit or set()
         with tarfile.open(path, "w:gz") as archive:
             for name in sorted(names):
+                if name == "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service":
+                    member = tarfile.TarInfo(f"./{name}")
+                    member.type = tarfile.SYMTYPE
+                    member.linkname = "/lib/systemd/system/systemd-timesyncd.service"
+                    archive.addfile(member)
+                    continue
                 data = (
                     b"#!/bin/sh\nexit 0\n"
                     if name
@@ -265,6 +272,12 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"etc/systemd/timesyncd.conf.d/nvdla-host.conf"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing timesync_profile from rootfs", result["errors"])
+
+    def test_rejects_disabled_timesync_service(self) -> None:
+        result = self._audit(
+            {"etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"}
+        )
+        self.assertIn("systemd-timesyncd is not enabled at boot", result["errors"])
 
     def test_rejects_incomplete_timesync_profile(self) -> None:
         temp = tempfile.TemporaryDirectory()
