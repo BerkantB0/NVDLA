@@ -128,6 +128,32 @@ CSV table, and a Markdown report. The importer rejects sessions with different
 governors or fixed frequencies. Cold/warm and steady throughput are reported
 under their distinct timing boundaries and must not be conflated.
 
+## SSH Collection
+
+The test-only image uses the deliberately public credential `root` / `nvdla`
+on the isolated `192.168.50.0/24` direct Ethernet link. Root login and password
+authentication are enabled, while empty passwords remain disabled. This policy
+must not be carried into a deployed image.
+
+Install the single host dependency in Ubuntu-22.04 WSL:
+
+```sh
+sudo apt install sshpass
+```
+
+After a fresh board boot, run exactly one model:
+
+```sh
+MODEL=lenet make cpu-board-benchmark
+# Power-cycle or reboot the board before the next command.
+MODEL=resnet50 make cpu-board-benchmark
+```
+
+The host runner waits for SSH, records the Linux boot ID, rejects reuse of the
+previous successful boot, runs the standard FP32 four-thread campaign, and
+downloads the validated archive to `artifacts/cpu-board-ssh/`. It does not
+reboot the board or alter measurement options.
+
 ## Final Campaign Matrix
 
 For each model, first collect five uninstrumented fresh-boot sessions for FP32
