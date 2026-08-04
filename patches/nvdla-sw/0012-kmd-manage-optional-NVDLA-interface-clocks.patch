@@ -1,5 +1,5 @@
 From 9e5100a34d074bb52e2ab006f912c41c7eb1ffa5 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Fri, 24 Jul 2026 02:42:27 +0100
 Subject: [PATCH 12/17] kmd: manage optional NVDLA interface clocks
 
@@ -16,7 +16,7 @@ behavior.
 Tested by building the small-config KMD against the pinned Linux 6.6 kernel
 used by the modern NVDLA VP lane.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/include/nvdla_linux.h  |  6 +++
  kmd/port/linux/nvdla_core_callbacks.c | 69 ++++++++++++++++++++++++++-

@@ -54,11 +54,11 @@ Assumptions used in this evaluation:
 - Hardware instance: one NVDLA `nv_small` instance in programmable logic.
 - Software base: upstream [`nvdla/sw`](https://github.com/nvdla/sw).
 - Hardware basis: attached FPGA report,
-  [JacobReport-FPGA.pdf](/home/berkant/.codex/attachments/40b0f266-ab73-45ab-b0f9-5aa77967bd63/JacobReport-FPGA.pdf).
+  [JacobReport-FPGA.pdf](JacobReport-FPGA.pdf).
 - Goal: run NVDLA KMD, UMD, and runtime on the ARM Cortex-A53 cores under
   PetaLinux.
 - This document is a companion to
-  [nvdla-petalinux-feasibility.md](/srv/syncthing/data/COMP66060/Exploration/NVDLA-Peta/docs/nvdla-petalinux-feasibility.md).
+  [nvdla-petalinux-feasibility.md](nvdla-petalinux-feasibility.md).
 
 The FPGA paper's `0xA0000000` NVDLA register base is treated as provisional.
 The selected hardware handoff, whether HDF or XSA, must be the source of truth

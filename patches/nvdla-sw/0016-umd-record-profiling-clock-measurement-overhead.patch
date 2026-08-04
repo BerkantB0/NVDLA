@@ -1,5 +1,5 @@
 From a7ea0765cd5728a1d508e0c3d6d5b4241e4cec7c Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 17:50:30 +0100
 Subject: [PATCH 16/17] umd: record profiling clock measurement overhead
 
@@ -12,7 +12,7 @@ and report it as metadata. The calibration runs once during opt-in
 profiling and does not alter accelerator submission, scheduling, or output
 handling.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  umd/apps/runtime/RuntimeTest.cpp | 17 +++++++++++++++++
  umd/apps/runtime/RuntimeTest.h   |  2 ++

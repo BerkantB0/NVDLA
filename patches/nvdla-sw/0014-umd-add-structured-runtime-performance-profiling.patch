@@ -1,5 +1,5 @@
 From e7c02149e92fdd9e7a75e2a53d93295746260971 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 17:17:51 +0100
 Subject: [PATCH 14/17] umd: add structured runtime performance profiling
 
@@ -7,7 +7,7 @@ Add opt-in CLOCK_MONOTONIC_RAW profiling for runtime setup, buffer preparation, 
 
 Metrics are buffered in memory and written as JSON only after measured work and runtime teardown complete. Existing single-run behavior remains the default.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  umd/apps/runtime/RuntimeTest.cpp | 180 +++++++++++++++++++++++++++++--
  umd/apps/runtime/RuntimeTest.h   |  60 ++++++++++-

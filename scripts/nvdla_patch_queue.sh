@@ -63,8 +63,10 @@ prepare_worktree() {
   if [[ ! -d "$WORK/.git" ]]; then
     git clone "$SOURCE" "$WORK"
   fi
-  git -C "$WORK" config user.name "${GIT_AUTHOR_NAME:-Codex}"
-  git -C "$WORK" config user.email "${GIT_AUTHOR_EMAIL:-codex@local}"
+  local author_name="${GIT_AUTHOR_NAME:-$(git config user.name || true)}"
+  local author_email="${GIT_AUTHOR_EMAIL:-$(git config user.email || true)}"
+  git -C "$WORK" config user.name "${author_name:-NVDLA Maintainer}"
+  git -C "$WORK" config user.email "${author_email:-nvdla-maintainer@local}"
   git -C "$WORK" am --abort >/dev/null 2>&1 || true
   git -C "$WORK" reset --hard >/dev/null
   git -C "$WORK" clean -fdx >/dev/null

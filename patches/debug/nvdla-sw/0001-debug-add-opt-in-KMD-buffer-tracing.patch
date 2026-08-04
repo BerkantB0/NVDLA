@@ -1,36 +1,27 @@
-From 98bc8632ca271b8bfee9e65d0d0e1989f7a21523 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From f4fbc7d4f975661df48b46ae487d1e48ccbe6e75 Mon Sep 17 00:00:00 2001
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Tue, 7 Jul 2026 15:35:43 +0100
-Subject: [PATCH] debug: add opt-in KMD buffer tracing
+Subject: [PATCH 1/2] debug: add opt-in KMD buffer tracing
 
 ---
  kmd/port/linux/Makefile               |   4 +
- kmd/port/linux/nvdla_core_callbacks.c | 130 ++++++++++++++++++++++++++
- 2 files changed, 134 insertions(+)
+ kmd/port/linux/nvdla_core_callbacks.c | 129 ++++++++++++++++++++++++++
+ 2 files changed, 133 insertions(+)
 
 diff --git a/kmd/port/linux/Makefile b/kmd/port/linux/Makefile
 index 1a5320f..c97c1ee 100644
 --- a/kmd/port/linux/Makefile
 +++ b/kmd/port/linux/Makefile
-@@ -44,6 +44,10 @@ else ifneq ($(NVDLA_HW_CONFIG),initial)
- $(error unsupported NVDLA_HW_CONFIG '$(NVDLA_HW_CONFIG)' (expected initial or small))
- endif
- 
+@@ -46,0 +47,4 @@ endif
 +ifeq ($(NVDLA_KMD_TRACE),1)
 +ccflags-y += -DNVDLA_KMD_TRACE
 +endif
 +
- include $(src)/../../firmware/Makefile
- 
- opendla-y += nvdla_core_callbacks.o
 diff --git a/kmd/port/linux/nvdla_core_callbacks.c b/kmd/port/linux/nvdla_core_callbacks.c
-index 3a88b8c..0eb7c0a 100644
+index bd84bf4..e9554eb 100644
 --- a/kmd/port/linux/nvdla_core_callbacks.c
 +++ b/kmd/port/linux/nvdla_core_callbacks.c
-@@ -81,6 +81,111 @@ static struct nvdla_config nvdla_config_large = {
- 	.weight_compress_support = false,
- };
- 
+@@ -147,0 +148,104 @@ static int nvdla_enable_clocks(struct nvdla_device *nvdla_dev)
 +#ifdef NVDLA_KMD_TRACE
 +#define NVDLA_TRACE_SAMPLE_BYTES 4096U
 +#define NVDLA_TRACE_FIRST_BYTES 16U
@@ -135,14 +126,7 @@ index 3a88b8c..0eb7c0a 100644
 +{
 +}
 +#endif
-+
- 
- void dla_debug(const char *str, ...)
- {
-@@ -188,6 +293,13 @@ static int32_t dla_read_dma_address(void *driver_context, void *task_data,
- 	/* Add offset to IOVA address */
- 	*phys_addr = *phys_addr + handles[index].offset;
- 
+@@ -263,0 +368,7 @@ static int32_t dla_read_dma_address(void *driver_context, void *task_data,
 +#ifdef NVDLA_KMD_TRACE
 +	if (!ret)
 +		pr_info("nvdla-trace dma-address index=%d fd=%u offset=0x%llx dma=%pad\n",
@@ -150,57 +134,29 @@ index 3a88b8c..0eb7c0a 100644
 +			phys_addr);
 +#endif
 +
- 	return ret;
- }
- 
-@@ -308,6 +420,9 @@ int32_t dla_data_write(void *driver_context, void *task_data,
- 						handles[dst].handle);
- 		goto end_cpu_access;
- 	}
+@@ -383,0 +495,3 @@ int32_t dla_data_write(void *driver_context, void *task_data,
 +#ifdef NVDLA_KMD_TRACE
 +	nvdla_trace_task_buffer(task, dst, "data-write");
 +#endif
- 
- end_cpu_access:
- 	dma_buf_end_cpu_access(buf, DMA_BIDIRECTIONAL);
-@@ -346,6 +461,9 @@ int32_t dla_data_read(void *driver_context, void *task_data,
- 						handles[src].handle);
- 		goto end_cpu_access;
- 	}
+@@ -421,0 +536,3 @@ int32_t dla_data_read(void *driver_context, void *task_data,
 +#ifdef NVDLA_KMD_TRACE
 +	nvdla_trace_task_buffer(task, src, "data-read");
 +#endif
- 
- end_cpu_access:
- 	dma_buf_end_cpu_access(buf, DMA_BIDIRECTIONAL);
-@@ -360,8 +478,16 @@ int32_t nvdla_task_submit(struct nvdla_device *nvdla_dev, struct nvdla_task *tas
- {
- 	int32_t err = 0;
- 	uint32_t task_complete = 0;
+@@ -435,0 +553,3 @@ int32_t nvdla_task_submit(struct nvdla_device *nvdla_dev, struct nvdla_task *tas
 +#ifdef NVDLA_KMD_TRACE
 +	uint32_t i;
 +#endif
- 
- 	nvdla_dev->task = task;
+@@ -437,0 +558,5 @@ int32_t nvdla_task_submit(struct nvdla_device *nvdla_dev, struct nvdla_task *tas
 +#ifdef NVDLA_KMD_TRACE
 +	pr_info("nvdla-trace submit num_addresses=%u\n", task->num_addresses);
 +	for (i = 0; i < task->num_addresses; i++)
 +		nvdla_trace_task_buffer(task, i, "submit-before");
 +#endif
- 
- 	err = dla_execute_task(nvdla_dev->engine_context, (void *)task, nvdla_dev->config_data);
- 	if (err) {
-@@ -387,6 +513,10 @@ int32_t nvdla_task_submit(struct nvdla_device *nvdla_dev, struct nvdla_task *tas
- 	}
- 
- 	pr_debug("Task complete\n");
+@@ -462,0 +588,4 @@ int32_t nvdla_task_submit(struct nvdla_device *nvdla_dev, struct nvdla_task *tas
 +#ifdef NVDLA_KMD_TRACE
 +	for (i = 0; i < task->num_addresses; i++)
 +		nvdla_trace_task_buffer(task, i, "submit-after");
 +#endif
- 	dla_clear_task(nvdla_dev->engine_context);
- 
- 	return err;
 -- 
-2.43.0
+2.34.1
 

@@ -1,5 +1,5 @@
 From b53b1afa2ff28faa9f5111eac3dd03e2602612eb Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 22:14:22 +0100
 Subject: [PATCH 17/17] umd: wake emulator worker when tasks are queued
 
@@ -15,7 +15,7 @@ periodic polling.
 Tested by cross-building nvdla_runtime and libnvdla_runtime.so with the
 pinned Buildroot ARM64 toolchain.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  umd/core/src/runtime/Emulator.cpp            | 69 ++++++++++++--------
  umd/core/src/runtime/include/priv/Emulator.h |  5 ++

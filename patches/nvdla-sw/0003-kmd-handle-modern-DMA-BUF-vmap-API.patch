@@ -1,5 +1,5 @@
 From d9f03210ecc4d295192b938a264777227215db98 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Wed, 24 Jun 2026 21:22:31 +0300
 Subject: [PATCH 03/17] kmd: handle modern DMA-BUF vmap API
 
@@ -9,7 +9,7 @@ Add small copy helpers that keep the legacy raw pointer path for older kernels a
 
 Tested with make vp-kmod against linux-xlnx 6.6.80-ge29e392a4512. The compile now reaches the missing drm_gem_cma_helper header in nvdla_gem.c.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/nvdla_core_callbacks.c | 87 +++++++++++++++++++++------
  1 file changed, 70 insertions(+), 17 deletions(-)

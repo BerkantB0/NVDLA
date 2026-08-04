@@ -1,5 +1,5 @@
 From 0c3da632eb6aade8aac0e09e51497afab7d27ab3 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Tue, 23 Jun 2026 00:00:00 +0000
 Subject: [PATCH 01/17] umd: allow render node override from environment
 
@@ -11,7 +11,7 @@ Keep the existing default and allow tests or deployments to override it with
 NVDLA_DEVICE_NODE. This preserves the public ABI and existing behavior while
 making modern VP and PetaLinux validation deterministic.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  umd/port/linux/nvdla.c | 7 ++++++-
  1 file changed, 6 insertions(+), 1 deletion(-)

@@ -1,17 +1,17 @@
-From 904e523d7672a247a486a4e8c8aa8198c7a27b9b Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From 7e42157ca4b59c95cc56ee4c47a5fad64101890c Mon Sep 17 00:00:00 2001
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Fri, 24 Jul 2026 01:15:47 +0100
-Subject: [PATCH] debug: trace NVDLA CSB register reads
+Subject: [PATCH 2/2] debug: trace NVDLA CSB register reads
 
 ---
  kmd/port/linux/nvdla_core_callbacks.c | 12 +++++++++++-
  1 file changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/kmd/port/linux/nvdla_core_callbacks.c b/kmd/port/linux/nvdla_core_callbacks.c
-index 0eb7c0a..b573415 100644
+index e9554eb..e8396c3 100644
 --- a/kmd/port/linux/nvdla_core_callbacks.c
 +++ b/kmd/port/linux/nvdla_core_callbacks.c
-@@ -249,11 +249,21 @@ uint32_t dla_reg_read(void *driver_context, uint32_t addr)
+@@ -321,11 +321,21 @@ uint32_t dla_reg_read(void *driver_context, uint32_t addr)
  {
  	struct nvdla_device *nvdla_dev =
  			(struct nvdla_device *)driver_context;

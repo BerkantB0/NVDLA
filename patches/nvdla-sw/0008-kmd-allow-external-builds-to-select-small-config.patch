@@ -1,5 +1,5 @@
 From d99fec1805924fc89542aa0ff506906267e1b99d Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Fri, 3 Jul 2026 02:15:15 +0300
 Subject: [PATCH 08/17] kmd: allow external builds to select small config
 
@@ -15,7 +15,7 @@ Keep initial as the default.
 
 Tested with Linux 6.6.80+ module builds using initial and small.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/Makefile | 8 ++++++++
  1 file changed, 8 insertions(+)

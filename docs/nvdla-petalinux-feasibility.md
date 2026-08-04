@@ -71,7 +71,7 @@ Out of scope for the first bring-up:
 - Device tree binding:
   [`kmd/Documentation/devicetree/bindings/nvdla/nvdla.txt`](https://github.com/nvdla/sw/blob/master/kmd/Documentation/devicetree/bindings/nvdla/nvdla.txt)
 - Attached report:
-  [JacobReport-FPGA.pdf](/home/berkant/.codex/attachments/40b0f266-ab73-45ab-b0f9-5aa77967bd63/JacobReport-FPGA.pdf)
+  [JacobReport-FPGA.pdf](JacobReport-FPGA.pdf)
 
 ## Current Hardware State From The FPGA Report
 

@@ -1,5 +1,5 @@
 From 5e25c880c60ef0c9deda04ab6acf060f093b361c Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Wed, 24 Jun 2026 21:42:21 +0300
 Subject: [PATCH 04/17] kmd: update DRM GEM helpers for Linux 6.x
 
@@ -9,7 +9,7 @@ Use the modern DMA GEM helper names, assign GEM object funcs for the NVDLA GEM o
 
 Tested with make vp-kmod against linux-xlnx 6.6.80-ge29e392a4512. The build produced opendla.ko.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/nvdla_gem.c | 123 ++++++++++++++++++++++++++++++++-----
  1 file changed, 109 insertions(+), 14 deletions(-)

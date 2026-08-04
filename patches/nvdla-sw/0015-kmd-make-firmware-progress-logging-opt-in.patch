@@ -1,5 +1,5 @@
 From ce7329cd2b1caa47bb5cb1635222063cc07c24f1 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 17:18:48 +0100
 Subject: [PATCH 15/17] kmd: make firmware progress logging opt-in
 
@@ -7,7 +7,7 @@ The firmware emits a large volume of debug and operation progress text from inte
 
 Add a firmware_log module parameter, disabled by default, at the Linux logging callback boundary. It gates only dla_debug() and dla_info(); warnings, errors, probe diagnostics, scheduling, DMA, register access, and the public ABI remain unchanged.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/nvdla_core_callbacks.c | 13 +++++++++++++
  1 file changed, 13 insertions(+)

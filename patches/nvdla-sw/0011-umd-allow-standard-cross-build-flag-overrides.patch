@@ -1,5 +1,5 @@
 From 7ec9d063a0caa83e2f33793f6e0aaa9d870f652f Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Mon, 13 Jul 2026 23:53:52 +0100
 Subject: [PATCH 11/17] umd: allow standard cross-build flag overrides
 
@@ -14,7 +14,7 @@ make the runtime RPATH overrideable without changing its default.
 
 Tested with the pinned ARM64 Buildroot GCC 12.4.0 runtime build.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  umd/apps/runtime/Makefile     | 3 ++-
  umd/apps/runtime/rules.mk     | 6 +++---

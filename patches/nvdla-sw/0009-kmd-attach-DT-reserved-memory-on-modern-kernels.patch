@@ -1,5 +1,5 @@
 From a10c6c07c5ff1c3e7890ddfcdb2fff4cb7343f38 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Tue, 7 Jul 2026 16:21:59 +0100
 Subject: [PATCH 09/17] kmd: attach DT reserved memory on modern kernels
 
@@ -19,7 +19,7 @@ reserved memory to the NVDLA device. With the pool placed in the VP
 external-memory aperture, the nv_full LeNet control produces the same
 output vector as the stock VP.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/nvdla_gem.c | 11 +++++++++--
  1 file changed, 9 insertions(+), 2 deletions(-)

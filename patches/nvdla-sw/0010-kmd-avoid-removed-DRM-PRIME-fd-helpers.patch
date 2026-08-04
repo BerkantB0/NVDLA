@@ -1,5 +1,5 @@
 From 047ad9bb59c04d9a7eb0f352f1a749fe1f3e3d62 Mon Sep 17 00:00:00 2001
-From: Codex <codex@local>
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Thu, 9 Jul 2026 21:29:51 +0100
 Subject: [PATCH 10/17] kmd: avoid removed DRM PRIME fd helpers
 
@@ -17,7 +17,7 @@ submits those fds unchanged.
 Tested by building the NVDLA KMD against the PetaLinux 2024.1 Linux 6.6
 kernel headers.
 
-Signed-off-by: Codex <codex@local>
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
 ---
  kmd/port/linux/nvdla_gem.c | 21 ++++++++++++++++++++-
  1 file changed, 20 insertions(+), 1 deletion(-)
