@@ -27,6 +27,7 @@ cp "$ROOT/tools/board/nvdla-board-cpu-benchmark" "$DEST/files/nvdla-board-cpu-be
 cp "$ROOT/tools/board/serial-root-autologin.conf" "$DEST/files/serial-root-autologin.conf"
 cp "$ROOT/tools/board/20-nvdla-direct.network" "$DEST/files/20-nvdla-direct.network"
 cp "$ROOT/tools/board/nvdla-host-timesync.conf" "$DEST/files/nvdla-host-timesync.conf"
+cp "$ROOT/tools/board/60-nvdla-test-ssh.conf" "$DEST/files/60-nvdla-test-ssh.conf"
 
 PATCH_INC="$DEST/nvdla-board-tools-patches.inc"
 pl_install_patch_queue "$DEST" "$PATCH_INC" "scripts/petalinux_board_tools.sh"

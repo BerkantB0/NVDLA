@@ -231,6 +231,11 @@ passwd petalinux
 ip address
 ```
 
+The reproducible benchmark image instead enables the explicitly test-only
+`root` / `nvdla` SSH credential on the direct Ethernet link. Empty passwords
+remain disabled. Do not reuse this access policy for a networked or deployed
+image.
+
 Then, from the repository:
 
 ```sh

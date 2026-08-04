@@ -71,6 +71,8 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "etc/systemd/network/20-nvdla-direct.network",
             "etc/systemd/timesyncd.conf.d/nvdla-host.conf",
             "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service",
+            "etc/ssh/sshd_config.d/60-nvdla-test.conf",
+            "etc/shadow",
             "lib/modules/6.6.10/extra/opendla.ko",
             "lib/ld-linux-aarch64.so.1",
             "usr/lib/libc.so.6",
@@ -120,6 +122,17 @@ class PetaLinuxRootfsTests(unittest.TestCase):
                         )
                     )
                     if name == "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
+                    else (
+                        b"PermitRootLogin yes\n"
+                        b"PasswordAuthentication yes\n"
+                        b"PermitEmptyPasswords no\n"
+                    )
+                    if name == "etc/ssh/sshd_config.d/60-nvdla-test.conf"
+                    else (
+                        b"root:$6$nvdlatest$Bt1voKTDGyA6E/Kr.2BRpnPder7XkMw6TzrTWhHAl7ZT/"
+                        b"4QwePA2i05NlLe.XMHjw/oVBFznvoIPxc9eF1rBN0:15069:0:99999:7:::\n"
+                    )
+                    if name == "etc/shadow"
                     else f"synthetic:{name}".encode("ascii")
                 )
                 member = tarfile.TarInfo(f"./{name}")
@@ -278,6 +291,14 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             {"etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"}
         )
         self.assertIn("systemd-timesyncd is not enabled at boot", result["errors"])
+
+    def test_rejects_missing_test_ssh_policy(self) -> None:
+        result = self._audit({"etc/ssh/sshd_config.d/60-nvdla-test.conf"})
+        self.assertIn("missing ssh_policy from rootfs", result["errors"])
+
+    def test_rejects_missing_test_root_password(self) -> None:
+        result = self._audit({"etc/shadow"})
+        self.assertIn("missing shadow from rootfs", result["errors"])
 
     def test_rejects_incomplete_timesync_profile(self) -> None:
         temp = tempfile.TemporaryDirectory()

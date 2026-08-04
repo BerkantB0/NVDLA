@@ -18,6 +18,7 @@ SRC_URI = " \
     file://serial-root-autologin.conf \
     file://20-nvdla-direct.network \
     file://nvdla-host-timesync.conf \
+    file://60-nvdla-test-ssh.conf \
 "
 SRCREV = "79538ba1b52b040a4a4645f630e457fa01839e90"
 
@@ -50,6 +51,7 @@ do_install() {
     install -d ${D}${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d
     install -d ${D}${sysconfdir}/systemd/network
     install -d ${D}${sysconfdir}/systemd/timesyncd.conf.d
+    install -d ${D}${sysconfdir}/ssh/sshd_config.d
     install -m 0755 ${B}/nvdla-kmd-smoke ${D}${bindir}/nvdla-kmd-smoke
     install -m 0755 ${B}/nvdla-flatbuf-client ${D}${bindir}/nvdla-flatbuf-client
     install -m 0755 ${B}/nvdla-benchmark-launch ${D}${bindir}/nvdla-benchmark-launch
@@ -64,6 +66,8 @@ do_install() {
         ${D}${sysconfdir}/systemd/network/20-nvdla-direct.network
     install -m 0644 ${WORKDIR}/nvdla-host-timesync.conf \
         ${D}${sysconfdir}/systemd/timesyncd.conf.d/nvdla-host.conf
+    install -m 0644 ${WORKDIR}/60-nvdla-test-ssh.conf \
+        ${D}${sysconfdir}/ssh/sshd_config.d/60-nvdla-test.conf
 }
 
 do_deploy() {
@@ -83,4 +87,5 @@ FILES:${PN} += " \
     ${sysconfdir}/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf \
     ${sysconfdir}/systemd/network/20-nvdla-direct.network \
     ${sysconfdir}/systemd/timesyncd.conf.d/nvdla-host.conf \
+    ${sysconfdir}/ssh/sshd_config.d/60-nvdla-test.conf \
 "

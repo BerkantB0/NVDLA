@@ -141,6 +141,8 @@ The same audit requires the host-specific timesyncd drop-in selecting
 `systemd-timesyncd` is enabled from `sysinit.target`. Synchronization status is
 recorded but optional; wall-clock timestamps must not be interpreted as
 precision performance timing.
+The audit also verifies the test-only SSH policy and deterministic root
+password hash used for noninteractive direct-link benchmark collection.
 SD-bundle manifests record the three source and copied boot-file hashes plus a
 deterministic archive hash.
 

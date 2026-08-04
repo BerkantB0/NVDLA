@@ -25,6 +25,12 @@ CPU_LIBRARY_MEMBER = "usr/lib/libonnxruntime.so.1.18.1"
 AUTOLOGIN_MEMBER = "etc/systemd/system/serial-getty@ttyPS0.service.d/autologin.conf"
 NETWORK_MEMBER = "etc/systemd/network/20-nvdla-direct.network"
 TIMESYNC_MEMBER = "etc/systemd/timesyncd.conf.d/nvdla-host.conf"
+SSH_POLICY_MEMBER = "etc/ssh/sshd_config.d/60-nvdla-test.conf"
+SHADOW_MEMBER = "etc/shadow"
+TEST_ROOT_PASSWORD_HASH = (
+    "$6$nvdlatest$Bt1voKTDGyA6E/Kr.2BRpnPder7XkMw6TzrTWhHAl7ZT/4QwePA2i05NlLe."
+    "XMHjw/oVBFznvoIPxc9eF1rBN0"
+)
 TIMESYNCD_ENABLE_MEMBER = (
     "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
 )
@@ -101,6 +107,8 @@ def audit_petalinux_rootfs(
             "serial_autologin": AUTOLOGIN_MEMBER,
             "network_profile": NETWORK_MEMBER,
             "timesync_profile": TIMESYNC_MEMBER,
+            "ssh_policy": SSH_POLICY_MEMBER,
+            "shadow": SHADOW_MEMBER,
             "module": module_members[0] if module_members else None,
         }
 
@@ -165,6 +173,27 @@ def audit_petalinux_rootfs(
                         "timesync profile is missing required settings: "
                         + ", ".join(missing_lines)
                     )
+            if label == "ssh_policy":
+                text = destination.read_text(encoding="utf-8", errors="replace")
+                required_lines = {
+                    "PermitRootLogin yes",
+                    "PasswordAuthentication yes",
+                    "PermitEmptyPasswords no",
+                }
+                missing_lines = sorted(required_lines.difference(text.splitlines()))
+                if missing_lines:
+                    errors.append(
+                        "test SSH policy is missing required settings: "
+                        + ", ".join(missing_lines)
+                    )
+            if label == "shadow":
+                root_entry = next(
+                    (line for line in destination.read_text().splitlines() if line.startswith("root:")),
+                    "",
+                )
+                fields = root_entry.split(":")
+                if len(fields) < 2 or fields[1] != TEST_ROOT_PASSWORD_HASH:
+                    errors.append("test root password hash is missing or unexpected")
 
         available_by_name: dict[str, list[str]] = {}
         for name in members:
@@ -180,6 +209,8 @@ def audit_petalinux_rootfs(
             "serial_autologin",
             "network_profile",
             "timesync_profile",
+            "ssh_policy",
+            "shadow",
         }:
             continue
         try:

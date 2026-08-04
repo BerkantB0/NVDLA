@@ -3,6 +3,7 @@
 *.py text eol=lf
 *.c text eol=lf
 *.sh text eol=lf
+tools/board/nvdla-* text eol=lf
 Makefile text eol=lf
 *.json text eol=lf
 *.fragment text eol=lf
