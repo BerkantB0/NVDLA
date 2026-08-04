@@ -2,20 +2,22 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 {lenet|resnet50} [output-directory]" >&2
+  echo "usage: $0 {cpu|nvdla} {lenet|resnet50} [output-directory]" >&2
   exit 2
 }
 
-[[ $# -ge 1 && $# -le 2 ]] || usage
-MODEL="$1"
+[[ $# -ge 2 && $# -le 3 ]] || usage
+KIND="$1"
+MODEL="$2"
+case "$KIND" in cpu|nvdla) ;; *) usage ;; esac
 case "$MODEL" in lenet|resnet50) ;; *) usage ;; esac
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="${2:-$ROOT/artifacts/cpu-board-ssh}"
+OUT_DIR="${3:-$ROOT/artifacts/${KIND}-board-ssh}"
 HOST="${NVDLA_BOARD_HOST:-192.168.50.2}"
 USER="${NVDLA_BOARD_USER:-root}"
 PAYLOAD="${NVDLA_BOARD_PAYLOAD:-/run/media/ROOT-mmcblk0p1/nvdla-tests}"
-STATE="$ROOT/.work/cpu-board-last-boot-id"
+STATE="$ROOT/.work/${KIND}-board-last-boot-id"
 export SSHPASS="${NVDLA_BOARD_PASSWORD:-nvdla}"
 
 command -v sshpass >/dev/null || {
@@ -37,18 +39,27 @@ done
 
 BOOT_ID="$("${SSH[@]}" "$TARGET" cat /proc/sys/kernel/random/boot_id)"
 if [[ -f "$STATE" && "$(cat "$STATE")" == "$BOOT_ID" ]]; then
-  echo "refusing to reuse Linux boot $BOOT_ID; reboot the board first" >&2
+  echo "refusing to reuse $KIND benchmark boot $BOOT_ID; reboot the board first" >&2
   exit 1
 fi
 
-echo "Running $MODEL CPU benchmark on boot $BOOT_ID"
-"${SSH[@]}" "$TARGET" \
-  "nvdla-board-cpu-benchmark '$MODEL' '$PAYLOAD' --precision fp32 --threads 4 --regime all"
+if [[ "$KIND" == cpu ]]; then
+  COMMAND="nvdla-board-cpu-benchmark '$MODEL' '$PAYLOAD' --precision fp32 --threads 4 --regime all"
+  LATEST=/tmp/nvdla-board-cpu-benchmark-latest.tar.gz
+  NAME="cpu-${MODEL}-fp32-4t"
+else
+  COMMAND="nvdla-board-benchmark '$MODEL' '$PAYLOAD' --regime all"
+  LATEST=/tmp/nvdla-board-benchmark-latest.tar.gz
+  NAME="nvdla-${MODEL}"
+fi
+
+echo "Running $KIND $MODEL benchmark on boot $BOOT_ID"
+"${SSH[@]}" "$TARGET" "$COMMAND"
 
 mkdir -p "$OUT_DIR" "$(dirname "$STATE")"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-ARCHIVE="$OUT_DIR/cpu-${MODEL}-fp32-4t-${STAMP}-${BOOT_ID}.tar.gz"
-REMOTE_ARCHIVE="$("${SSH[@]}" "$TARGET" readlink -f /tmp/nvdla-board-cpu-benchmark-latest.tar.gz)"
+ARCHIVE="$OUT_DIR/${NAME}-${STAMP}-${BOOT_ID}.tar.gz"
+REMOTE_ARCHIVE="$("${SSH[@]}" "$TARGET" readlink -f "$LATEST")"
 "${SCP[@]}" "$TARGET:$REMOTE_ARCHIVE" "$ARCHIVE"
 tar -tzf "$ARCHIVE" >/dev/null
 printf '%s\n' "$BOOT_ID" >"$STATE"

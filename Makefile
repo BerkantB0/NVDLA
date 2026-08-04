@@ -15,7 +15,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
         petalinux-smoke petalinux-project petalinux-cpu-sdk petalinux-cpu-runtime petalinux-dts petalinux-power petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report cpu-performance-report \
-        cpu-board-benchmark test report clean
+        board-benchmark test report clean
 
 help:
 	@printf '%s\n' \
@@ -93,7 +93,7 @@ help:
 	  '  make petalinux-board-collect Import a manual or SSH board evidence archive' \
 	  '  make performance-report Analyze one model benchmark campaign from ARCHIVES' \
 	  '  make cpu-performance-report Analyze one ARM CPU ONNX campaign from ARCHIVES' \
-	  '  MODEL=lenet make cpu-board-benchmark Run and collect one fresh-boot CPU benchmark' \
+	  '  KIND=cpu MODEL=lenet make board-benchmark Run and collect one fresh-boot board benchmark' \
 	  '' \
 	  'Reports:' \
 	  '  make report          Summarize artifacts into artifacts/latest-report.md'
@@ -366,9 +366,8 @@ cpu-performance-report:
 	$(PYTHON) -m nvdla_test_framework cpu-performance-import $$args \
 		--out "$${CPU_PERFORMANCE_OUT:-artifacts/cpu-performance-report}"
 
-cpu-board-benchmark:
-	@test -n "$(MODEL)" || { echo 'MODEL=lenet or MODEL=resnet50 is required' >&2; exit 2; }
-	@scripts/run_cpu_board_benchmark.sh "$(MODEL)" "$(OUT_DIR)"
+board-benchmark:
+	@scripts/run_board_benchmark.sh "$(KIND)" "$(MODEL)" "$(OUT_DIR)"
 
 test: doctor lock-check unit xsa-audit vp-reference petalinux-smoke
 

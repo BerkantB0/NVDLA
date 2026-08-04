@@ -144,15 +144,16 @@ sudo apt install sshpass
 After a fresh board boot, run exactly one model:
 
 ```sh
-MODEL=lenet make cpu-board-benchmark
+KIND=cpu MODEL=lenet make board-benchmark
 # Power-cycle or reboot the board before the next command.
-MODEL=resnet50 make cpu-board-benchmark
+KIND=cpu MODEL=resnet50 make board-benchmark
 ```
 
-The host runner waits for SSH, records the Linux boot ID, rejects reuse of the
-previous successful boot, runs the standard FP32 four-thread campaign, and
-downloads the validated archive to `artifacts/cpu-board-ssh/`. It does not
-reboot the board or alter measurement options.
+The shared host runner waits for SSH, records the Linux boot ID, rejects reuse
+of the previous successful CPU benchmark boot, runs the standard FP32
+four-thread campaign, and downloads the validated archive to
+`artifacts/cpu-board-ssh/`. It does not reboot the board or alter measurement
+options.
 
 ## Final Campaign Matrix
 

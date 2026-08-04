@@ -206,6 +206,20 @@ Use reduced counts first. `nvdla-board-benchmark --help` lists every
 experiment-defining option and its default; environment variables are not used
 for these controls.
 
+For the primary uninstrumented campaign, the WSL host runner can execute and
+collect one model after each fresh boot:
+
+```sh
+KIND=nvdla MODEL=lenet make board-benchmark
+# Power-cycle or reboot the board before the next command.
+KIND=nvdla MODEL=resnet50 make board-benchmark
+```
+
+It uses the test-image `root` / `nvdla` SSH credential, rejects reuse of the
+previous successful NVDLA benchmark boot ID, preserves all target output, and
+downloads the archive to `artifacts/nvdla-board-ssh/`. It does not reboot the
+board, enable power sampling, or change the benchmark defaults.
+
 ```sh
 nvdla-board-benchmark lenet /run/media/ROOT-mmcblk0p1/nvdla-tests \
   --cold-starts 1 \
