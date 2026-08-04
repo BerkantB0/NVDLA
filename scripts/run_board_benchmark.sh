@@ -2,23 +2,66 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 {cpu|nvdla} {lenet|resnet50} [output-directory]" >&2
-  exit 2
+  cat <<EOF
+usage: $0 {cpu|nvdla} {lenet|resnet50} [HOST OPTIONS] [BENCHMARK OPTIONS]
+
+Host options:
+  --ssh-host HOST          Board address (default: 192.168.50.2)
+  --ssh-user USER          SSH user (default: root)
+  --ssh-password PASSWORD  Test-image password (default: nvdla)
+  --ssh-wait-seconds N     SSH startup timeout (default: 60)
+  --payload PATH           Target payload path
+  --output DIRECTORY       Host archive directory
+  --help                   Show this help
+
+All other options, including --power, are passed to the target benchmark.
+EOF
+  exit "${1:-2}"
 }
 
-[[ $# -ge 2 && $# -le 3 ]] || usage
+[[ ${1:-} != --help && ${1:-} != -h ]] || usage 0
+[[ $# -ge 2 ]] || usage
 KIND="$1"
 MODEL="$2"
+shift 2
 case "$KIND" in cpu|nvdla) ;; *) usage ;; esac
 case "$MODEL" in lenet|resnet50) ;; *) usage ;; esac
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="${3:-$ROOT/artifacts/${KIND}-board-ssh}"
-HOST="${NVDLA_BOARD_HOST:-192.168.50.2}"
-USER="${NVDLA_BOARD_USER:-root}"
-PAYLOAD="${NVDLA_BOARD_PAYLOAD:-/run/media/ROOT-mmcblk0p1/nvdla-tests}"
+OUT_DIR="$ROOT/artifacts/${KIND}-board-ssh"
+HOST=192.168.50.2
+USER=root
+PASSWORD=nvdla
+SSH_WAIT_SECONDS=60
+PAYLOAD=/run/media/ROOT-mmcblk0p1/nvdla-tests
+BENCHMARK_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help|-h) usage 0 ;;
+    --ssh-host|--ssh-user|--ssh-password|--ssh-wait-seconds|--payload|--output)
+      [[ $# -ge 2 ]] || { echo "$1 requires a value" >&2; exit 2; }
+      case "$1" in
+        --ssh-host) HOST="$2" ;;
+        --ssh-user) USER="$2" ;;
+        --ssh-password) PASSWORD="$2" ;;
+        --ssh-wait-seconds) SSH_WAIT_SECONDS="$2" ;;
+        --payload) PAYLOAD="$2" ;;
+        --output) OUT_DIR="$2" ;;
+      esac
+      shift 2
+      ;;
+    --) shift; BENCHMARK_ARGS+=("$@"); break ;;
+    *) BENCHMARK_ARGS+=("$1"); shift ;;
+  esac
+done
+
+[[ "$SSH_WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "--ssh-wait-seconds must be a positive integer" >&2
+  exit 2
+}
 STATE="$ROOT/.work/${KIND}-board-last-boot-id"
-export SSHPASS="${NVDLA_BOARD_PASSWORD:-nvdla}"
+export SSHPASS="$PASSWORD"
 
 command -v sshpass >/dev/null || {
   echo "sshpass is required (Ubuntu: sudo apt install sshpass)" >&2
@@ -31,7 +74,7 @@ SCP=(sshpass -e scp -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
 TARGET="$USER@$HOST"
 
-for _ in {1..60}; do
+for ((attempt = 0; attempt < SSH_WAIT_SECONDS; attempt++)); do
   "${SSH[@]}" "$TARGET" true >/dev/null 2>&1 && break
   sleep 1
 done
@@ -44,14 +87,15 @@ if [[ -f "$STATE" && "$(cat "$STATE")" == "$BOOT_ID" ]]; then
 fi
 
 if [[ "$KIND" == cpu ]]; then
-  COMMAND="nvdla-board-cpu-benchmark '$MODEL' '$PAYLOAD' --precision fp32 --threads 4 --regime all"
+  REMOTE=(nvdla-board-cpu-benchmark "$MODEL" "$PAYLOAD" "${BENCHMARK_ARGS[@]}")
   LATEST=/tmp/nvdla-board-cpu-benchmark-latest.tar.gz
-  NAME="cpu-${MODEL}-fp32-4t"
 else
-  COMMAND="nvdla-board-benchmark '$MODEL' '$PAYLOAD' --regime all"
+  REMOTE=(nvdla-board-benchmark "$MODEL" "$PAYLOAD" "${BENCHMARK_ARGS[@]}")
   LATEST=/tmp/nvdla-board-benchmark-latest.tar.gz
-  NAME="nvdla-${MODEL}"
 fi
+NAME="${KIND}-${MODEL}"
+[[ " ${BENCHMARK_ARGS[*]} " == *" --power "* ]] && NAME="${NAME}-power"
+printf -v COMMAND '%q ' "${REMOTE[@]}"
 
 echo "Running $KIND $MODEL benchmark on boot $BOOT_ID"
 "${SSH[@]}" "$TARGET" "$COMMAND"

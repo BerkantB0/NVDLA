@@ -210,15 +210,25 @@ For the primary uninstrumented campaign, the WSL host runner can execute and
 collect one model after each fresh boot:
 
 ```sh
-KIND=nvdla MODEL=lenet make board-benchmark
+scripts/run_board_benchmark.sh nvdla lenet
 # Power-cycle or reboot the board before the next command.
-KIND=nvdla MODEL=resnet50 make board-benchmark
+scripts/run_board_benchmark.sh nvdla resnet50
 ```
 
 It uses the test-image `root` / `nvdla` SSH credential, rejects reuse of the
 previous successful NVDLA benchmark boot ID, preserves all target output, and
-downloads the archive to `artifacts/nvdla-board-ssh/`. It does not reboot the
-board, enable power sampling, or change the benchmark defaults.
+downloads the archive to `artifacts/nvdla-board-ssh/`. With no additional
+arguments, the target uses its primary uninstrumented defaults. Benchmark
+options are forwarded directly, so a power-enabled campaign needs no separate
+host configuration:
+
+```sh
+scripts/run_board_benchmark.sh nvdla resnet50 \
+  --regime all --power --power-idle-seconds 10 --power-interval-ms 50
+```
+
+Host controls use dedicated options such as `--ssh-host`, `--payload`, and
+`--output`. The runner does not reboot the board.
 
 ```sh
 nvdla-board-benchmark lenet /run/media/ROOT-mmcblk0p1/nvdla-tests \

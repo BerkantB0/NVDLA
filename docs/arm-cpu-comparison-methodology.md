@@ -144,16 +144,26 @@ sudo apt install sshpass
 After a fresh board boot, run exactly one model:
 
 ```sh
-KIND=cpu MODEL=lenet make board-benchmark
+scripts/run_board_benchmark.sh cpu lenet
 # Power-cycle or reboot the board before the next command.
-KIND=cpu MODEL=resnet50 make board-benchmark
+scripts/run_board_benchmark.sh cpu resnet50
 ```
 
 The shared host runner waits for SSH, records the Linux boot ID, rejects reuse
-of the previous successful CPU benchmark boot, runs the standard FP32
-four-thread campaign, and downloads the validated archive to
-`artifacts/cpu-board-ssh/`. It does not reboot the board or alter measurement
-options.
+of the previous successful CPU benchmark boot, and downloads the validated
+archive to `artifacts/cpu-board-ssh/`. With no additional arguments, the target
+uses its standard FP32 four-thread campaign defaults. Target options can be
+passed directly, including a correctness-qualified power run:
+
+```sh
+scripts/run_board_benchmark.sh cpu resnet50 \
+  --precision fp32 --threads 4 --regime steady \
+  --steady-samples 30 --power
+```
+
+Host controls use dedicated names such as `--ssh-host`, `--payload`, and
+`--output`; all other options are forwarded to `nvdla-board-cpu-benchmark`.
+The runner does not reboot the board.
 
 ## Final Campaign Matrix
 
@@ -165,5 +175,5 @@ sessions for the configurations used in the energy comparison.
 Retain all samples. Report mean, median, standard deviation, coefficient of
 variation, IQR, p5, p95, throughput, and the deterministic bootstrap 95%
 confidence interval across independent session medians. Any failed correctness
-check, timeout, kernel error, provenance mismatch, or unsynchronized clock
-invalidates that session.
+check, timeout, kernel error, or provenance mismatch invalidates that session.
+Wall-clock synchronization is reported metadata, not an acceptance condition.

@@ -20,23 +20,31 @@ class BoardHostRunnerTests(unittest.TestCase):
     def test_runner_supports_cpu_and_nvdla_gates(self) -> None:
         text = SCRIPT.read_text(encoding="ascii")
         self.assertIn("nvdla-board-cpu-benchmark", text)
-        self.assertIn("--precision fp32 --threads 4 --regime all", text)
         self.assertIn("nvdla-board-benchmark", text)
         self.assertIn("nvdla-board-benchmark-latest.tar.gz", text)
         self.assertIn("${KIND}-board-last-boot-id", text)
+        self.assertIn('BENCHMARK_ARGS+=("$1")', text)
+        self.assertIn('== *" --power "*', text)
         self.assertNotIn('"$TARGET" reboot', text)
 
     def test_runner_uses_documented_test_credential(self) -> None:
         text = SCRIPT.read_text(encoding="ascii")
-        self.assertIn("NVDLA_BOARD_PASSWORD:-nvdla", text)
+        self.assertIn("PASSWORD=nvdla", text)
         self.assertIn("sshpass -e ssh", text)
         self.assertIn("sshpass -e scp", text)
 
-    def test_make_exposes_only_the_shared_host_target(self) -> None:
+    def test_collection_is_decoupled_from_make(self) -> None:
         text = MAKEFILE.read_text(encoding="utf-8")
-        self.assertIn("board-benchmark:", text)
-        self.assertNotIn("cpu-board-benchmark:", text)
-        self.assertNotIn("nvdla-board-benchmark:", text)
+        self.assertNotIn("board-benchmark:", text)
+
+    def test_help_documents_host_and_power_passthrough(self) -> None:
+        result = subprocess.run(
+            ["bash", str(SCRIPT), "--help"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--ssh-host", result.stdout)
+        self.assertIn("--output", result.stdout)
+        self.assertIn("--power", result.stdout)
 
 
 if __name__ == "__main__":
