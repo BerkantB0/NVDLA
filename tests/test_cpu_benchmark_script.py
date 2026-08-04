@@ -27,6 +27,15 @@ class CpuBenchmarkScriptTests(unittest.TestCase):
         self.assertIn('--cpu-mask "$CPU_MASK"', text)
         self.assertIn("built_in_warmup_inferences=1", text)
 
+    def test_discovers_cpu_count_without_requiring_getconf(self) -> None:
+        text = SCRIPT.read_text(encoding="ascii")
+        sysfs = text.index("/sys/devices/system/cpu/online")
+        getconf = text.index("command -v getconf")
+        cpuinfo = text.index("/proc/cpuinfo")
+        self.assertLess(sysfs, getconf)
+        self.assertLess(getconf, cpuinfo)
+        self.assertIn('split($i, range, "-")', text)
+
     def test_correctness_brackets_measurement(self) -> None:
         text = SCRIPT.read_text(encoding="ascii")
         before = text.index("run_correctness before")

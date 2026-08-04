@@ -100,7 +100,39 @@ for value in "$THREADS" "$COLD_STARTS" "$WARM_STARTS" "$STEADY_SAMPLES" \
 done
 [ "$THREADS" -gt 0 ] || fail_usage "--threads must be positive"
 [ "$RUNTIME_TIMEOUT" -gt 0 ] || fail_usage "--timeout-seconds must be positive"
-ONLINE_CPUS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)"
+
+online_cpu_count() {
+    if [ -r /sys/devices/system/cpu/online ]; then
+        awk -F, '
+            {
+                count = 0
+                for (i = 1; i <= NF; i++) {
+                    if ($i ~ /^[0-9]+$/) {
+                        count++
+                    } else if ($i ~ /^[0-9]+-[0-9]+$/) {
+                        split($i, range, "-")
+                        if (range[2] < range[1]) exit 1
+                        count += range[2] - range[1] + 1
+                    } else {
+                        exit 1
+                    }
+                }
+                print count
+            }
+        ' /sys/devices/system/cpu/online 2>/dev/null && return
+    fi
+    if command -v getconf >/dev/null 2>&1; then
+        count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+        case "$count" in ''|*[!0-9]*) ;; *) printf '%s\n' "$count"; return ;; esac
+    fi
+    if [ -r /proc/cpuinfo ]; then
+        awk '/^processor[[:space:]]*:/ { count++ } END { print count + 0 }' /proc/cpuinfo
+        return
+    fi
+    echo 0
+}
+
+ONLINE_CPUS="$(online_cpu_count)"
 [ "$ONLINE_CPUS" -gt 0 ] || fail_usage "could not determine online CPU count"
 [ "$THREADS" -le "$ONLINE_CPUS" ] || fail_usage "--threads exceeds the online CPU count"
 CPU_MASK_DEC=$(( (1 << THREADS) - 1 ))
