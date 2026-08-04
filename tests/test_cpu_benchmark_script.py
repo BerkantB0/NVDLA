@@ -45,6 +45,14 @@ class CpuBenchmarkScriptTests(unittest.TestCase):
         self.assertLess(steady, after)
         self.assertIn("correctness_tolerance_absolute=1e-5", text)
 
+    def test_requires_fixed_userspace_cpu_frequency_without_changing_it(self) -> None:
+        text = SCRIPT.read_text(encoding="ascii")
+        self.assertIn("CPU_NOMINAL_FREQUENCY_KHZ=1200000", text)
+        self.assertIn('[ "$value" = userspace ] || return 1', text)
+        self.assertIn("cpu_frequency_policy=fixed-verified", text)
+        self.assertNotIn("printf 'performance", text)
+        self.assertNotIn("scaling_setspeed", text)
+
     def test_power_sampling_is_concurrent_with_steady_run(self) -> None:
         text = SCRIPT.read_text(encoding="ascii")
         start = text.index("start_power ||")

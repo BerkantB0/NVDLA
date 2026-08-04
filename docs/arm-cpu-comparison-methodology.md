@@ -72,10 +72,14 @@ nvdla-board-cpu-benchmark MODEL PAYLOAD_ROOT \
 - **Single-thread secondary:** `--threads 1`, separating parallel scaling from
   model/runtime effects.
 
-The wrapper sets the CPU governor to `performance`, suppresses console noise,
-records frequencies and scheduling/resource evidence, and restores the prior
-state. Standard `onnx_test_runner` checks the pinned output with absolute and
-relative tolerances of `1e-5` before and after every measurement session.
+The wrapper does not change CPU frequency policy. It requires the inherited
+`userspace` governor to hold all measured cores at the same nominal 1.2 GHz
+frequency, records the exact reported value before and after measurement, and
+rejects a session if that value changes. This keeps the board setup explicit
+without introducing a governor transition into the benchmark. It also
+suppresses console noise and records scheduling/resource evidence. Standard
+`onnx_test_runner` checks the pinned output with absolute and relative
+tolerances of `1e-5` before and after every measurement session.
 
 ## Power
 
@@ -114,7 +118,8 @@ ARCHIVES="session1.tar.gz session2.tar.gz session3.tar.gz session4.tar.gz sessio
 ```
 
 The output contains raw CSV, a machine-readable statistical summary, a compact
-CSV table, and a Markdown report. Cold/warm and steady throughput are reported
+CSV table, and a Markdown report. The importer rejects sessions with different
+governors or fixed frequencies. Cold/warm and steady throughput are reported
 under their distinct timing boundaries and must not be conflated.
 
 ## Final Campaign Matrix

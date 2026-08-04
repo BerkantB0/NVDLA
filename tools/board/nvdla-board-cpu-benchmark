@@ -158,7 +158,6 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="/tmp/nvdla-board-cpu-benchmark-${MODEL}-${PRECISION}-${THREADS}t-${STAMP}"
 ARCHIVE="${OUT}.tar.gz"
 LATEST="/tmp/nvdla-board-cpu-benchmark-latest.tar.gz"
-GOVERNORS_SAVED="$OUT/governors-before.txt"
 STATUS=1
 CLASSIFICATION=not-run
 PRINTK_ORIGINAL=""
@@ -168,6 +167,10 @@ SAMPLER_READY=""
 DMESG_LINES=0
 BOOT_ID=""
 NTP_SYNCHRONIZED=unavailable
+CPU_GOVERNOR=unverified
+CPU_FREQUENCY_KHZ=0
+CPU_NOMINAL_FREQUENCY_KHZ=1200000
+CPU_FREQUENCY_TOLERANCE_KHZ=1000
 mkdir -p "$OUT"
 
 capture() {
@@ -187,11 +190,47 @@ restore_environment() {
     if [ -n "$PRINTK_ORIGINAL" ] && [ -w /proc/sys/kernel/printk ]; then
         printf '%s\n' "$PRINTK_ORIGINAL" >/proc/sys/kernel/printk 2>/dev/null || true
     fi
-    if [ -f "$GOVERNORS_SAVED" ]; then
-        while IFS='=' read -r path value; do
-            [ -n "$path" ] && [ -w "$path" ] && printf '%s\n' "$value" >"$path" 2>/dev/null || true
-        done <"$GOVERNORS_SAVED"
-    fi
+}
+
+capture_cpu_state() {
+    suffix="$1"
+    capture "governors-$suffix.txt" sh -c \
+        'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+    capture "frequencies-$suffix.txt" sh -c \
+        'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+}
+
+verify_cpu_state() {
+    suffix="$1"
+    expected_frequency="${2:-}"
+    governor_count=0
+    while IFS='=' read -r path value; do
+        [ -n "$path" ] || continue
+        [ "$value" = userspace ] || return 1
+        governor_count=$((governor_count + 1))
+    done <"$OUT/governors-$suffix.txt"
+    [ "$governor_count" -ge "$THREADS" ] || return 1
+
+    frequency_count=0
+    observed_frequency=""
+    while IFS='=' read -r path value; do
+        [ -n "$path" ] || continue
+        case "$value" in ''|*[!0-9]*) return 1 ;; esac
+        if [ -z "$observed_frequency" ]; then
+            observed_frequency="$value"
+        elif [ "$value" -ne "$observed_frequency" ]; then
+            return 1
+        fi
+        frequency_count=$((frequency_count + 1))
+    done <"$OUT/frequencies-$suffix.txt"
+    [ "$frequency_count" -ge "$THREADS" ] || return 1
+    [ -n "$observed_frequency" ] || return 1
+    lower=$((CPU_NOMINAL_FREQUENCY_KHZ - CPU_FREQUENCY_TOLERANCE_KHZ))
+    upper=$((CPU_NOMINAL_FREQUENCY_KHZ + CPU_FREQUENCY_TOLERANCE_KHZ))
+    [ "$observed_frequency" -ge "$lower" ] && [ "$observed_frequency" -le "$upper" ] || return 1
+    [ -z "$expected_frequency" ] || [ "$observed_frequency" -eq "$expected_frequency" ] || return 1
+    CPU_GOVERNOR=userspace
+    CPU_FREQUENCY_KHZ="$observed_frequency"
 }
 
 capture_temperatures() {
@@ -228,6 +267,11 @@ finish() {
         echo "precision=$PRECISION"
         echo "threads=$THREADS"
         echo "cpu_affinity_mask=$CPU_MASK"
+        echo "cpu_governor=$CPU_GOVERNOR"
+        echo "cpu_frequency_khz=$CPU_FREQUENCY_KHZ"
+        echo "cpu_frequency_policy=fixed-verified"
+        echo "cpu_nominal_frequency_khz=$CPU_NOMINAL_FREQUENCY_KHZ"
+        echo "cpu_frequency_tolerance_khz=$CPU_FREQUENCY_TOLERANCE_KHZ"
         echo "regime=$REGIME"
         echo "status=$STATUS"
         echo "classification=$CLASSIFICATION"
@@ -297,16 +341,9 @@ dmesg >"$OUT/dmesg-before.log" 2>&1 || true
 DMESG_LINES="$(wc -l <"$OUT/dmesg-before.log" | tr -d ' ')"
 PRINTK_ORIGINAL="$(cat /proc/sys/kernel/printk 2>/dev/null || true)"
 dmesg -n 3
-: >"$GOVERNORS_SAVED"
-for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-    [ -r "$governor" ] || continue
-    printf '%s=%s\n' "$governor" "$(cat "$governor")" >>"$GOVERNORS_SAVED"
-    if [ -w "$governor" ] && grep -qw performance "$(dirname "$governor")/scaling_available_governors"; then
-        printf 'performance\n' >"$governor"
-    fi
-done
-capture governors-active.txt sh -c 'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
-capture frequencies-before.txt sh -c 'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+capture_cpu_state before
+if ! verify_cpu_state before; then CLASSIFICATION=cpu-frequency-policy-invalid; finish; fi
+CPU_FREQUENCY_BEFORE_KHZ="$CPU_FREQUENCY_KHZ"
 capture_temperatures before
 sleep "$SETTLE_SECONDS"
 
@@ -420,7 +457,11 @@ case "$REGIME" in
         ;;
 esac
 if ! run_correctness after; then CLASSIFICATION=correctness-postcheck-failure; finish; fi
-capture frequencies-after.txt sh -c 'for p in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do [ -r "$p" ] && echo "$p=$(cat "$p")"; done'
+capture_cpu_state after
+if ! verify_cpu_state after "$CPU_FREQUENCY_BEFORE_KHZ"; then
+    CLASSIFICATION=cpu-frequency-policy-changed
+    finish
+fi
 capture_temperatures after
 capture loadavg-after.txt cat /proc/loadavg
 capture meminfo-after.txt cat /proc/meminfo

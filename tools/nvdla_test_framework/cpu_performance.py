@@ -45,6 +45,17 @@ def _hash_records(path: Path) -> dict[str, str]:
     return result
 
 
+def _sysfs_snapshot(path: Path) -> list[str]:
+    values: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "=" in line:
+            _, value = line.split("=", 1)
+            values.append(value.strip())
+    if not values:
+        raise ValueError(f"{path}: empty sysfs snapshot")
+    return values
+
+
 def _perf_rows(path: Path) -> list[float]:
     result: list[float] = []
     with path.open(encoding="utf-8", errors="replace", newline="") as stream:
@@ -168,6 +179,21 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
         raise ValueError(f"{archive}: kernel error patterns were recorded")
 
     hashes = _hash_records(root / "software-hashes.txt")
+    governors_before = _sysfs_snapshot(root / "governors-before.txt")
+    governors_after = _sysfs_snapshot(root / "governors-after.txt")
+    frequencies_before = _sysfs_snapshot(root / "frequencies-before.txt")
+    frequencies_after = _sysfs_snapshot(root / "frequencies-after.txt")
+    if set(governors_before + governors_after) != {"userspace"}:
+        raise ValueError(f"{archive}: CPU governor was not consistently userspace")
+    if len(set(frequencies_before + frequencies_after)) != 1:
+        raise ValueError(f"{archive}: CPU frequency was not fixed across the session")
+    observed_frequency_khz = int(frequencies_before[0])
+    if env.get("cpu_governor") != "userspace":
+        raise ValueError(f"{archive}: benchmark governor metadata is inconsistent")
+    if int(env.get("cpu_frequency_khz", "0")) != observed_frequency_khz:
+        raise ValueError(f"{archive}: benchmark frequency metadata is inconsistent")
+    if env.get("cpu_frequency_policy") != "fixed-verified":
+        raise ValueError(f"{archive}: CPU frequency policy was not verified")
     workload_manifest = json.loads(
         (root / "cpu-workload-manifest.json").read_text(encoding="utf-8")
     )
@@ -198,6 +224,9 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
         "precision": env.get("precision"),
         "threads": int(env.get("threads", "0")),
         "cpu_affinity_mask": env.get("cpu_affinity_mask"),
+        "cpu_governor": env.get("cpu_governor"),
+        "cpu_frequency_khz": observed_frequency_khz,
+        "cpu_frequency_policy": env.get("cpu_frequency_policy"),
         "kernel_release": uname[2] if len(uname) >= 3 else None,
         "model_sha256": hashes.get("model.onnx"),
         "input_sha256": hashes.get("input_0.pb"),
@@ -406,6 +435,8 @@ def import_cpu_performance_archives(archives: list[Path], out_dir: Path) -> int:
             f"- Precision: `{baseline['precision']}`",
             f"- CPU threads: `{baseline['threads']}`",
             f"- CPU affinity mask: `{baseline['cpu_affinity_mask']}`",
+            f"- CPU operating point: `{baseline['cpu_governor']}` governor, "
+            f"fixed at `{baseline['cpu_frequency_khz'] / 1_000_000:.3f} GHz`",
             f"- ONNX graph: `{baseline['workload_complexity']['node_count']}` nodes, "
             f"`{baseline['workload_complexity']['model_size_bytes']}` bytes",
             "- Operators: `"

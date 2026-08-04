@@ -17,6 +17,8 @@ class CpuPerformanceTests(unittest.TestCase):
         boot_id: str,
         threads: int = 4,
         power: bool = False,
+        governor: str = "userspace",
+        frequency_khz: int = 1_199_999,
     ) -> Path:
         session = root / name
         session.mkdir()
@@ -29,6 +31,9 @@ class CpuPerformanceTests(unittest.TestCase):
                     "precision=int8",
                     f"threads={threads}",
                     f"cpu_affinity_mask=0x{(1 << threads) - 1:x}",
+                    f"cpu_governor={governor}",
+                    f"cpu_frequency_khz={frequency_khz}",
+                    "cpu_frequency_policy=fixed-verified",
                     "regime=all",
                     "status=0",
                     "classification=correctness-qualified-performance-pass",
@@ -48,6 +53,19 @@ class CpuPerformanceTests(unittest.TestCase):
             (session / f"correctness-{phase}.status").write_text("pass\n")
         (session / "bad-kernel-patterns.txt").write_text("")
         (session / "uname.txt").write_text("Linux board 6.6.10 #1 SMP aarch64\n")
+        for phase in ("before", "after"):
+            (session / f"governors-{phase}.txt").write_text(
+                "".join(
+                    f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor={governor}\n"
+                    for cpu in range(threads)
+                )
+            )
+            (session / f"frequencies-{phase}.txt").write_text(
+                "".join(
+                    f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_cur_freq={frequency_khz}\n"
+                    for cpu in range(threads)
+                )
+            )
         (session / "software-hashes.txt").write_text(
             "\n".join(
                 [
@@ -162,6 +180,33 @@ class CpuPerformanceTests(unittest.TestCase):
                 self._archive(root, "session-2", "boot-2", threads=1),
             ]
             self.assertEqual(import_cpu_performance_archives(archives, root / "report"), 1)
+
+    def test_rejects_non_userspace_governor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._archive(root, "session-1", "boot-1", governor="performance")
+            self.assertEqual(import_cpu_performance_archives([archive], root / "report"), 1)
+
+    def test_rejects_mixed_fixed_frequencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archives = [
+                self._archive(root, "session-1", "boot-1"),
+                self._archive(root, "session-2", "boot-2", frequency_khz=1_000_000),
+            ]
+            self.assertEqual(import_cpu_performance_archives(archives, root / "report"), 1)
+
+    def test_rejects_frequency_change_within_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = self._archive(root, "session-1", "boot-1")
+            session = root / "session-1"
+            (session / "frequencies-after.txt").write_text(
+                "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq=1000000\n"
+            )
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(session, arcname=session.name)
+            self.assertEqual(import_cpu_performance_archives([archive], root / "report"), 1)
 
     def test_integrates_ps_and_pl_power_domains(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
