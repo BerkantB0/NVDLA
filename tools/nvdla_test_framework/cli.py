@@ -6,6 +6,7 @@ from pathlib import Path
 from .abi import run_abi_check
 from .board_artifact import run_board_artifact_import
 from .board_payload import run_board_payload
+from .campaign import build_campaign_report
 from .cpu_performance import import_cpu_performance_archives
 from .diagnostics import classify_sdp_small_diagnostic
 from .lenet import (
@@ -169,6 +170,14 @@ def main(argv: list[str] | None = None) -> int:
     cpu_performance.add_argument("--archive", required=True, action="append", type=Path)
     cpu_performance.add_argument("--out", required=True, type=Path)
 
+    campaign = sub.add_parser(
+        "campaign-report",
+        help="Build a balanced final CPU and NVDLA comparison report",
+    )
+    campaign.add_argument("--reports-dir", required=True, type=Path)
+    campaign.add_argument("--campaign-root", required=True, type=Path)
+    campaign.add_argument("--out", required=True, type=Path)
+
     trace_parse = sub.add_parser("trace-parse", help="Canonicalize NVDLA VP SystemC transactions")
     trace_parse.add_argument("--input", required=True, type=Path)
     trace_parse.add_argument("--register-header", required=True, type=Path)
@@ -270,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         return import_performance_archives(args.archive, args.out)
     if args.command == "cpu-performance-import":
         return import_cpu_performance_archives(args.archive, args.out)
+    if args.command == "campaign-report":
+        return build_campaign_report(args.reports_dir, args.campaign_root, args.out)
     if args.command == "trace-parse":
         return run_trace_parse(
             args.input,
