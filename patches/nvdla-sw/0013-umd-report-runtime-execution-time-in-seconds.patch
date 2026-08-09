@@ -1,7 +1,7 @@
-From 21a223f59be87275a3ac8e63a74763c5751ebaab Mon Sep 17 00:00:00 2001
+From fb109214eb64bebf8db9e1c6013088dc48210485 Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 17:12:33 +0100
-Subject: [PATCH 13/17] umd: report runtime execution time in seconds
+Subject: [PATCH 13/18] umd: report runtime execution time in seconds
 
 The elapsed-time helper converted its result to microseconds while the caller labelled the value as seconds, overstating execution time by a factor of one million. Return seconds directly and make the unit explicit in the helper name.
 

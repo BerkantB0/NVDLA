@@ -1,7 +1,7 @@
-From a1831d6d5d09518d1f960388cd7683c3025d06c0 Mon Sep 17 00:00:00 2001
+From f15b563cd5794a91405e82defd610c67ffb64137 Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Thu, 25 Jun 2026 17:00:00 +0300
-Subject: [PATCH 05/17] kmd: use modern IRQ and GEM mmap paths
+Subject: [PATCH 05/18] kmd: use modern IRQ and GEM mmap paths
 
 Linux 6.x no longer reliably exposes OF interrupts through the legacy
 IORESOURCE_IRQ lookup used by the original KMD. The VP device tree contains

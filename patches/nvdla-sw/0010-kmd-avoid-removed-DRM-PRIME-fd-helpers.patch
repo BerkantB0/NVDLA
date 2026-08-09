@@ -1,7 +1,7 @@
-From 047ad9bb59c04d9a7eb0f352f1a749fe1f3e3d62 Mon Sep 17 00:00:00 2001
+From 0a470faf712a5886ab8a94b631b6e999bf7967ff Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Thu, 9 Jul 2026 21:29:51 +0100
-Subject: [PATCH 10/17] kmd: avoid removed DRM PRIME fd helpers
+Subject: [PATCH 10/18] kmd: avoid removed DRM PRIME fd helpers
 
 Linux 6.6 keeps PRIME fd and handle ioctls in DRM core, but
 drm_gem_prime_fd_to_handle and drm_gem_prime_handle_to_fd are no longer

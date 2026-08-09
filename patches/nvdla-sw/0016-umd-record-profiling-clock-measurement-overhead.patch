@@ -1,7 +1,7 @@
-From a7ea0765cd5728a1d508e0c3d6d5b4241e4cec7c Mon Sep 17 00:00:00 2001
+From c136e68af89ce69b70e16f6ce7c736a303b5505b Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 17:50:30 +0100
-Subject: [PATCH 16/17] umd: record profiling clock measurement overhead
+Subject: [PATCH 16/18] umd: record profiling clock measurement overhead
 
 The structured profile records the monotonic clock resolution, but does not
 quantify the cost of the clock pair around each measured interval. This

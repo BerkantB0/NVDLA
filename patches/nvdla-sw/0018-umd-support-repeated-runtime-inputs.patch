@@ -1,0 +1,320 @@
+From 62e0b1e20fcd6261977d76eb0b40d379f31a1287 Mon Sep 17 00:00:00 2001
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
+Date: Sun, 9 Aug 2026 23:20:30 +0100
+Subject: [PATCH 18/18] umd: support repeated runtime inputs
+
+Allow direct runtime invocations to provide --image more than once.
+Decode and prepare every input before execution, then cycle through the
+prepared tensors while retaining one loaded runtime context.
+
+Record the selected input and buffer-update time for each profiling
+sample. Write one output per executed input after measured work so callers
+can validate results without adding file I/O to execution timing.
+
+Keep single-image and server behavior unchanged. Tested with the ARM64
+Buildroot and PetaLinux 2024.1 toolchains.
+
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
+---
+ umd/apps/runtime/RuntimeTest.cpp | 94 +++++++++++++++++++++++++++-----
+ umd/apps/runtime/RuntimeTest.h   |  5 ++
+ umd/apps/runtime/main.cpp        | 24 +++++---
+ 3 files changed, 101 insertions(+), 22 deletions(-)
+
+diff --git a/umd/apps/runtime/RuntimeTest.cpp b/umd/apps/runtime/RuntimeTest.cpp
+index d5e9710..893984f 100644
+--- a/umd/apps/runtime/RuntimeTest.cpp
++++ b/umd/apps/runtime/RuntimeTest.cpp
+@@ -78,6 +78,17 @@ static NvU64 measureClockPairOverheadNs()
+     return minimum;
+ }
+ 
++static size_t inputCount(const TestAppArgs* appArgs)
++{
++    return appArgs->inputNames.empty() ? 1 : appArgs->inputNames.size();
++}
++
++static const std::string& inputName(const TestAppArgs* appArgs, size_t index)
++{
++    return appArgs->inputNames.empty() ? appArgs->inputName
++                                       : appArgs->inputNames[index];
++}
++
+ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+                                     const TestInfo* i)
+ {
+@@ -93,12 +104,13 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+ 
+     fprintf(output,
+             "{\n"
+-            "  \"schema_version\": 2,\n"
++            "  \"schema_version\": 3,\n"
+             "  \"clock\": \"CLOCK_MONOTONIC_RAW\",\n"
+             "  \"clock_resolution_ns\": %llu,\n"
+             "  \"clock_pair_overhead_ns\": %llu,\n"
+             "  \"warmup_iterations\": %u,\n"
+             "  \"measured_iterations\": %u,\n"
++            "  \"input_count\": %u,\n"
+             "  \"outputs_consistent\": %s,\n"
+             "  \"status\": %d,\n"
+             "  \"phases_ns\": {\n"
+@@ -121,6 +133,7 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+             (unsigned long long)profile.clockPairOverheadNs,
+             appArgs->warmupIterations,
+             appArgs->measuredIterations,
++            (NvU32)inputCount(appArgs),
+             profile.outputsConsistent ? "true" : "false",
+             profile.status,
+             (unsigned long long)profile.runtimeCreateNs,
+@@ -141,10 +154,13 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+     {
+         const PerformanceSample& sample = profile.samples[index];
+         fprintf(output,
+-                "    {\"index\": %u, \"warmup\": %s, "
++                "    {\"index\": %u, \"input_index\": %u, "
++                "\"warmup\": %s, \"input_update_ns\": %llu, "
+                 "\"runtime_execution_ns\": %llu, \"output_extract_ns\": %llu}%s\n",
+                 sample.index,
++                sample.inputIndex,
+                 sample.warmup ? "true" : "false",
++                (unsigned long long)sample.inputUpdateNs,
+                 (unsigned long long)sample.runtimeExecutionNs,
+                 (unsigned long long)sample.outputExtractNs,
+                 index + 1 == profile.samples.size() ? "" : ",");
+@@ -173,16 +189,16 @@ static TestImageTypes getImageType(std::string imageFileName)
+ static NvDlaError copyImageToInputTenso
+ (
+     const TestAppArgs* appArgs,
+-    TestInfo* i,
++    const std::string& imageName,
++    NvDlaImage* tensorImage,
+     void** pImgBuffer,
+     nvdla::IRuntime::NvDlaTensor *tensorDesc
+ )
+ {
+     NvDlaError e = NvDlaSuccess;
+ 
+-    std::string imgPath = /*i->inputImagesPath + */appArgs->inputName;
++    std::string imgPath = /*i->inputImagesPath + */imageName;
+     NvDlaImage* R8Image = new NvDlaImage();
+-    NvDlaImage* tensorImage = NULL;
+     TestImageTypes imageType = getImageType(imgPath);
+     if (!R8Image)
+         ORIGINATE_ERROR(NvDlaError_InsufficientMemory);
+@@ -201,7 +217,6 @@ static NvDlaError copyImageToInputTenso
+             goto fail;
+     }
+ 
+-    tensorImage = i->inputImage;
+     if (tensorImage == NULL)
+         ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "NULL input Image");
+ 
+@@ -264,7 +279,26 @@ NvDlaError setupInputBuffe
+ 
+     PROPAGATE_ERROR_FAIL(runtime->allocateSystemMemory(&hMem, tDesc.bufferSize, pInputBuffer));
+     i->inputHandle = (NvU8 *)hMem;
+-    PROPAGATE_ERROR_FAIL(copyImageToInputTensor(appArgs, i, pInputBuffer, &tDesc));
++
++    i->preparedInputs.resize(inputCount(appArgs));
++    for (size_t index = 0; index < inputCount(appArgs); ++index)
++    {
++        NvDlaImage tensorImage;
++        void* preparedInput;
++
++        i->preparedInputs[index].resize(tDesc.bufferSize);
++        preparedInput = &i->preparedInputs[index][0];
++        e = copyImageToInputTensor(appArgs,
++                                   inputName(appArgs, index),
++                                   &tensorImage,
++                                   &preparedInput,
++                                   &tDesc);
++        if (tensorImage.m_pData != NULL)
++            NvDlaFree(tensorImage.m_pData);
++        if (e != NvDlaSuccess)
++            goto fail;
++    }
++    memcpy(*pInputBuffer, &i->preparedInputs[0][0], tDesc.bufferSize);
+ 
+     if (!runtime->bindInputTensor(0, hMem))
+         ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "runtime->bindInputTensor() failed");
+@@ -485,7 +519,9 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+     void* pOutputBuffer = NULL;
+     NvU32 totalIterations =
+         appArgs->warmupIterations + appArgs->measuredIterations;
+-    std::vector<NvU8> referenceOutput;
++    std::vector<std::vector<NvU8> > referenceOutputs(
++        inputCount(appArgs));
++    NvU32 currentInput = 0;
+     NvU64 phaseStart;
+     NvU64 testStart;
+ 
+@@ -509,7 +545,19 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+     {
+         PerformanceSample sample;
+         sample.index = index + 1;
++        sample.inputIndex = index % inputCount(appArgs);
+         sample.warmup = index < appArgs->warmupIterations;
++        sample.inputUpdateNs = 0;
++
++        if (sample.inputIndex != currentInput)
++        {
++            phaseStart = monotonicRawNs();
++            memcpy(pInputBuffer,
++                   &i->preparedInputs[sample.inputIndex][0],
++                   i->preparedInputs[sample.inputIndex].size());
++            sample.inputUpdateNs = elapsedNs(phaseStart);
++            currentInput = sample.inputIndex;
++        }
+ 
+         phaseStart = monotonicRawNs();
+         if (!runtime->submit())
+@@ -524,11 +572,12 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+ 
+         const NvU8* outputBytes =
+             static_cast<const NvU8*>(i->outputImage->m_pData);
++        std::vector<NvU8>& referenceOutput =
++            referenceOutputs[sample.inputIndex];
+         if (referenceOutput.empty())
+         {
+             referenceOutput.assign(outputBytes,
+-                                   outputBytes +
+-                                   i->outputImage->m_meta.size);
++                                   outputBytes + i->outputImage->m_meta.size);
+         }
+         else if (referenceOutput.size() != i->outputImage->m_meta.size ||
+                  memcmp(&referenceOutput[0],
+@@ -546,12 +595,27 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+ 
+     //i->outputImage->printBuffer(true);   /* Print the output buffer */
+ 
+-    /* Dump output dimg to a file */
++    /* Dump one result per input after all timed execution completes. */
+     phaseStart = monotonicRawNs();
+-    PROPAGATE_ERROR_FAIL(DIMG2DIMGFile(i->outputImage,
+-                                        OUTPUT_DIMG,
+-                                        true,
+-                                        appArgs->rawOutputDump));
++    for (size_t index = 0; index < referenceOutputs.size(); ++index)
++    {
++        char outputName[64];
++
++        if (referenceOutputs[index].empty())
++            continue;
++        memcpy(i->outputImage->m_pData,
++               &referenceOutputs[index][0],
++               referenceOutputs[index].size());
++        if (referenceOutputs.size() == 1)
++            snprintf(outputName, sizeof(outputName), "%s", OUTPUT_DIMG);
++        else
++            snprintf(outputName, sizeof(outputName), "output-%04u.dimg",
++                     (NvU32)index);
++        PROPAGATE_ERROR_FAIL(DIMG2DIMGFile(i->outputImage,
++                                          outputName,
++                                          true,
++                                          appArgs->rawOutputDump));
++    }
+     i->profile.outputWriteNs = elapsedNs(phaseStart);
+     i->profile.testTotalNs = elapsedNs(testStart);
+ 
+diff --git a/umd/apps/runtime/RuntimeTest.h b/umd/apps/runtime/RuntimeTest.h
+index f2a4040..2cb7235 100644
+--- a/umd/apps/runtime/RuntimeTest.h
++++ b/umd/apps/runtime/RuntimeTest.h
+@@ -42,7 +42,9 @@
+ struct PerformanceSample
+ {
+     NvU32 index;
++    NvU32 inputIndex;
+     bool warmup;
++    NvU64 inputUpdateNs;
+     NvU64 runtimeExecutionNs;
+     NvU64 outputExtractNs;
+ };
+@@ -93,6 +95,7 @@ struct TestAppArgs
+ {
+     std::string inputPath;
+     std::string inputName;
++    std::vector<std::string> inputNames;
+     std::string loadableName;
+     NvS32 serverPort;
+     NvU8 normalize_value;
+@@ -105,6 +108,7 @@ struct TestAppArgs
+     TestAppArgs() :
+         inputPath("./"),
+         inputName(""),
++        inputNames(),
+         loadableName(""),
+         serverPort(6666),
+         normalize_value(1),
+@@ -146,6 +150,7 @@ struct TestInfo
+     NvU32 numOutputs;
+     NvDlaImage* inputImage;
+     NvDlaImage* outputImage;
++    std::vector<std::vector<NvU8> > preparedInputs;
+     PerformanceProfile profile;
+ };
+ 
+diff --git a/umd/apps/runtime/main.cpp b/umd/apps/runtime/main.cpp
+index 9849901..531b78f 100644
+--- a/umd/apps/runtime/main.cpp
++++ b/umd/apps/runtime/main.cpp
+@@ -64,16 +64,21 @@ static NvDlaError testSetup(const TestAppArgs* appArgs, TestInfo* i)
+     NvDlaStatType stat;
+ 
+     // Do input paths exist?
+-    if (std::strcmp(appArgs->inputName.c_str(), "") != 0)
++    if (!appArgs->inputNames.empty())
+     {
+         e = NvDlaStat(appArgs->inputPath.c_str(), &stat);
+         if (e != NvDlaSuccess)
+             ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "Input path does not exist: \"%s\"", appArgs->inputPath.c_str());
+ 
+-        imagePath = /* appArgs->inputPath + "/images/" + */appArgs->inputName;
+-        e = NvDlaStat(imagePath.c_str(), &stat);
+-        if (e != NvDlaSuccess)
+-            ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "Image path does not exist: \"%s/%s\"", imagePath.c_str());
++        for (size_t index = 0; index < appArgs->inputNames.size(); ++index)
++        {
++            imagePath = appArgs->inputNames[index];
++            e = NvDlaStat(imagePath.c_str(), &stat);
++            if (e != NvDlaSuccess)
++                ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter,
++                                     "Image path does not exist: \"%s\"",
++                                     imagePath.c_str());
++        }
+     }
+ 
+     return NvDlaSuccess;
+@@ -161,7 +166,7 @@ int main(int argc, char* argv[])
+                 break;
+             }
+ 
+-            testAppArgs.inputName = std::string(argv[++ii]);
++            testAppArgs.inputNames.push_back(std::string(argv[++ii]));
+         }
+         else if (std::strcmp(arg, "--loadable") == 0)
+         {
+@@ -256,6 +261,11 @@ int main(int argc, char* argv[])
+         showHelp = true;
+         missingArg = true;
+     }
++    if (testAppArgs.inputNames.empty() && !serverMode)
++    {
++        showHelp = true;
++        missingArg = true;
++    }
+ 
+     if (showHelp)
+     {
+@@ -263,7 +273,7 @@ int main(int argc, char* argv[])
+         NvDlaDebugPrintf("where options include:\n");
+         NvDlaDebugPrintf("    -h                    print this help message\n");
+         NvDlaDebugPrintf("    -s                    launch test in server mode\n");
+-        NvDlaDebugPrintf("    --image <file>        input jpg/pgm file\n");
++        NvDlaDebugPrintf("    --image <file>        input jpg/pgm file (repeatable)\n");
+         NvDlaDebugPrintf("    --normalize <value>   normalize value for input image\n");
+         NvDlaDebugPrintf("    --mean <value>        comma separated mean value for input image\n");
+         NvDlaDebugPrintf("    --rawdump             dump raw dimg data\n");
+-- 
+2.43.0
+
