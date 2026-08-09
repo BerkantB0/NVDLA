@@ -17,6 +17,8 @@ from .lenet import (
     fetch_lenet_sources,
 )
 from .lockcheck import run_lock_check
+from .input_sets import build_multi_image_workloads, fetch_multi_image_sources
+from .input_variation import import_input_variation_archives
 from .petalinux import run_petalinux_dts
 from .petalinux_rootfs import run_petalinux_rootfs_audit
 from .petalinux_sd import run_petalinux_sd_bundle
@@ -63,6 +65,15 @@ def main(argv: list[str] | None = None) -> int:
 
     workloads = sub.add_parser("workload-generate", help="Generate deterministic workload inputs/goldens")
     workloads.add_argument("--out", required=True, type=Path)
+
+    input_sources = sub.add_parser("input-set-sources", help="Fetch pinned multi-image input sources")
+    input_sources.add_argument("--lock", required=True, type=Path)
+    input_sources.add_argument("--sources-dir", required=True, type=Path)
+
+    input_workloads = sub.add_parser("input-set-workloads", help="Build deterministic 20-image inputs")
+    input_workloads.add_argument("--lock", required=True, type=Path)
+    input_workloads.add_argument("--sources-dir", required=True, type=Path)
+    input_workloads.add_argument("--out", required=True, type=Path)
 
     abi = sub.add_parser("abi-check", help="Compare NVDLA KMD and UMD ioctl headers")
     abi.add_argument("--source", required=True, type=Path)
@@ -163,6 +174,13 @@ def main(argv: list[str] | None = None) -> int:
     performance.add_argument("--archive", required=True, action="append", type=Path)
     performance.add_argument("--out", required=True, type=Path)
 
+    input_variation = sub.add_parser(
+        "input-variation-import",
+        help="Analyze correctness-qualified multi20 NVDLA benchmark archives",
+    )
+    input_variation.add_argument("--archive", required=True, action="append", type=Path)
+    input_variation.add_argument("--out", required=True, type=Path)
+
     cpu_performance = sub.add_parser(
         "cpu-performance-import",
         help="Analyze one ARM CPU ONNX Runtime benchmark campaign",
@@ -212,6 +230,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "workload-generate":
         return generate_workloads(args.out)
+    if args.command == "input-set-sources":
+        return fetch_multi_image_sources(args.lock, args.sources_dir)
+    if args.command == "input-set-workloads":
+        return build_multi_image_workloads(args.lock, args.sources_dir, args.out)
     if args.command == "abi-check":
         return run_abi_check(args.source, args.out)
     if args.command == "report":
@@ -277,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "performance-import":
         return import_performance_archives(args.archive, args.out)
+    if args.command == "input-variation-import":
+        return import_input_variation_archives(args.archive, args.out)
     if args.command == "cpu-performance-import":
         return import_cpu_performance_archives(args.archive, args.out)
     if args.command == "campaign-report":

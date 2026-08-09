@@ -224,7 +224,7 @@ def _environment_evidence(root: Path, env: dict[str, str]) -> dict[str, Any]:
 
 def _read_profile(path: Path) -> dict[str, Any]:
     profile = read_json(path)
-    if int(profile.get("schema_version", 0)) != 2:
+    if int(profile.get("schema_version", 0)) not in {2, 3}:
         raise ValueError(f"{path}: unsupported performance profile schema")
     if profile.get("clock") != "CLOCK_MONOTONIC_RAW":
         raise ValueError(f"{path}: unsupported clock")
@@ -308,6 +308,8 @@ def _profile_rows(
                     "regime": regime,
                     "run": run_dir.name,
                     "sample_index": int(sample["index"]),
+                    "input_index": int(sample.get("input_index", 0)),
+                    "input_update_ns": int(sample.get("input_update_ns", 0)),
                     "latency_ns": latency_ns,
                     "runtime_execution_ns": runtime_execution_ns,
                     "output_extract_ns": int(sample["output_extract_ns"]),

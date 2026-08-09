@@ -62,6 +62,13 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("verified-xsa-rate", text)
         self.assertIn("CLOCK_EXPECTED_HZ", text)
         self.assertIn("outputs_consistent", text)
+        self.assertIn("--input-set {single|multi20}", text)
+        runtime_patch = (
+            ROOT / "patches" / "nvdla-sw" / "0018-umd-support-repeated-runtime-inputs.patch"
+        ).read_text(encoding="utf-8")
+        self.assertIn("sample.inputIndex", runtime_patch)
+        self.assertIn("classification-qualified-input-variation-pass", text)
+        self.assertIn("input-results.csv", text)
         self.assertIn("golden-output.dimg", text)
         self.assertIn("BENCH_CPU=2", text)
         self.assertIn("--rusage rusage.env", text)

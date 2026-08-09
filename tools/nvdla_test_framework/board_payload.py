@@ -106,6 +106,41 @@ def _relative_file_records(root: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _copy_image_input_set(source: Path, destination: Path) -> dict[str, Any]:
+    manifest = read_json(source / "manifest.json")
+    images = manifest.get("images")
+    expected = manifest.get("expected_indices")
+    if manifest.get("count") != 20 or not isinstance(images, list) or len(images) != 20:
+        raise ValueError(f"input set is incomplete: {source}")
+    if not isinstance(expected, dict):
+        raise ValueError(f"input set has no expected indices: {source}")
+
+    _copy_verified(
+        source / "images.txt",
+        destination / "images.txt",
+        manifest["image_list_sha256"],
+    )
+    _copy_verified(
+        source / expected["path"],
+        destination / expected["path"],
+        expected["sha256"],
+    )
+    for image in images:
+        _copy_verified(
+            source / image["path"],
+            destination / image["path"],
+            image["sha256"],
+        )
+    shutil.copyfile(source / "manifest.json", destination / "manifest.json")
+    return {
+        "path": destination.name,
+        "count": 20,
+        "manifest_sha256": sha256_file(destination / "manifest.json"),
+        "image_list_sha256": sha256_file(destination / "images.txt"),
+        "expected_indices_sha256": sha256_file(destination / expected["path"]),
+    }
+
+
 def _copy_cpu_onnx_workloads(source: Path, destination: Path) -> dict[str, Any]:
     manifest_path = source / "manifest.json"
     manifest = read_json(manifest_path)
@@ -145,7 +180,6 @@ def _copy_cpu_onnx_workloads(source: Path, destination: Path) -> dict[str, Any]:
                     destination_dir / "test_data_set_0" / record["path"],
                     record["sha256"],
                 )
-
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(manifest_path, destination / "manifest.json")
     return {
@@ -170,6 +204,7 @@ def build_board_payload(
     lenet_source = workloads_dir / "lenet_small"
     resnet_source = workloads_dir / "resnet50_small"
     cpu_onnx_source = workloads_dir / "cpu_onnx"
+    input_sets_source = workloads_dir / "input_sets"
     sdp_manifest = read_json(sdp_source / "generated-manifest.json")
     lenet_manifest = read_json(lenet_source / "generated-manifest.json")
     resnet_manifest = read_json(resnet_source / "generated-manifest.json")
@@ -280,6 +315,12 @@ def build_board_payload(
         "complexity": lenet_complexity,
         "tolerance": {"type": "exact"},
     }
+    lenet_payload_manifest["input_sets"] = {
+        "multi20": _copy_image_input_set(
+            input_sets_source / "lenet" / "multi20",
+            lenet_out / "multi20",
+        )
+    }
     write_json(lenet_out / "manifest.json", lenet_payload_manifest)
 
     resnet_loadable = resnet_manifest["loadable"]
@@ -354,6 +395,12 @@ def build_board_payload(
             ),
             "tensor_correctness": "exact DIMG match to source-built nv_small VP golden",
         },
+    }
+    resnet_payload_manifest["input_sets"] = {
+        "multi20": _copy_image_input_set(
+            input_sets_source / "resnet50" / "multi20",
+            resnet_out / "multi20",
+        )
     }
     write_json(resnet_out / "manifest.json", resnet_payload_manifest)
     cpu_onnx_payload = _copy_cpu_onnx_workloads(cpu_onnx_source, cpu_onnx_out)

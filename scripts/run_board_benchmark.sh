@@ -94,6 +94,7 @@ else
   LATEST=/tmp/nvdla-board-benchmark-latest.tar.gz
 fi
 NAME="${KIND}-${MODEL}"
+[[ " ${BENCHMARK_ARGS[*]} " == *" --input-set multi20 "* ]] && NAME="${NAME}-multi20"
 [[ " ${BENCHMARK_ARGS[*]} " == *" --power "* ]] && NAME="${NAME}-power"
 printf -v COMMAND '%q ' "${REMOTE[@]}"
 

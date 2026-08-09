@@ -206,6 +206,8 @@ def build_resnet50_small_workload(
 ) -> int:
     lock = read_json(lock_path)
     spec = _spec(lock_path)
+    previous_manifest_path = out_dir / "generated-manifest.json"
+    previous = read_json(previous_manifest_path) if previous_manifest_path.is_file() else {}
     source = _source_dir(lock_path, sources_dir)
     for item in spec["files"]:
         _verify(source / item["name"], item["sha256"])
@@ -363,9 +365,24 @@ def build_resnet50_small_workload(
         },
         "target": spec["target"],
     }
+    previous_oracle = previous.get("oracle", {}).get("nvdla_exact", {})
+    previous_output = previous_oracle.get("output", {})
+    golden_path = out_dir / str(previous_output.get("path", ""))
+    if (
+        previous_oracle.get("status") == "verified"
+        and previous.get("loadable", {}).get("sha256") == generated["loadable"]["sha256"]
+        and previous.get("image", {}).get("sha256") == generated["image"]["sha256"]
+        and golden_path.is_file()
+        and sha256_file(golden_path) == previous_output.get("sha256")
+    ):
+        generated["oracle"]["nvdla_exact"] = previous_oracle
+        generated["complexity"] = previous["complexity"]
     write_json(out_dir / "generated-manifest.json", generated)
     print(f"ResNet-50 nv_small workload ready: {out_dir}")
-    print("Exact NVDLA tensor oracle: pending source-built nv_small VP run")
+    print(
+        "Exact NVDLA tensor oracle: "
+        + ("preserved" if generated["oracle"]["nvdla_exact"]["status"] == "verified" else "pending")
+    )
     return 0
 
 

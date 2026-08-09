@@ -7,14 +7,14 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-onnxruntime sources-eigen cpu-model-workloads cpu-onnxruntime \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-input-sets sources-onnxruntime sources-eigen multi-image-workloads cpu-model-workloads cpu-onnxruntime \
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
         vp-reference vp-toolchain vp-kernel vp-rootfs vp-kmod vp-kmod-small vp-kmod-debug vp-runtime vp-test vp-lenet-full vp-lenet-small vp-lenet-small-workload vp-lenet-small-gate vp-lenet-small-stability vp-resnet50-small-workload vp-resnet50-small-golden vp-resnet50-small-golden-promote vp-resnet50-small-golden-start vp-resnet50-small-golden-status lenet-compare \
         vp-extmem-dtb vp-small-cmod vp-small-bin vp-small-cmod-docker vp-small-bin-docker vp-small-dtb \
         vp-small-config-audit vp-sdp-small-diagnostic vp-stock-sdp-control vp-trace-reference-small vp-trace-modern-small vp-trace-compare vp-trace-small-gate \
-        petalinux-smoke petalinux-project petalinux-cpu-sdk petalinux-cpu-runtime petalinux-dts petalinux-power petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report cpu-performance-report \
+        petalinux-smoke petalinux-project petalinux-cpu-sdk petalinux-cpu-runtime petalinux-dts petalinux-power petalinux-kmod petalinux-kmod-diagnostic petalinux-runtime petalinux-board-tools petalinux-image petalinux-rootfs-audit petalinux-package petalinux-sd-bundle petalinux-board-payload petalinux-board-collect performance-report input-variation-report cpu-performance-report \
         test report clean
 
 help:
@@ -37,6 +37,8 @@ help:
 	  '  make sources-vp      Fetch pinned nvdla/vp and nvdla/hw sources' \
 	  '  make sources-lenet   Fetch pinned LeNet/MNIST source files' \
 	  '  make sources-resnet50 Fetch pinned Caffe ResNet-50 source files' \
+	  '  make sources-input-sets Fetch pinned MNIST and Imagenette input archives' \
+	  '  make multi-image-workloads Build deterministic 20-image model inputs' \
 	  '  make sources-onnxruntime Fetch pinned ONNX Runtime source files' \
 	  '  make sources-eigen   Fetch pinned Eigen source files' \
 	  '  make cpu-model-workloads Convert and validate FP32/INT8 ONNX workloads' \
@@ -92,6 +94,7 @@ help:
 	  '  make petalinux-board-payload Build the hash-verified nv_small test payload' \
 	  '  make petalinux-board-collect Import a manual or SSH board evidence archive' \
 	  '  make performance-report Analyze one model benchmark campaign from ARCHIVES' \
+	  '  make input-variation-report Analyze multi20 NVDLA input sensitivity' \
 	  '  make cpu-performance-report Analyze one ARM CPU ONNX campaign from ARCHIVES' \
 	  '' \
 	  'Reports:' \
@@ -124,6 +127,12 @@ sources-lenet:
 
 sources-resnet50:
 	@$(PYTHON) -m nvdla_test_framework resnet50-sources --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}"
+
+sources-input-sets:
+	@$(PYTHON) -m nvdla_test_framework input-set-sources --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}"
+
+multi-image-workloads: sources-input-sets
+	@$(PYTHON) -m nvdla_test_framework input-set-workloads --lock repro.lock.json --sources-dir "$${SOURCES_DIR:-$(CURDIR)/.external/sources}" --out artifacts/workloads/input_sets
 
 sources-onnxruntime:
 	@scripts/fetch_sources.sh onnxruntime
@@ -345,7 +354,7 @@ petalinux-package:
 petalinux-sd-bundle:
 	@scripts/petalinux_sd_bundle.sh
 
-petalinux-board-payload: workloads vp-lenet-small-workload vp-resnet50-small-golden-promote cpu-model-workloads
+petalinux-board-payload: workloads vp-lenet-small-workload vp-resnet50-small-golden-promote cpu-model-workloads multi-image-workloads
 	@scripts/petalinux_board_payload.sh
 
 petalinux-board-collect:
@@ -357,6 +366,13 @@ performance-report:
 	for archive in "$$@"; do args="$$args --archive $$archive"; done; \
 	$(PYTHON) -m nvdla_test_framework performance-import $$args \
 		--out "$${PERFORMANCE_OUT:-artifacts/performance-report}"
+
+input-variation-report:
+	@test -n "$${ARCHIVES:-}" || { echo "Set ARCHIVES to multi20 benchmark tarballs" >&2; exit 2; }
+	@set -- $${ARCHIVES}; args=""; \
+	for archive in "$$@"; do args="$$args --archive $$archive"; done; \
+	$(PYTHON) -m nvdla_test_framework input-variation-import $$args \
+		--out "$${INPUT_VARIATION_OUT:-artifacts/input-variation-report}"
 
 cpu-performance-report:
 	@test -n "$${ARCHIVES:-}" || { echo "Set ARCHIVES to one CPU model/precision/thread campaign" >&2; exit 2; }

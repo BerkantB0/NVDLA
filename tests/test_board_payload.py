@@ -16,6 +16,7 @@ class BoardPayloadTests(unittest.TestCase):
         lenet = workloads / "lenet_small"
         resnet = workloads / "resnet50_small"
         cpu_onnx = workloads / "cpu_onnx"
+        input_sets = workloads / "input_sets"
         (sdp / "golden").mkdir(parents=True)
         lenet.mkdir(parents=True)
         resnet.mkdir(parents=True)
@@ -157,6 +158,44 @@ class BoardPayloadTests(unittest.TestCase):
                 },
             },
         )
+        for model_name, expected_name in (
+            ("lenet", "expected-labels.txt"),
+            ("resnet50", "expected-classes.txt"),
+        ):
+            set_dir = input_sets / model_name / "multi20"
+            images = []
+            for index in range(20):
+                image = set_dir / "images" / f"{index:02d}.jpg"
+                image.parent.mkdir(parents=True, exist_ok=True)
+                image.write_bytes(f"{model_name}-{index}".encode())
+                images.append(
+                    {
+                        "sequence": index,
+                        "path": f"images/{image.name}",
+                        "sha256": sha256_file(image),
+                    }
+                )
+            (set_dir / "images.txt").write_text(
+                "".join(f"{item['path']}\n" for item in images), encoding="ascii"
+            )
+            (set_dir / expected_name).write_text(
+                "".join(f"{index % 10}\n" for index in range(20)), encoding="ascii"
+            )
+            write_json(
+                set_dir / "manifest.json",
+                {
+                    "schema_version": 1,
+                    "name": "multi20",
+                    "model": model_name,
+                    "count": 20,
+                    "images": images,
+                    "image_list_sha256": sha256_file(set_dir / "images.txt"),
+                    "expected_indices": {
+                        "path": expected_name,
+                        "sha256": sha256_file(set_dir / expected_name),
+                    },
+                },
+            )
         cpu_models = []
         for model_name in ("lenet", "resnet50"):
             variants = {}
@@ -249,6 +288,17 @@ class BoardPayloadTests(unittest.TestCase):
             )
             self.assertTrue(
                 (root / "first" / "nvdla-tests" / "resnet50_small" / "loadable.nvdla").is_file()
+            )
+            self.assertTrue(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "lenet_small"
+                    / "multi20"
+                    / "images"
+                    / "00.jpg"
+                ).is_file()
             )
             self.assertTrue(
                 (

@@ -15,6 +15,7 @@ Latency options:
   --runtime-timeout-seconds N      Per-process watchdog timeout
   --benchmark-cpu {N|none}         Runtime CPU affinity (default: 2)
   --firmware-log                   Enable diagnostic firmware progress logging
+  --input-set {single|multi20}     Input sequence (default: single)
 
 Power options:
   --power                          Sample power during the steady phase
@@ -50,6 +51,7 @@ esac
 shift 2
 
 REGIME="all"
+INPUT_SET="single"
 POWER_SAMPLE=0
 FIRMWARE_LOG=0
 BENCH_CPU=2
@@ -109,7 +111,7 @@ while [ "$#" -gt 0 ]; do
             FIRMWARE_LOG=1
             shift
             ;;
-        --regime|--cold-starts|--warm-starts|--warmups|--steady-samples|\
+        --regime|--input-set|--cold-starts|--warm-starts|--warmups|--steady-samples|\
         --settle-seconds|--runtime-timeout-seconds|--benchmark-cpu|\
         --power-idle-seconds|--power-interval-ms|--power-sampler-cpu)
             mark_option "$option"
@@ -119,6 +121,7 @@ while [ "$#" -gt 0 ]; do
             value="$2"
             case "$option" in
                 --regime) REGIME="$value" ;;
+                --input-set) INPUT_SET="$value" ;;
                 --cold-starts) COLD_STARTS="$value" ;;
                 --warm-starts) WARM_STARTS="$value" ;;
                 --warmups) WARMUPS="$value" ;;
@@ -156,6 +159,16 @@ fi
 case "$REGIME" in
     all|cold|warm|steady) ;;
     *) fail_usage "--regime must be all, cold, warm, or steady" ;;
+esac
+case "$INPUT_SET" in
+    single) ;;
+    multi20)
+        [ "$REGIME" = "steady" ] || fail_usage "--input-set multi20 requires --regime steady"
+        [ $((WARMUPS % 20)) -eq 0 ] || fail_usage "multi20 warmups must be divisible by 20"
+        [ "$STEADY_SAMPLES" -gt 0 ] && [ $((STEADY_SAMPLES % 20)) -eq 0 ] \
+            || fail_usage "multi20 steady samples must be a positive multiple of 20"
+        ;;
+    *) fail_usage "--input-set must be single or multi20" ;;
 esac
 if [ "$POWER_SAMPLE" -eq 0 ] && [ "$POWER_OPTIONS_SET" -eq 1 ]; then
     fail_usage "power tuning options require --power"
@@ -205,6 +218,21 @@ if [ "$RUNTIME_TIMEOUT" -eq 0 ]; then
 fi
 if [ ! -f "$LOADABLE" ] || [ ! -f "$INPUT" ] || [ ! -f "$GOLDEN" ]; then
     fail_usage "benchmark workload is incomplete: $WORKLOAD"
+fi
+if [ "$INPUT_SET" = "multi20" ]; then
+    INPUT_SET_ROOT="$WORKLOAD/multi20"
+    INPUT_LIST="$INPUT_SET_ROOT/images.txt"
+    if [ "$MODEL" = "lenet" ]; then
+        EXPECTED_INDICES="$INPUT_SET_ROOT/expected-labels.txt"
+    else
+        EXPECTED_INDICES="$INPUT_SET_ROOT/expected-classes.txt"
+    fi
+    [ -f "$INPUT_LIST" ] && [ -f "$EXPECTED_INDICES" ] \
+        || fail_usage "multi20 input set is incomplete: $INPUT_SET_ROOT"
+    [ "$(wc -l <"$INPUT_LIST" | tr -d ' ')" -eq 20 ] \
+        || fail_usage "multi20 image list must contain 20 entries"
+    [ "$(wc -l <"$EXPECTED_INDICES" | tr -d ' ')" -eq 20 ] \
+        || fail_usage "multi20 expected-index list must contain 20 entries"
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -339,6 +367,7 @@ finish() {
         echo "benchmark_interface=cli-v1"
         echo "model=$MODEL"
         echo "regime=$REGIME"
+        echo "input_set=$INPUT_SET"
         echo "status=$STATUS"
         echo "classification=$CLASSIFICATION"
         echo "timestamp_utc=$STAMP"
@@ -436,6 +465,11 @@ capture software-hashes.txt sha256sum \
     /usr/bin/nvdla-power-sampler \
     "$LOADABLE" "$INPUT" "$GOLDEN" \
     "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS"
+if [ "$INPUT_SET" = "multi20" ]; then
+    sha256sum "$INPUT_SET_ROOT/manifest.json" "$INPUT_LIST" "$EXPECTED_INDICES" \
+        "$INPUT_SET_ROOT"/images/* >>"$OUT/software-hashes.txt"
+    cp "$INPUT_SET_ROOT/manifest.json" "$OUT/input-set-manifest.json"
+fi
 MODULE_PATH="$(modinfo -n opendla 2>/dev/null || true)"
 if [ -n "$MODULE_PATH" ] && [ -f "$MODULE_PATH" ]; then
     sha256sum "$MODULE_PATH" >"$OUT/module-hash.txt"
@@ -553,6 +587,77 @@ verify_output() {
     echo "exact-pass" >"$run_dir/verification.txt"
 }
 
+verify_multi_output() {
+    run_dir="$1"
+    results="$run_dir/input-results.csv"
+    echo "input_index,expected_index,predicted_index,acceptance,output_sha256" >"$results"
+    index=0
+    while [ "$index" -lt 20 ]; do
+        output="$run_dir/$(printf 'output-%04d.dimg' "$index")"
+        expected="$(sed -n "$((index + 1))p" "$EXPECTED_INDICES")"
+        if [ ! -f "$output" ]; then
+            echo "missing-output-$index" >"$run_dir/verification.txt"
+            return 1
+        fi
+        predicted="$(awk '
+            {
+                for (field = 1; field <= NF; field++) {
+                    value = $field + 0
+                    if (!seen || value > best) {
+                        best = value
+                        best_index = count
+                    }
+                    seen = 1
+                    count++
+                }
+            }
+            END { print best_index }
+        ' "$output")"
+        acceptance="top1"
+        if [ "$MODEL" = "resnet50" ]; then
+            acceptance="top5"
+            if ! awk -v expected="$expected" '
+                {
+                    for (field = 1; field <= NF; field++) {
+                        value = $field + 0
+                        class_index = count++
+                        for (rank = 1; rank <= 5; rank++) {
+                            if (!(rank in best) || value > best[rank]) {
+                                for (move = 5; move > rank; move--) {
+                                    best[move] = best[move - 1]
+                                    best_index[move] = best_index[move - 1]
+                                }
+                                best[rank] = value
+                                best_index[rank] = class_index
+                                break
+                            }
+                        }
+                    }
+                }
+                END {
+                    for (rank = 1; rank <= 5; rank++)
+                        if (best_index[rank] == expected)
+                            found = 1
+                    exit(!found)
+                }
+            ' "$output"; then
+                echo "classification-mismatch-$index" >"$run_dir/verification.txt"
+                return 1
+            fi
+        elif [ "$predicted" != "$expected" ]; then
+            echo "classification-mismatch-$index" >"$run_dir/verification.txt"
+            return 1
+        fi
+        digest="$(sha256sum "$output" | awk '{print $1}')"
+        echo "$index,$expected,$predicted,$acceptance,$digest" >>"$results"
+        index=$((index + 1))
+    done
+    grep -q '"input_count":[[:space:]]*20' "$run_dir/profile.json" || return 1
+    grep -q '"outputs_consistent":[[:space:]]*true' "$run_dir/profile.json" || return 1
+    sha256sum "$run_dir"/output-*.dimg >"$run_dir/output.sha256"
+    echo "classification-pass" >"$run_dir/verification.txt"
+}
+
 run_profile() {
     regime="$1"
     index="$2"
@@ -574,12 +679,18 @@ run_profile() {
         set -- "$@" --timeout-seconds "$RUNTIME_TIMEOUT" -- \
             env NVDLA_DEVICE_NODE="$NODE" LD_LIBRARY_PATH=/usr/lib \
             nvdla_runtime \
-                --loadable "$LOADABLE" \
-                --image "$INPUT" \
-                --rawdump \
-                --profile-json profile.json \
-                --warmup "$warmups" \
-                --iterations "$iterations"
+                --loadable "$LOADABLE"
+        if [ "$INPUT_SET" = "multi20" ]; then
+            while IFS= read -r image; do
+                set -- "$@" --image "$INPUT_SET_ROOT/$image"
+            done <"$INPUT_LIST"
+        else
+            set -- "$@" --image "$INPUT"
+        fi
+        set -- "$@" --rawdump \
+            --profile-json profile.json \
+            --warmup "$warmups" \
+            --iterations "$iterations"
         "$@"
     ) >"$run_dir/runtime.stdout.log" 2>"$run_dir/runtime.stderr.log"
     runtime_status=$?
@@ -595,7 +706,11 @@ run_profile() {
         echo "runtime-failure" >"$run_dir/verification.txt"
         return 1
     fi
-    verify_output "$run_dir"
+    if [ "$INPUT_SET" = "multi20" ]; then
+        verify_multi_output "$run_dir"
+    else
+        verify_output "$run_dir"
+    fi
 }
 
 run_many() {
@@ -684,7 +799,13 @@ case "$REGIME" in all|cold) run_many cold "$COLD_STARTS" ;; esac
 case "$REGIME" in all|warm) run_many warm "$WARM_STARTS" ;; esac
 case "$REGIME" in
     all|steady)
-        cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime /usr/lib/libnvdla_runtime.so >/dev/null
+        if [ "$INPUT_SET" = "multi20" ]; then
+            cat "$LOADABLE" "$INPUT_SET_ROOT"/images/* /usr/bin/nvdla_runtime \
+                /usr/lib/libnvdla_runtime.so >/dev/null
+        else
+            cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime \
+                /usr/lib/libnvdla_runtime.so >/dev/null
+        fi
         if [ "$POWER_SAMPLE" -eq 1 ]; then
             prepare_power_sampling
             if ! start_power_sampling; then
@@ -714,5 +835,9 @@ capture_temperatures after
 capture loadavg-after.txt cat /proc/loadavg
 capture meminfo-after.txt cat /proc/meminfo
 STATUS=0
-CLASSIFICATION="exact-performance-pass"
+if [ "$INPUT_SET" = "multi20" ]; then
+    CLASSIFICATION="classification-qualified-input-variation-pass"
+else
+    CLASSIFICATION="exact-performance-pass"
+fi
 finish
