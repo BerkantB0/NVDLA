@@ -289,7 +289,7 @@ def build_multi_image_workloads(lock_path: Path, sources_dir: Path, out_dir: Pat
                     {"name": item["name"], "sha256": item["sha256"].lower()}
                     for item in spec["files"]
                 ],
-                "selection": spec["selection"],
+                "selection": spec.get("selection", {}),
                 "sets": {
                     "lenet": {"path": "lenet/multi20", "count": 20},
                     "resnet50": {"path": "resnet50/multi20", "count": 20},
