@@ -1,0 +1,627 @@
+#!/usr/bin/env python3
+"""Create the concise NVDLA evaluation briefing PDF."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+
+from reportlab.lib import colors
+from reportlab.lib.colors import HexColor
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
+
+
+PAGE_W, PAGE_H = landscape(A4)
+MARGIN = 17 * mm
+
+INK = HexColor("#18212B")
+MUTED = HexColor("#62717C")
+GRID = HexColor("#DDE4E2")
+PAPER = HexColor("#FFFFFF")
+PANEL = HexColor("#F4F7F6")
+NVDLA = HexColor("#0D8978")
+CPU = HexColor("#B44B5A")
+GOLD = HexColor("#D99A2B")
+GREEN = HexColor("#2F8F5B")
+BLUE = HexColor("#3978A8")
+PALE_GREEN = HexColor("#E8F4EF")
+PALE_GOLD = HexColor("#FAF1DE")
+
+
+def fmt_ms(value: float) -> str:
+    if value < 10:
+        return f"{value:.3f} ms"
+    return f"{value:.1f} ms"
+
+
+def fmt_rate(value: float) -> str:
+    if value >= 100:
+        return f"{value:.0f} img/s"
+    if value >= 10:
+        return f"{value:.1f} img/s"
+    return f"{value:.2f} img/s"
+
+
+def paragraph(c: canvas.Canvas, text: str, x: float, y_top: float, width: float,
+              size: float = 10, leading: float | None = None,
+              color=INK, font: str = "Helvetica", max_height: float = 80 * mm) -> float:
+    style = ParagraphStyle(
+        "brief",
+        fontName=font,
+        fontSize=size,
+        leading=leading or size * 1.25,
+        textColor=color,
+        alignment=TA_LEFT,
+        spaceAfter=0,
+    )
+    p = Paragraph(text, style)
+    _, height = p.wrap(width, max_height)
+    p.drawOn(c, x, y_top - height)
+    return height
+
+
+def page_header(c: canvas.Canvas, section: str, title: str, page: int) -> None:
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawString(MARGIN, PAGE_H - 12 * mm, section.upper())
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 8.5)
+    c.drawRightString(PAGE_W - MARGIN, PAGE_H - 12 * mm, f"NVDLA evaluation brief  |  {page}/6")
+    c.setStrokeColor(GRID)
+    c.setLineWidth(0.7)
+    c.line(MARGIN, PAGE_H - 15 * mm, PAGE_W - MARGIN, PAGE_H - 15 * mm)
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 24)
+    c.drawString(MARGIN, PAGE_H - 27 * mm, title)
+
+
+def footer(c: canvas.Canvas, text: str = "Source: balanced final campaign, five fresh boots per cohort") -> None:
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 7.5)
+    c.drawString(MARGIN, 8 * mm, text)
+    c.drawRightString(PAGE_W - MARGIN, 8 * mm, "Correctness-qualified samples; no outliers discarded")
+
+
+def panel(c: canvas.Canvas, x: float, y: float, w: float, h: float, fill=PANEL,
+          stroke=GRID) -> None:
+    c.setFillColor(fill)
+    c.setStrokeColor(stroke)
+    c.setLineWidth(0.6)
+    c.roundRect(x, y, w, h, 3 * mm, fill=1, stroke=1)
+
+
+def metric_card(c: canvas.Canvas, x: float, y: float, w: float, h: float,
+                value: str, label: str, note: str, accent) -> None:
+    panel(c, x, y, w, h, PAPER, GRID)
+    c.setFillColor(accent)
+    c.rect(x, y, 3 * mm, h, fill=1, stroke=0)
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 23)
+    c.drawString(x + 8 * mm, y + h - 12 * mm, value)
+    paragraph(c, label, x + 8 * mm, y + h - 18 * mm, w - 14 * mm,
+              size=9.5, leading=11, font="Helvetica-Bold")
+    paragraph(c, note, x + 8 * mm, y + 10 * mm, w - 14 * mm,
+              size=7.5, leading=9, color=MUTED)
+
+
+def legend(c: canvas.Canvas, x: float, y: float) -> None:
+    for label, color in (("NVDLA INT8", NVDLA), ("ARM CPU FP32, 4 threads", CPU)):
+        c.setFillColor(color)
+        c.circle(x + 3, y + 3, 3, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica", 8.5)
+        c.drawString(x + 10, y, label)
+        x += 39 * mm if label.startswith("NVDLA") else 0
+
+
+def draw_summary(c: canvas.Canvas, data: dict) -> None:
+    c.setFillColor(PAPER)
+    c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
+    c.setFillColor(NVDLA)
+    c.rect(0, PAGE_H - 10 * mm, PAGE_W, 10 * mm, fill=1, stroke=0)
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 28)
+    c.drawString(MARGIN, PAGE_H - 29 * mm, "NVDLA on PetaLinux 2024.1")
+    c.setFont("Helvetica", 15)
+    c.setFillColor(MUTED)
+    c.drawString(MARGIN, PAGE_H - 39 * mm, "Correctness, latency, throughput, and monitored energy at a glance")
+
+    x_gap = 7 * mm
+    y_gap = 7 * mm
+    w = (PAGE_W - 2 * MARGIN - 2 * x_gap) / 3
+    h = 43 * mm
+    y_top = PAGE_H - 54 * mm
+    cards = [
+        ("100 / 100", "LeNet stability", "One boot; no module reload or PL reset", GREEN),
+        ("246 / 246", "ResNet-50 hardware layers", "Exact match to source-built nv_small VP golden", BLUE),
+        ("1.30x", "ResNet-50 execution speedup", "507.7 ms NVDLA vs 661.8 ms CPU", NVDLA),
+        ("-27.7%", "ResNet-50 active energy", "1.781 J NVDLA vs 2.463 J CPU", GOLD),
+        ("-77.6%", "ResNet-50 incremental energy", "0.134 J NVDLA vs 0.597 J CPU", GOLD),
+        ("40", "Selected benchmark sessions", "Eight balanced cohorts; five fresh boots each", BLUE),
+    ]
+    for i, item in enumerate(cards):
+        row, col = divmod(i, 3)
+        metric_card(c, MARGIN + col * (w + x_gap), y_top - (row + 1) * h - row * y_gap,
+                    w, h, *item)
+
+    c.setFillColor(PALE_GOLD)
+    c.roundRect(MARGIN, 16 * mm, PAGE_W - 2 * MARGIN, 16 * mm, 3 * mm, fill=1, stroke=0)
+    paragraph(
+        c,
+        "<b>Comparison boundary:</b> deployed-system comparison of nv_small NVDLA INT8 against ONNX Runtime FP32 on four Cortex-A53 cores. Power is the sum of monitored PS and PL rails, not external 12 V board input.",
+        MARGIN + 5 * mm,
+        28 * mm,
+        PAGE_W - 2 * MARGIN - 10 * mm,
+        size=8.5,
+        leading=10.5,
+    )
+
+
+def draw_correctness(c: canvas.Canvas) -> None:
+    page_header(c, "Evaluation coverage", "Correctness before performance", 2)
+    footer(c, "Sources: VP configuration audit, differential trace, board stability and ResNet-50 artifacts")
+
+    x = MARGIN
+    y0 = 25 * mm
+    ladder_w = 52 * mm
+    ladder_h = 138 * mm
+    panel(c, x, y0, ladder_w, ladder_h, PAPER, GRID)
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(x + 7 * mm, y0 + ladder_h - 12 * mm, "Layered acceptance")
+    steps = ["Pinned inputs", "ABI and build", "Verified nv_small VP", "Driver probe", "GEM mapping",
+             "IRQ + engine completion", "Exact tensor + repeat"]
+    top = y0 + ladder_h - 27 * mm
+    for i, step in enumerate(steps):
+        yy = top - i * 16 * mm
+        if i < len(steps) - 1:
+            c.setStrokeColor(GRID)
+            c.setLineWidth(2)
+            c.line(x + 12 * mm, yy - 10 * mm, x + 12 * mm, yy - 16 * mm)
+        c.setFillColor(PALE_GREEN)
+        c.circle(x + 12 * mm, yy, 5 * mm, fill=1, stroke=0)
+        c.setFillColor(GREEN)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(x + 12 * mm, yy - 3, "OK")
+        paragraph(c, step, x + 21 * mm, yy + 4 * mm, ladder_w - 27 * mm,
+                  size=8.5, leading=10, font="Helvetica-Bold")
+
+    model_x = x + ladder_w + 8 * mm
+    model_w = PAGE_W - MARGIN - model_x
+    model_h = 65 * mm
+    for j, (name, subtitle, accent) in enumerate((
+        ("LeNet / MNIST", "Fast repeat oracle", NVDLA),
+        ("ResNet-50", "Large multi-engine graph", BLUE),
+    )):
+        y = y0 + (1 - j) * (model_h + 8 * mm)
+        panel(c, model_x, y, model_w, model_h, PAPER, GRID)
+        c.setFillColor(accent)
+        c.rect(model_x, y, 4 * mm, model_h, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 17)
+        c.drawString(model_x + 10 * mm, y + model_h - 13 * mm, name)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 9)
+        c.drawString(model_x + 10 * mm, y + model_h - 20 * mm, subtitle)
+        if j == 0:
+            metrics = [
+                ("Input", "1 x 1 x 28 x 28"),
+                ("Loadable", "0.446 MB"),
+                ("Hardware layers", "10"),
+                ("Engine mix", "4 Conv / 4 SDP / 2 PDP"),
+                ("VP", "Exact output"),
+                ("Board", "Exact; 100/100 repeats"),
+            ]
+            output = "Output: 0 2 0 0 0 0 0 124 0 0"
+        else:
+            metrics = [
+                ("Input", "1 x 3 x 224 x 224"),
+                ("Loadable", "25.77 MB"),
+                ("Hardware layers", "246"),
+                ("Engine mix", "114 Conv / 130 SDP / 2 PDP"),
+                ("VP", "246/246; golden established"),
+                ("Board", "246/246; exact hash"),
+            ]
+            output = "Output: 1,000 signed values; SHA-256 842d34f..."
+        col_w = (model_w - 20 * mm) / 3
+        for i, (label, value) in enumerate(metrics):
+            row, col = divmod(i, 3)
+            xx = model_x + 10 * mm + col * col_w
+            yy = y + (36 * mm if row == 0 else 20 * mm)
+            c.setFillColor(MUTED)
+            c.setFont("Helvetica", 7.5)
+            c.drawString(xx, yy, label.upper())
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 8.2)
+            c.drawString(xx, yy - 9, value)
+        c.setFillColor(PALE_GREEN)
+        c.roundRect(model_x + 10 * mm, y + 2 * mm, model_w - 20 * mm, 8 * mm, 2 * mm, fill=1, stroke=0)
+        c.setFillColor(GREEN)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(model_x + 14 * mm, y + 4.7 * mm, output)
+
+
+def draw_latency(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "Latency", "Cold, warm, and loaded-context execution", 3)
+    footer(c, "Primary latency uses unpowered cohorts; points are medians across five boot-session medians")
+    legend(c, PAGE_W - MARGIN - 83 * mm, PAGE_H - 30 * mm)
+
+    x0 = 63 * mm
+    x1 = PAGE_W - MARGIN - 8 * mm
+    chart_top = PAGE_H - 48 * mm
+    chart_bottom = 48 * mm
+    min_v, max_v = 0.5, 6000.0
+
+    def xpos(value: float) -> float:
+        return x0 + (math.log10(value) - math.log10(min_v)) / (math.log10(max_v) - math.log10(min_v)) * (x1 - x0)
+
+    for tick in (1, 10, 100, 1000, 5000):
+        xx = xpos(tick)
+        c.setStrokeColor(GRID)
+        c.setLineWidth(0.6)
+        c.line(xx, chart_bottom, xx, chart_top)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.5)
+        c.drawCentredString(xx, chart_bottom - 4 * mm, f"{tick:g} ms")
+
+    rows = [
+        ("LeNet", "Cold", "lenet", "cold"),
+        ("LeNet", "Warm", "lenet", "warm"),
+        ("LeNet", "Loaded", "lenet", "steady"),
+        ("ResNet-50", "Cold", "resnet50", "cold"),
+        ("ResNet-50", "Warm", "resnet50", "warm"),
+        ("ResNet-50", "Loaded", "resnet50", "steady"),
+    ]
+    row_gap = (chart_top - chart_bottom) / len(rows)
+    for i, (model_label, regime_label, model, regime) in enumerate(rows):
+        y = chart_top - (i + 0.55) * row_gap
+        if i == 3:
+            c.setStrokeColor(GRID)
+            c.setLineWidth(1)
+            c.line(MARGIN, y + row_gap * 0.55, x1, y + row_gap * 0.55)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8.5)
+        c.drawRightString(x0 - 16 * mm, y + 3, model_label)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.5)
+        c.drawRightString(x0 - 2 * mm, y + 3, regime_label)
+        values = []
+        for stack, color, dy in (("nvdla", NVDLA, 5), ("cpu", CPU, -5)):
+            stat = data["models"][model][stack]["latency"][regime]
+            val = stat["session_median_ms"]
+            lo, hi = stat["ci_lower_ms"], stat["ci_upper_ms"]
+            values.append(val)
+            c.setStrokeColor(color)
+            c.setLineWidth(1.6)
+            c.line(xpos(lo), y + dy, xpos(hi), y + dy)
+            c.setFillColor(color)
+            c.circle(xpos(val), y + dy, 3.2, fill=1, stroke=0)
+            label = fmt_ms(val)
+            xx = xpos(val)
+            if xx > x1 - 32 * mm:
+                c.setFillColor(color)
+                c.setFont("Helvetica-Bold", 7.5)
+                c.drawRightString(xx - 5, y + dy - 2.5, label)
+            else:
+                c.setFillColor(color)
+                c.setFont("Helvetica-Bold", 7.5)
+                c.drawString(xx + 5, y + dy - 2.5, label)
+        c.setStrokeColor(HexColor("#AEB8B5"))
+        c.setLineWidth(0.8)
+        c.line(xpos(min(values)), y, xpos(max(values)), y)
+
+    ratios = [
+        ("LeNet cold", 6.28), ("LeNet warm", 9.78), ("LeNet loaded", 0.53),
+        ("ResNet cold", 3.67), ("ResNet warm", 3.56), ("ResNet loaded", 1.30),
+    ]
+    bx = MARGIN
+    by = 16 * mm
+    bw = (PAGE_W - 2 * MARGIN - 5 * 4 * mm) / 6
+    for i, (label, ratio) in enumerate(ratios):
+        xx = bx + i * (bw + 4 * mm)
+        fill = PALE_GREEN if ratio > 1 else PALE_GOLD
+        panel(c, xx, by, bw, 23 * mm, fill, fill)
+        c.setFillColor(GREEN if ratio > 1 else GOLD)
+        c.setFont("Helvetica-Bold", 15)
+        c.drawCentredString(xx + bw / 2, by + 12 * mm, f"{ratio:.2f}x")
+        c.setFillColor(INK)
+        c.setFont("Helvetica", 7.2)
+        c.drawCentredString(xx + bw / 2, by + 5 * mm, label)
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 7.2)
+    c.drawString(MARGIN, 42 * mm, "CPU time / NVDLA time: above 1.0 favors NVDLA; below 1.0 favors CPU")
+
+
+def draw_throughput(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 4)
+    footer(c, "Throughput is reciprocal mean latency, not concurrent pipelined throughput")
+    legend(c, PAGE_W - MARGIN - 83 * mm, PAGE_H - 30 * mm)
+
+    left = MARGIN
+    mid = PAGE_W / 2 + 2 * mm
+    top = PAGE_H - 45 * mm
+    panel(c, left, 24 * mm, PAGE_W / 2 - MARGIN - 6 * mm, top - 24 * mm, PAPER, GRID)
+    panel(c, mid, 24 * mm, PAGE_W / 2 - MARGIN - 6 * mm, top - 24 * mm, PAPER, GRID)
+
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(left + 7 * mm, top - 10 * mm, "Loaded-context throughput")
+    c.drawString(mid + 7 * mm, top - 10 * mm, "Workload scale and operation mix")
+
+    for j, model in enumerate(("lenet", "resnet50")):
+        label = "LeNet" if model == "lenet" else "ResNet-50"
+        y = top - 35 * mm - j * 53 * mm
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(left + 8 * mm, y + 15 * mm, label)
+        rates = {}
+        for stack in ("nvdla", "cpu"):
+            mean_ms = data["models"][model][stack]["latency"]["steady"]["mean_ms"]
+            rates[stack] = 1000.0 / mean_ms
+        max_rate = max(rates.values()) * 1.08
+        for i, (stack, color) in enumerate((("nvdla", NVDLA), ("cpu", CPU))):
+            yy = y + 2 * mm - i * 9 * mm
+            width = 71 * mm * rates[stack] / max_rate
+            c.setFillColor(color)
+            c.roundRect(left + 31 * mm, yy, width, 5.5 * mm, 1.5 * mm, fill=1, stroke=0)
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(left + 33 * mm + width, yy + 1, fmt_rate(rates[stack]))
+
+    complexity = {
+        "lenet": {"size": "0.446 MB", "hwls": 10, "ops": [("Conv", 4, NVDLA), ("SDP", 4, GOLD), ("PDP", 2, BLUE)]},
+        "resnet50": {"size": "25.77 MB", "hwls": 246, "ops": [("Conv", 114, NVDLA), ("SDP", 130, GOLD), ("PDP", 2, BLUE)]},
+    }
+    for j, model in enumerate(("lenet", "resnet50")):
+        info = complexity[model]
+        label = "LeNet" if model == "lenet" else "ResNet-50"
+        y = top - 28 * mm - j * 56 * mm
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(mid + 8 * mm, y, label)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 8)
+        c.drawString(mid + 8 * mm, y - 7 * mm, f"{info['size']} loadable  |  {info['hwls']} hardware layers")
+        bar_x, bar_y, bar_w = mid + 8 * mm, y - 19 * mm, 101 * mm
+        total = sum(v for _, v, _ in info["ops"])
+        cursor = bar_x
+        for name, value, color in info["ops"]:
+            width = bar_w * value / total
+            c.setFillColor(color)
+            c.rect(cursor, bar_y, width, 8 * mm, fill=1, stroke=0)
+            if width > 12 * mm:
+                c.setFillColor(PAPER)
+                c.setFont("Helvetica-Bold", 7.5)
+                c.drawCentredString(cursor + width / 2, bar_y + 2.7 * mm, f"{name} {value}")
+            cursor += width
+        if model == "resnet50":
+            c.setFillColor(BLUE)
+            c.circle(bar_x + bar_w + 4 * mm, bar_y + 4 * mm, 2.3, fill=1, stroke=0)
+            c.setFillColor(INK)
+            c.setFont("Helvetica", 7)
+            c.drawString(bar_x + bar_w + 8 * mm, bar_y + 2.2 * mm, "PDP 2")
+
+    c.setFillColor(PALE_GOLD)
+    c.roundRect(mid + 8 * mm, 32 * mm, 107 * mm, 19 * mm, 2 * mm, fill=1, stroke=0)
+    paragraph(c, "ResNet-50 has <b>24.6x</b> more hardware layers and a <b>57.8x</b> larger loadable. Its larger execution graph amortizes fixed submission and interrupt costs.",
+              mid + 13 * mm, 47 * mm, 97 * mm, size=8.5, leading=10.5)
+
+
+def draw_power(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "Power and energy", "Monitored PS + PL rails during inference", 5)
+    footer(c, "Power cohorts are separate from primary latency cohorts; 50 ms sampling with endpoint capture")
+    legend(c, PAGE_W - MARGIN - 83 * mm, PAGE_H - 30 * mm)
+
+    chart_y = 99 * mm
+    chart_h = 58 * mm
+    group_w = 76 * mm
+    centers = [MARGIN + 45 * mm, MARGIN + 135 * mm, MARGIN + 225 * mm]
+    titles = [
+        ("Active power", "watts"),
+        ("Active energy", "per inference"),
+        ("Incremental energy", "above idle, per inference"),
+    ]
+    for cx, (title, subtitle) in zip(centers, titles):
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 10.5)
+        c.drawCentredString(cx, chart_y + chart_h + 8 * mm, title)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.5)
+        c.drawCentredString(cx, chart_y + chart_h + 3.5 * mm, subtitle)
+
+    def metric(model: str, stack: str, key: str) -> float:
+        return data["models"][model][stack]["power"][key]["mean"]
+
+    # Active power, shared W scale.
+    max_power = 4.0
+    for m_i, model in enumerate(("lenet", "resnet50")):
+        gx = centers[0] - group_w / 2 + m_i * 39 * mm
+        for s_i, (stack, color) in enumerate((("nvdla", NVDLA), ("cpu", CPU))):
+            val = metric(model, stack, "active_watts")
+            bh = chart_h * val / max_power
+            bx = gx + s_i * 9 * mm
+            c.setFillColor(color)
+            c.roundRect(bx, chart_y, 7 * mm, bh, 1.2 * mm, fill=1, stroke=0)
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 7)
+            c.drawCentredString(bx + 3.5 * mm, chart_y + bh + 2 * mm, f"{val:.2f} W")
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.5)
+        c.drawCentredString(gx + 8 * mm, chart_y - 5 * mm, "LeNet" if model == "lenet" else "ResNet-50")
+
+    # Active and incremental energy use model-specific scales and labels.
+    for panel_i, key in enumerate(("active_joules_per_inference", "incremental_joules_per_inference"), start=1):
+        for m_i, model in enumerate(("lenet", "resnet50")):
+            vals = [metric(model, stack, key) for stack in ("nvdla", "cpu")]
+            scale = max(vals) * 1.15
+            gx = centers[panel_i] - group_w / 2 + m_i * 39 * mm
+            for s_i, (stack, color) in enumerate((("nvdla", NVDLA), ("cpu", CPU))):
+                val = vals[s_i]
+                bh = chart_h * val / scale
+                bx = gx + s_i * 9 * mm
+                c.setFillColor(color)
+                c.roundRect(bx, chart_y, 7 * mm, bh, 1.2 * mm, fill=1, stroke=0)
+                display = f"{val * 1000:.3f} mJ" if model == "lenet" else f"{val:.3f} J"
+                c.setFillColor(INK)
+                c.setFont("Helvetica-Bold", 6.8)
+                c.saveState()
+                c.translate(bx + 3.5 * mm, chart_y + bh + 2 * mm)
+                c.rotate(35)
+                c.drawString(0, 0, display)
+                c.restoreState()
+            c.setFillColor(MUTED)
+            c.setFont("Helvetica", 7.5)
+            c.drawCentredString(gx + 8 * mm, chart_y - 5 * mm, "LeNet" if model == "lenet" else "ResNet-50")
+
+    # Horizontal grid line and interpretation cards.
+    c.setStrokeColor(GRID)
+    c.line(MARGIN, chart_y, PAGE_W - MARGIN, chart_y)
+    cards = [
+        ("LeNet", "+10.7%", "active energy", "-35.3% incremental", PALE_GOLD, GOLD),
+        ("ResNet-50", "-27.7%", "active energy", "-77.6% incremental", PALE_GREEN, GREEN),
+    ]
+    card_w = (PAGE_W - 2 * MARGIN - 8 * mm) / 2
+    for i, (model, value, label, note, fill, accent) in enumerate(cards):
+        x = MARGIN + i * (card_w + 8 * mm)
+        y = 28 * mm
+        panel(c, x, y, card_w, 52 * mm, fill, fill)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x + 8 * mm, y + 38 * mm, model)
+        c.setFillColor(accent)
+        c.setFont("Helvetica-Bold", 23)
+        c.drawString(x + 8 * mm, y + 23 * mm, value)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x + 42 * mm, y + 27 * mm, label)
+        c.setFillColor(accent)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(x + 42 * mm, y + 17 * mm, note)
+        paragraph(c, "Active includes the complete monitored platform window; incremental subtracts driver-loaded idle.",
+                  x + 8 * mm, y + 12 * mm, card_w - 16 * mm, size=7.5, leading=9, color=MUTED)
+
+
+def draw_method(c: canvas.Canvas) -> None:
+    page_header(c, "Measurement design", "What was collected, and how to read it", 6)
+    footer(c, "Full provenance and raw samples remain in artifacts/final-reports and the selected session archives")
+
+    # Protocol flow.
+    flow_y = PAGE_H - 61 * mm
+    steps = [
+        ("1", "Fresh boot", "Unique Linux boot ID"),
+        ("2", "Settle + verify", "Clock, frequency, hashes"),
+        ("3", "Correctness gate", "Golden output + kernel health"),
+        ("4", "Measure", "Unpowered latency or powered batch"),
+        ("5", "Archive", "Raw profiles, rails, logs"),
+        ("6", "Aggregate", "Five session medians + 95% CI"),
+    ]
+    gap = 4 * mm
+    sw = (PAGE_W - 2 * MARGIN - 5 * gap) / 6
+    for i, (num, title, note) in enumerate(steps):
+        x = MARGIN + i * (sw + gap)
+        panel(c, x, flow_y - 27 * mm, sw, 27 * mm, PAPER, GRID)
+        c.setFillColor(NVDLA if i < 4 else BLUE)
+        c.circle(x + 8 * mm, flow_y - 8 * mm, 4 * mm, fill=1, stroke=0)
+        c.setFillColor(PAPER)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(x + 8 * mm, flow_y - 10.5 * mm, num)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8.2)
+        c.drawString(x + 15 * mm, flow_y - 9 * mm, title)
+        paragraph(c, note, x + 5 * mm, flow_y - 16 * mm, sw - 10 * mm,
+                  size=6.8, leading=8, color=MUTED)
+        if i < len(steps) - 1:
+            c.setStrokeColor(GRID)
+            c.setLineWidth(1.5)
+            c.line(x + sw, flow_y - 13.5 * mm, x + sw + gap, flow_y - 13.5 * mm)
+
+    # Metric inventory.
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(MARGIN, flow_y - 42 * mm, "Metric inventory")
+    inventory = [
+        ("Correctness", "Output hashes, exact tensors, engine sequence, IRQ deltas, repeat failures", GREEN),
+        ("Workload", "Input shape, loadable/model size, HWL count, per-engine operation count", BLUE),
+        ("Latency", "Cold deployment, warm deployment, loaded-context execution, runtime phases", NVDLA),
+        ("Throughput", "Images/s for every timing boundary; CPU/NVDLA latency ratios", NVDLA),
+        ("Power", "18 PS + PL rails, idle/active/incremental watts, integrated energy/inference", GOLD),
+        ("Environment", "Kernel, binary hashes, clock, CPU affinity/frequency/governor, boot ID", CPU),
+        ("Statistics", "Raw samples, mean/median, spread, percentiles, retained outliers, bootstrap CI", BLUE),
+        ("Evidence", "Serial, dmesg, runtime profiles, sensor samples, manifests, selection hashes", GREEN),
+    ]
+    inv_top = flow_y - 52 * mm
+    col_gap = 7 * mm
+    iw = (PAGE_W - 2 * MARGIN - col_gap) / 2
+    ih = 15 * mm
+    for i, (title, note, accent) in enumerate(inventory):
+        row, col = divmod(i, 2)
+        x = MARGIN + col * (iw + col_gap)
+        y = inv_top - (row + 1) * ih - row * 2 * mm
+        panel(c, x, y, iw, ih, PAPER, GRID)
+        c.setFillColor(accent)
+        c.rect(x, y, 2.5 * mm, ih, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8.2)
+        c.drawString(x + 7 * mm, y + 9 * mm, title)
+        paragraph(c, note, x + 31 * mm, y + 11.5 * mm, iw - 36 * mm,
+                  size=6.8, leading=8, color=MUTED)
+
+    c.setFillColor(PALE_GOLD)
+    c.roundRect(MARGIN, 15 * mm, PAGE_W - 2 * MARGIN, 14 * mm, 2 * mm, fill=1, stroke=0)
+    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus CPU FP32; monitored rails rather than wall input; five independent boots per final cohort.",
+              MARGIN + 5 * mm, 26 * mm, PAGE_W - 2 * MARGIN - 10 * mm,
+              size=8, leading=9.5)
+
+
+def build_pdf(source: Path, output: Path) -> None:
+    data = json.loads(source.read_text(encoding="utf-8"))
+    if data.get("selected_sessions") != 40:
+        raise ValueError("expected the balanced 40-session final campaign")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    c = canvas.Canvas(str(output), pagesize=(PAGE_W, PAGE_H), pageCompression=1)
+    c.setTitle("NVDLA Evaluation Metrics and Results")
+    c.setAuthor("NVDLA PetaLinux project")
+    c.setSubject("Correctness, latency, throughput, power, and ARM CPU comparison")
+    draw_summary(c, data)
+    c.showPage()
+    draw_correctness(c)
+    c.showPage()
+    draw_latency(c, data)
+    c.showPage()
+    draw_throughput(c, data)
+    c.showPage()
+    draw_power(c, data)
+    c.showPage()
+    draw_method(c)
+    c.showPage()
+    c.save()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=Path("artifacts/final-reports/comparison/campaign-summary.json"),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("output/pdf/nvdla-evaluation-brief.pdf"),
+    )
+    args = parser.parse_args()
+    build_pdf(args.source, args.output)
+    print(args.output.resolve())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
