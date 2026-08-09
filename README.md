@@ -198,6 +198,12 @@ analysis tools reject mixed provenance and preserve raw samples and flagged
 outliers. See the performance methodology documents for timing boundaries,
 power scope, and final-session rules.
 
+A supplementary `--input-set multi20` NVDLA mode cycles deterministic,
+balanced input sets through one loaded runtime context. It separates prepared
+input-buffer update time from runtime execution and checks every image's
+classification, allowing the primary single-image results to be tested for
+input-selection sensitivity without replacing the frozen campaign.
+
 ## Reproducibility and Upstreamability
 
 The pristine pinned `nvdla/sw` checkout is kept separate from the patched work

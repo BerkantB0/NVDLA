@@ -41,9 +41,10 @@ synchronizes the previously unprotected task queue. Steady measurements made
 with an earlier runtime can contain polling delays in 500 ms increments and
 must not be combined with or substituted for final campaign results.
 
-Performance profile schema 2 records the interval as
-`runtime_execution_ns`; schema 1 pilot archives are intentionally incompatible
-and must not be mixed with the final campaign.
+Performance profile schemas 2 and 3 record the interval as
+`runtime_execution_ns`; schema 3 additionally records repeated-input identity
+and update time. Schema 1 pilot archives are intentionally incompatible and
+must not be mixed with the final campaign.
 
 The runtime also records context creation, loadable file read, runtime load,
 emulator initialization, input and output setup, output extraction, DIMG
@@ -69,8 +70,28 @@ context costs; only runtime execution and output extraction are expressed per
 measured inference.
 
 Metrics are buffered in memory and written after measured work and teardown.
-Warm-up samples are identified and excluded from statistics. Every repeated
-output is compared in memory with the first output.
+Warm-up samples are identified and excluded from statistics. Repeated outputs
+are compared in memory with the first output for the same input.
+
+### Multi-input sensitivity control
+
+The frozen single-image campaign remains the primary CPU/NVDLA comparison.
+A supplementary control tests whether reusing one image materially biases
+loaded-context NVDLA latency. The runtime accepts `--image` repeatedly,
+decodes and converts all inputs before timing, retains one loaded model and
+bound buffer set, and cycles the prepared tensors in argument order. The
+profile reports `input_index` and `input_update_ns` separately from
+`runtime_execution_ns`; image decode and file I/O remain outside measured
+execution.
+
+The generated `multi20` sets contain two MNIST test images per digit for
+LeNet and two Imagenette validation images per class for ResNet-50. Source
+archives, deterministic selection order, preprocessing, image hashes, and
+expected indices are pinned. Every measured session must contain an equal
+number of samples per input. LeNet outputs require the expected top-1 digit;
+ResNet-50 outputs require the expected ImageNet class in the top five. This is
+a classification-qualified sensitivity experiment, not an exact tensor
+comparison against 20 independently generated VP outputs.
 
 Each profile calibrates the minimum cost of 1,000 back-to-back timing pairs.
 The importer rejects evidence when that cost exceeds 1% of any measured submit
@@ -387,6 +408,44 @@ and emulator overhead.
 No outlier is removed. Tukey 1.5 IQR fences flag observations while retaining
 them in every statistic. Mixed model, input, loadable, module, runtime, runtime
 library, kernel, clock, or payload provenance is rejected.
+
+Generate the pinned input sets and include them in the SD payload with:
+
+```sh
+make sources-input-sets multi-image-workloads
+make cpu-model-workloads
+make petalinux-board-payload
+```
+
+After copying the refreshed payload and image to the SD card, run one pilot per
+model from WSL, using a fresh boot for each command:
+
+```sh
+scripts/run_board_benchmark.sh nvdla lenet \
+  --regime steady --input-set multi20 \
+  --warmups 20 --steady-samples 200 \
+  --settle-seconds 30 --benchmark-cpu 2
+
+scripts/run_board_benchmark.sh nvdla resnet50 \
+  --regime steady --input-set multi20 \
+  --warmups 20 --steady-samples 100 \
+  --settle-seconds 30 --benchmark-cpu 2
+```
+
+The warm-up count gives every input one unmeasured execution. Measured counts
+are multiples of 20, giving ten observations per LeNet input and five per
+ResNet-50 input. Analyze one model's fresh-boot archives with:
+
+```sh
+ARCHIVES="session1.tar.gz session2.tar.gz" \
+INPUT_VARIATION_OUT=artifacts/input-variation-lenet \
+  make input-variation-report
+```
+
+The report preserves every sample, summarizes each input separately, and
+reports the range across per-input median execution times. It must be reported
+as a sensitivity analysis alongside, rather than pooled with, the primary
+single-image campaign.
 
 ## Interpretation Limits
 
