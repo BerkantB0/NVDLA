@@ -342,7 +342,6 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
         c.setFillColor(MUTED)
         c.setFont("Helvetica", 7.5)
         c.drawRightString(x0 - 2 * mm, y + 3, regime_label)
-        values = []
         for stack, color, dy in (
             ("nvdla", NVDLA, 10),
             ("cpu_int8", CPU_INT8, 0),
@@ -351,7 +350,6 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
             stat = data["models"][model][stack]["latency"][regime]
             val = stat["session_median_ms"]
             lo, hi = stat["ci_lower_ms"], stat["ci_upper_ms"]
-            values.append(val)
             c.setStrokeColor(color)
             c.setLineWidth(1.6)
             c.line(xpos(lo), y + dy, xpos(hi), y + dy)
@@ -371,10 +369,6 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
                 c.setFillColor(color)
                 c.setFont("Helvetica-Bold", 7.5)
                 c.drawString(xx + 5, y + dy - 2.5, label)
-        c.setStrokeColor(HexColor("#AEB8B5"))
-        c.setLineWidth(0.8)
-        c.line(xpos(min(values)), y, xpos(max(values)), y)
-
     ratios = [
         ("LeNet cold", 5.67), ("LeNet warm", 10.33), ("LeNet loaded", 0.41),
         ("ResNet cold", 1.92), ("ResNet warm", 2.58), ("ResNet loaded", 0.75),
