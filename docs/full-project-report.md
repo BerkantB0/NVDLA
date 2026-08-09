@@ -6,7 +6,7 @@ The NVIDIA Deep Learning Accelerator (NVDLA) is an open architecture for neural-
 
 Correctness is established through layered evidence rather than compilation or probe success. Pinned sources, ABI tests, stock controls, a source-built `nv_small` virtual platform, root-filesystem audits, staged board tests, exact output comparison, and repeat execution progressively validate the system. LeNet/MNIST produced the expected output on the virtual platform and FPGA, including 100 consecutive board inferences without driver reload or logic reset. ResNet-50 completed all 246 hardware layers and matched the independent virtual-platform output.
 
-A controlled five-session campaign measured cold, warm, and loaded-context latency, together with power from the ZCU102's monitored processing-system and programmable-logic rails. At approximately 150 MHz, NVDLA reduced ResNet-50 loaded-context latency from 661.8 ms on four Cortex-A53 cores using FP32 ONNX Runtime to 507.7 ms using INT8, while reducing monitored active energy by 27.7% and incremental energy by 77.6%. The comparison is therefore system-level, not equal-precision. The work demonstrates a reproducible path from legacy accelerator software to correct modern embedded-Linux execution and publishes the tested modernization series in an open-source fork.
+A controlled campaign measured cold, warm, and loaded-context latency, together with power from the ZCU102's monitored processing-system and programmable-logic rails. Each of twelve cohorts used five fresh boots: NVDLA INT8, four-thread CPU FP32, and four-thread CPU INT8 for two models and separate latency/power conditions. At approximately 150 MHz, NVDLA reduced ResNet-50 loaded-context latency from 661.8 ms for CPU FP32 to 507.7 ms, but the independently quantized CPU INT8 graph reached 378.7 ms. NVDLA nevertheless retained 1.92 times lower cold-deployment latency and 62.3% lower incremental monitored energy than CPU INT8. These are deployed-stack comparisons; the two INT8 paths control nominal precision but not quantization policy or graph transformation. The work demonstrates a reproducible path from legacy accelerator software to correct modern embedded-Linux execution and publishes the tested modernization series in an open-source fork.
 
 ## Table of Contents
 
@@ -42,11 +42,11 @@ The work asks five principal questions:
 2. Does the adapted KMD and user-mode driver (UMD) preserve end-to-end inference correctness?
 3. Can the complete driver and runtime be built reproducibly into PetaLinux 2024.1?
 4. Does the integrated stack operate correctly with the physical `nv_small` FPGA implementation, including clocks, interrupts, memory access, and repeated execution?
-5. What latency and monitored energy characteristics does this implementation exhibit relative to a standard inference runtime on the onboard Arm CPU?
+5. What latency and monitored energy characteristics does this implementation exhibit relative to FP32 and INT8 variants of a standard inference runtime on the onboard Arm CPU?
 
 Success required the original ioctl layout, correct XSA resource binding, a DRM render node, working GEM mappings, interrupt-driven completion, deterministic outputs, repeat stability, and an audited AArch64 root filesystem. Performance samples were accepted only when output and kernel-health checks passed.
 
-The project contributes a reviewable 17-commit modernization series; a pinned correctness framework with VP goldens, differential traces, and machine-readable evidence; PetaLinux recipes and staged board integration that execute LeNet and ResNet-50 exactly; and a controlled latency and rail-power comparison with ONNX Runtime on four Cortex-A53 cores. The tested series is published on a public `nvdla/sw` fork [22].
+The project contributes a reviewable 17-commit modernization series; a pinned correctness framework with VP goldens, differential traces, and machine-readable evidence; PetaLinux recipes and staged board integration that execute LeNet and ResNet-50 exactly; and a controlled latency and rail-power comparison with FP32 and INT8 ONNX Runtime on four Cortex-A53 cores. The tested series is published on a public `nvdla/sw` fork [22].
 
 The following sections introduce the required hardware and software concepts, define the evidence method, explain the modernization and integration, present correctness and performance results, and conclude with validity boundaries and reproducibility instructions.
 
@@ -309,87 +309,91 @@ Network Time Protocol (NTP) synchronization improves human-readable archive time
 
 ### 10.3 ARM CPU comparison
 
-The baseline uses ONNX Runtime 1.18.1 CPU Execution Provider [19]. Pinned Caffe weights are converted once to ONNX and checked before and after each session at tolerance `1e-5`. Four Cortex-A53 threads use affinity `0xf` and the existing userspace governor fixed near 1.2 GHz; the wrapper records but does not change it.
+The CPU lanes use ONNX Runtime 1.18.1 CPU Execution Provider [19]. Pinned Caffe weights are converted once to ONNX. The FP32 graph is checked before and after each session at tolerance `1e-5`. The INT8 graph uses ONNX Runtime's static signed-8-bit QDQ representation and is independently correctness-qualified against its pinned expected output before and after measurement. Four Cortex-A53 threads use affinity `0xf` and the existing userspace governor fixed near 1.2 GHz; the wrapper records but does not change it.
 
 The CPU benchmark defines cold, warm, and loaded-session timing analogously, although its steady interval is ONNX Runtime inference rather than NVDLA `submit()`. Primary latency is collected without power sampling. Powered sessions use the same rail sampler; because all four A53 cores execute the model, the sampler necessarily shares CPU resources and may perturb those cohorts. This is why powered latency is secondary.
 
-The comparison is deliberately described as a deployed-system implementation comparison. NVDLA executes an `INT8` compiler-generated loadable; the CPU executes an FP32 ONNX graph. Source weights and model families agree, and both paths are independently correctness-qualified, but numerical representation, graph transformations, runtime kernels, and output scales differ. The results answer how these two practical software/hardware stacks behave on the board, not which processor wins an equal-precision convolution microbenchmark.
+The FP32 lane remains a standard high-accuracy software baseline. The CPU INT8 lane adds an equal-nominal-precision comparison, but it is not an identical quantized-model experiment. NVDLA executes a compiler-generated loadable using its calibration, fusion, memory-layout, and scheduling decisions. ONNX Runtime executes a QDQ graph with its own per-channel quantization, graph optimization, and CPU kernels. Both derive from the same source weights and use the same input, yet their quantized parameters and graph transformations differ. The results therefore compare deployable stacks and control nominal precision; they do not isolate accelerator hardware from quantizer or compiler effects.
 
 ### 10.4 Final campaign selection
 
-The final set contains 40 sessions: NVDLA and CPU latency and power cohorts for both models, each with five fresh boots. Two extra CPU LeNet power sessions were excluded solely to preserve the balanced design. `campaign-selection.json` records every archive and hash; the importer rejects mixed provenance.
+The complete set contains 60 selected sessions. The original balanced campaign contributes 40 NVDLA INT8 and CPU FP32 sessions; the equal-nominal-precision extension contributes 20 CPU INT8 sessions. For every stack and model, latency and power cohorts each contain five fresh boots. Two extra CPU FP32 LeNet power sessions were excluded solely to preserve the balanced design. Selection files and per-cohort summaries record every archive and hash; importers reject mixed precision or other provenance.
 
 ## 11. Results
 
 ### 11.1 Correctness and workload scale
 
-All 40 selected final sessions passed their output and system-health qualification. The NVDLA cohorts used the VP-backed exact goldens described in Section 9; the CPU cohorts passed ONNX model tests against their own FP32 expected outputs. No selected run contains an accelerator timeout or classified kernel error. This condition is essential: the following latency and energy values describe correct inferences, not merely processes that returned.
+All 60 selected final sessions passed their output and system-health qualification. The NVDLA cohorts used the VP-backed exact goldens described in Section 9; each CPU cohort passed ONNX model tests against the expected output for its own precision. No selected run contains an accelerator timeout or classified kernel error. This condition is essential: the following latency and energy values describe correct inferences, not merely processes that returned.
 
-Workload scale explains much of the behavior. NVDLA LeNet has a 0.446 MB loadable and ten hardware layers, while ResNet-50 has a 25.77 MB loadable and 246 hardware layers. The CPU ONNX files are 1.73 MB with 11 graph nodes and 102.48 MB with 178 nodes, respectively. The deeper model provides more accelerator work over which to amortize fixed process, runtime, and memory-management costs.
+Workload scale explains much of the behavior. NVDLA LeNet has a 0.446 MB loadable and ten hardware layers, while ResNet-50 has a 25.77 MB loadable and 246 hardware layers. CPU FP32 ONNX files are 1.73 MB with 11 nodes and 102.48 MB with 178 nodes. QDQ INT8 files are 0.45 MB with 37 nodes and 26.09 MB with 443 nodes; explicit quantize/dequantize operators increase node counts while reducing parameter storage by about 74%. The deeper model provides more compute and memory work over which to amortize fixed process, runtime, and accelerator-control costs.
 
 ### 11.2 Latency and throughput
 
-Table 2 reports the median of the five independent session medians. Parentheses show deterministic 95% bootstrap intervals over those five values. Ratios are CPU latency divided by NVDLA latency, so values above one favor NVDLA.
+Table 2 reports the median of the five independent session medians. Parentheses show deterministic 95% bootstrap intervals over those five values.
 
-| Model | Regime | NVDLA INT8 latency (ms) | CPU FP32 latency (ms) | CPU / NVDLA |
+| Model | Regime | NVDLA INT8 latency (ms) | CPU INT8 latency (ms) | CPU FP32 latency (ms) |
 |---|---|---:|---:|---:|
-| LeNet | Cold deployment | 34.47 (33.96-34.56) | 216.47 (216.08-219.86) | 6.28x |
-| LeNet | Warm deployment | 16.88 (16.85-16.95) | 165.06 (165.01-165.14) | 9.78x |
-| LeNet | Loaded-context inference | 1.698 (1.696-1.699) | 0.900 (0.897-0.954) | 0.53x |
-| ResNet-50 | Cold deployment | 1336.23 (1332.53-1336.76) | 4905.77 (4902.65-4910.67) | 3.67x |
-| ResNet-50 | Warm deployment | 773.81 (773.29-774.41) | 2754.98 (2749.14-2756.90) | 3.56x |
-| ResNet-50 | Loaded-context inference | 507.72 (507.718-507.722) | 661.83 (660.86-662.47) | 1.30x |
+| LeNet | Cold deployment | **34.47** (33.96-34.56) | 195.39 (195.34-196.04) | 216.47 (216.08-219.86) |
+| LeNet | Warm deployment | **16.88** (16.85-16.95) | 174.29 (173.89-174.36) | 165.06 (165.01-165.14) |
+| LeNet | Loaded-context inference | 1.698 (1.696-1.699) | **0.696** (0.692-0.701) | 0.900 (0.897-0.954) |
+| ResNet-50 | Cold deployment | **1336.23** (1332.53-1336.76) | 2565.88 (2560.42-2569.20) | 4905.77 (4902.65-4910.67) |
+| ResNet-50 | Warm deployment | **773.81** (773.29-774.41) | 1997.40 (1996.74-1997.76) | 2754.98 (2749.14-2756.90) |
+| ResNet-50 | Loaded-context inference | 507.72 (507.718-507.722) | **378.73** (378.37-378.93) | 661.83 (660.86-662.47) |
 
-**Table 2. Primary unpowered latency results.** NVDLA greatly reduces deployment latency for both models, while loaded-context acceleration becomes beneficial only for the larger ResNet-50 workload.
+**Table 2. Primary unpowered latency results.** Bold marks the lowest latency in each row. NVDLA greatly reduces complete deployment latency, whereas CPU INT8 provides the lowest loaded-context latency for both tested models.
 
-The corresponding mean-derived throughputs reinforce the distinction. For LeNet, NVDLA achieves 28.70 cold, 54.84 warm, and 588.94 loaded-context images/s; CPU achieves 4.60, 6.06, and 1079.45 images/s. For ResNet-50, NVDLA achieves 0.748, 1.286, and 1.970 images/s; CPU achieves 0.204, 0.363, and 1.511 images/s. Throughput here is the reciprocal of the stated latency boundary, not a multi-request pipelined measurement.
+Quantization changes the CPU result materially. Relative to CPU FP32, CPU INT8 reduces loaded-context latency by 22.7% for LeNet and 42.8% for ResNet-50. Against CPU INT8, NVDLA is 5.67 times and 1.92 times faster for cold LeNet and ResNet-50 deployment, respectively, and 10.33 times and 2.58 times faster for warm deployment. The direction reverses after loading: CPU INT8 is 2.44 times faster for LeNet and 1.34 times faster for ResNet-50. Warm LeNet is a useful counterexample to assuming quantization improves every boundary: its QDQ INT8 process is 5.6% slower than FP32 despite a much smaller model file.
+
+Mean-derived loaded-context throughput is 588.9 images/s for NVDLA LeNet, 1424.7 for CPU INT8, and 1079.4 for CPU FP32. For ResNet-50 it is 1.970, 2.640, and 1.511 images/s, respectively. Throughput here is the reciprocal of the stated latency boundary, not a multi-request pipelined measurement.
 
 Figure 2 presents the absolute results with separate visual scale appropriate to the regimes. Figure 3 shows the same relationship as CPU/NVDLA latency, making the break-even line explicit.
 
 ![Cold, warm, and loaded-context latency comparison for LeNet and ResNet-50](../artifacts/final-reports/comparison/latency-comparison.svg)
 
-**Figure 2. Correctness-qualified latency by model and regime.** Primary values come from unpowered five-boot cohorts; points and intervals represent between-session evidence.
+**Figure 2. Original NVDLA INT8 and CPU FP32 latency comparison.** Primary values come from unpowered five-boot cohorts. Table 2 and the evaluation briefing add the later CPU INT8 cohorts.
 
 ![CPU to NVDLA relative latency for each model and regime](../artifacts/final-reports/comparison/relative-latency.svg)
 
-**Figure 3. Relative latency.** Values above 1.0 indicate lower NVDLA latency. Small LeNet execution is faster on the optimized four-core CPU, but NVDLA reduces full deployment time; ResNet-50 favors NVDLA in all three regimes.
+**Figure 3. Original FP32 CPU-to-NVDLA relative latency.** The equal-nominal-precision extension changes the loaded-context conclusion for ResNet-50: CPU INT8 is faster, while NVDLA retains the cold and warm deployment advantage.
 
 Runtime phase profiles show where time remains. For LeNet, median cold model loading is 16.24 ms and runtime execution is about 1.96 ms; warm model loading falls to 5.10 ms. Median warm overhead beyond loaded-context execution is 15.18 ms, or 89.94% of warm end-to-end time. For ResNet-50, cold model loading is 763.85 ms and runtime execution 508.04 ms; warm model loading is 212.34 ms. Its warm overhead is 266.09 ms, or 34.39%. The event-driven UMD worker removed a large avoidable polling component, but allocation, model handling, process setup, input work, and teardown remain visible.
 
 ### 11.3 Monitored power and energy
 
-Table 3 reports medians from the separate five-boot powered cohorts. Active energy includes all monitored PS and PL rail power over the loaded-context inference process, amortized per inference. Incremental energy subtracts the driver-loaded idle baseline.
+Table 3 reports cohort means across the separate five-boot powered cohorts. Active energy includes all monitored PS and PL rail power over the loaded-context inference process, amortized per inference. Incremental energy subtracts the driver-loaded idle baseline.
 
 | Model | Stack | Active power (W) | Incremental power (W) | Active energy/inference | Incremental energy/inference |
 |---|---|---:|---:|---:|---:|
 | LeNet | NVDLA INT8 | 3.540 | 0.353 | 6.300 mJ | 0.627 mJ |
+| LeNet | CPU INT8 | 3.054 | 0.421 | 4.896 mJ | 0.675 mJ |
 | LeNet | CPU FP32 | 3.117 | 0.531 | 5.693 mJ | 0.970 mJ |
 | ResNet-50 | NVDLA INT8 | 3.450 | 0.259 | 1.781 J | 0.134 J |
+| ResNet-50 | CPU INT8 | 3.461 | 0.842 | 1.462 J | 0.356 J |
 | ResNet-50 | CPU FP32 | 3.440 | 0.833 | 2.463 J | 0.597 J |
 
 **Table 3. ZCU102 monitored rail power and energy.** These are exposed PS-plus-PL rail totals, not external board-input measurements.
 
-For LeNet, NVDLA uses 13.6% more active power and 10.7% more active energy than the CPU, but 35.3% less incremental energy. The short inference leaves fixed system power important, so active and incremental interpretations differ. For ResNet-50, active power is nearly equal, with NVDLA 0.3% higher, but faster completion reduces active energy by 27.7%. Its incremental energy is 77.6% lower because accelerator execution raises monitored power much less above idle than four-core CPU execution does.
+Against CPU FP32, the original conclusion remains: NVDLA uses 10.7% more active energy but 35.3% less incremental energy for LeNet, and 27.7% less active plus 77.6% less incremental energy for ResNet-50. CPU INT8 changes the active-energy ordering because it executes more quickly. NVDLA uses 28.7% more active energy than CPU INT8 for LeNet and 21.8% more for ResNet-50. Its smaller rise above the driver-loaded idle platform nevertheless gives 7.1% lower incremental energy for LeNet and 62.3% lower incremental energy for ResNet-50. The distinction between active and incremental energy is therefore not cosmetic: one includes the full monitored platform baseline, while the other isolates its measured increase during inference.
 
 Figures 4 and 5 separate power level from time-integrated energy. This is necessary because similar watts can produce very different joules when latency differs.
 
 ![Monitored active and incremental power for NVDLA and CPU](../artifacts/final-reports/comparison/monitored-power.svg)
 
-**Figure 4. Monitored power during loaded-context batches.** Active totals are similar for ResNet-50, while the incremental component is substantially lower for NVDLA.
+**Figure 4. Original NVDLA INT8 and CPU FP32 monitored power.** Active totals are similar for ResNet-50, while the incremental component is substantially lower for NVDLA. The evaluation briefing adds CPU INT8.
 
 ![Monitored active and incremental energy per inference](../artifacts/final-reports/comparison/monitored-energy.svg)
 
-**Figure 5. Monitored energy per correct inference.** ResNet-50 shows the clearest accelerator benefit because its useful work amortizes fixed system cost and finishes sooner than the FP32 CPU path.
+**Figure 5. Original NVDLA INT8 and CPU FP32 monitored energy.** ResNet-50 shows a clear benefit against FP32. Against CPU INT8, NVDLA instead trades higher active energy for substantially lower incremental energy.
 
 ## 12. Discussion
 
-Usefulness depends on workload and timing boundary. ResNet-50 favors NVDLA in every regime: loaded-context execution is 1.30 times faster and deployment more than 3.5 times faster than CPU. The larger deployment ratio indicates advantages from both the precompiled loadable path and accelerator execution.
+Usefulness depends on workload, precision, and timing boundary. Against CPU FP32, ResNet-50 favors NVDLA in every regime. CPU INT8 separates that result into two effects: NVDLA's precompiled loadable path retains the deployment advantage, but four-thread QDQ inference is 1.34 times faster once both contexts are loaded. The accelerator result is therefore not an equal-precision execution speedup on this model and platform.
 
-For LeNet, CPU loaded-context execution is faster, 0.900 ms against 1.698 ms. NVDLA control costs cannot be amortized across ten layers, although its cold and warm deployment remains much faster. The two boundaries answer different system questions.
+For LeNet, loaded-context CPU execution was already faster at FP32 and improves from 0.900 ms to 0.696 ms at INT8, against 1.698 ms for NVDLA. NVDLA control costs cannot be amortized across ten layers, although its cold and warm deployment remains much faster. The two boundaries answer different system questions: latency from application launch versus repeated inference after model preparation.
 
 Almost 90% of warm LeNet deployment lies outside execution, whereas ResNet-50 execution dominates. Complexity amortizes control but raises loadable, deserialization, and memory costs; the 25.77 MB loadable helps explain ResNet's 212 ms warm loading. Both utilization and deployment remain optimization targets.
 
-Power results require similar care. Active power includes the platform's existing PS and PL consumption, so a short task can finish before idle energy is well amortized. Incremental energy asks a different question: how much additional monitored energy is associated with executing the inference above an already booted, driver-loaded platform. LeNet's active energy slightly favors CPU while incremental energy favors NVDLA. ResNet-50 favors NVDLA under both definitions, with a particularly large incremental reduction. Reporting both prevents an idle-baseline choice from determining the narrative.
+Power results require similar care. Active power includes the platform's existing PS and PL consumption, so a short task can finish before idle energy is well amortized. Incremental energy asks a different question: how much additional monitored energy is associated with executing the inference above an already booted, driver-loaded platform. Against CPU INT8, active energy favors the faster CPU for both models, while incremental energy favors NVDLA, especially for ResNet-50. Against CPU FP32, ResNet-50 favors NVDLA under both definitions. Reporting both CPU precisions and both energy definitions prevents either precision choice or idle-baseline choice from determining the narrative.
 
 The measured 149.985 MHz clock differs from the original 100 MHz report and ASIC deployments. Results should not be scaled without accounting for AXI bandwidth, memory, configuration, and software; host-observed equivalent cycles also contain software and interrupt latency.
 
@@ -399,7 +403,7 @@ The CSB investigation likewise avoided a polling workaround or RTL change. Bootl
 
 Generic API, resource, build, and runtime fixes belong in `nvdla/sw`; XSA addresses, board topology, recipes, credentials, payloads, and analysis remain local. This makes the fork reusable while preserving the experiment here.
 
-The comparison with CPU should remain constructively bounded. It demonstrates real deployed alternatives available on this board: an INT8 NVDLA compilation flow and an FP32 four-thread ONNX Runtime flow. It does not isolate precision, kernel implementation, or model-conversion effects. Nevertheless, the ResNet-50 result establishes that the integrated accelerator can improve both latency and monitored energy for a nontrivial network. LeNet establishes where fixed overhead dominates. Together they are more informative than choosing only a workload favorable to one side.
+The CPU INT8 extension strengthens but does not perfect causal comparability. It controls nominal arithmetic precision and uses the same source weights and input, while leaving quantization policy, graph representation, fusion, kernels, and output scale specific to each stack. It demonstrates that CPU quantization materially affects conclusions: the accelerator's ResNet-50 execution advantage over FP32 becomes a CPU INT8 advantage, while NVDLA's deployment and incremental-energy benefits remain. LeNet establishes where fixed overhead dominates. Together, the two models and two CPU precisions are more informative than selecting only a favorable workload or baseline.
 
 ## 13. Threats to Validity and Limitations
 
@@ -409,7 +413,7 @@ Every performance process checks output and kernel health. Pinned binaries, work
 
 Some observer effect remains: CPU workers share cores with the sampler, I2C adds activity, and 50 ms sampling cannot resolve short transients. Endpoint capture improves integration, and these effects do not affect primary unpowered latency.
 
-NVDLA uses compiler-quantized INT8 while ONNX Runtime uses FP32. Shared model families and independent checks do not remove conversion differences, so results concern deployed stacks rather than an equal-precision causal estimate.
+NVDLA uses compiler-quantized INT8, whereas CPU INT8 uses an independently quantized QDQ graph. Shared source weights, inputs, nominal precision, and independent checks do not remove calibration, scale, graph, fusion, or kernel differences. Results therefore concern deployed stacks rather than a pure equal-graph hardware estimate. The FP32 CPU lane remains a complementary standard software baseline.
 
 ### 13.2 External and construct validity
 
@@ -423,7 +427,7 @@ The VP is register-accurate, not a timing-equivalent physical model [5]. It supp
 
 ### 13.3 Statistical validity
 
-Five independent boots per final cohort provide a defensible view of session-to-session variation but remain a modest sample. Bootstrap intervals describe the distribution of those five session medians; they are not universal confidence bounds for all boards or environments. Within-session repetitions improve median stability but do not create independent boot samples. The deterministic method aids reproduction, while retaining every outlier avoids hidden selection. Two extra LeNet CPU power runs were excluded under the balanced design before comparison, and their identities remain recorded.
+Five independent boots per final cohort provide a defensible view of session-to-session variation but remain a modest sample. Bootstrap intervals describe the distribution of those five session medians; they are not universal confidence bounds for all boards or environments. Within-session repetitions improve median stability but do not create independent boot samples. The deterministic method aids reproduction, while retaining every outlier avoids hidden selection. Two extra LeNet CPU FP32 power runs were excluded under the balanced design before comparison, and their identities remain recorded.
 
 Temperature was recorded as available or unavailable rather than silently omitted. The final campaign controlled settle time, frequency, workload, and boot independence, but it did not impose a climate-controlled ambient condition. This is another reason not to overgeneralize small power differences, particularly the 0.3% ResNet active-power difference. The much larger latency and incremental-energy differences are less sensitive to that specific uncertainty.
 
@@ -435,7 +439,7 @@ Reproducibility is implemented as a property of the workflow rather than a final
 
 The main workflow is exposed through make targets. `make sources` and heavy-source variants acquire inputs. `make patch-check` and `make abi-check` validate the series. VP targets build the pinned toolchain, kernel, rootfs, KMD, UMD, `nv_small` CMOD, executable, DTB, workloads, and correctness gates. PetaLinux targets create and audit the project, install device-tree and power integration, build KMD and runtime recipes, compose the image, audit the rootfs, package boot files, and generate the board payload. Board scripts run one explicit workload or benchmark and download its archive over SSH. Host importers validate provenance before producing per-stack and comparative reports.
 
-Artifacts use a stable run-directory schema. A manifest records what was built or run, the command and environment, source and binary identities, and the classification. Raw serial, `dmesg`, runtime, output, interrupt, timing, and sensor files remain beside derived analyses. The final campaign adds an explicit selection manifest, allowing another researcher to determine exactly which 40 archives formed each table and which files were excluded. Generated evidence need not be trusted by filename alone because its SHA-256 is recorded.
+Artifacts use a stable run-directory schema. A manifest records what was built or run, the command and environment, source and binary identities, and the classification. Raw serial, `dmesg`, runtime, output, interrupt, timing, and sensor files remain beside derived analyses. The original campaign selection identifies the 40 NVDLA/CPU FP32 archives, while the four CPU INT8 cohort summaries identify the 20 equal-precision extension archives. Generated evidence need not be trusted by filename alone because its SHA-256 is recorded, and precision remains part of importer provenance.
 
 Version-control history is structured by concern: strategy and lock checks, source and build lanes, ABI and VP gates, workloads, PetaLinux integration, board stages, profiling, power, CPU comparison, and campaign reporting. Driver patch updates are separate from harness commits. Before publication, the complete 17-patch queue was applied with `git am` to the pinned upstream base and pushed unchanged to the public `modern-linux-support` branch [22]. This preserves commit-level authorship and review context. Future upstream-facing documentation can be added directly to that fork without mixing local board policy into the software series.
 
@@ -449,9 +453,9 @@ This work demonstrates that the legacy NVDLA software stack can be modernized fo
 
 Correctness was established beyond compilation and probe success. A verified source-built `nv_small` VP reproduced exact LeNet output, matched legacy and modern driver traces, and established a ResNet-50 golden after 246 completed hardware layers. PetaLinux 2024.1 built the same KMD and UMD into an audited AArch64 image. On the physical ZCU102, staged tests found and corrected interrupt description and interface-clock ownership issues, after which LeNet and ResNet-50 matched their VP-backed outputs. LeNet passed 100 consecutive executions without module reload or PL reset. These results answer the first four research questions affirmatively within the tested platform and workloads.
 
-The performance evidence answers the fifth question with a workload-dependent result. At approximately 150 MHz, the `nv_small` implementation reduced ResNet-50 loaded-context latency from 661.8 ms on the four-core FP32 CPU stack to 507.7 ms on the INT8 accelerator stack. It also reduced monitored active energy by 27.7% and incremental energy by 77.6%. Tiny LeNet executed faster in the CPU's loaded context, showing the effect of fixed accelerator control costs, while NVDLA still had much lower cold and warm deployment latency. This balanced result is useful because it identifies both the accelerator's effective operating region and the software overhead that future work can target.
+The performance evidence answers the fifth question with a workload- and boundary-dependent result. At approximately 150 MHz, the `nv_small` implementation reduced ResNet-50 loaded-context latency from 661.8 ms on CPU FP32 to 507.7 ms, but CPU INT8 reached 378.7 ms. NVDLA still reduced cold and warm deployment latency by 47.9% and 61.3% relative to CPU INT8. Its monitored active energy was 21.8% higher than CPU INT8, while incremental energy was 62.3% lower. Tiny LeNet likewise favored CPU INT8 after loading and NVDLA for deployment. These balanced results identify both the accelerator's low-incremental-power behavior and the substantial influence of software preparation, quantization, and fixed control costs.
 
-Future work should test additional supported networks, inputs, boards, and kernel releases; add continuous integration for compile, ABI, and VP gates; and maintain the public fork as Linux evolves. Equal-precision CPU experiments would isolate more of the hardware effect. External 12 V instrumentation would extend monitored-rail energy to whole-board input energy. The standalone SDP regression should be investigated without weakening the end-to-end oracle policy. Broader source-built `nv_full` validation and deployment policy suitable for non-laboratory images would further extend the work.
+Future work should test additional supported networks, inputs, boards, and kernel releases; add continuous integration for compile, ABI, and VP gates; and maintain the public fork as Linux evolves. A shared quantization policy or common integer intermediate representation could isolate more of the hardware effect than the present equal-nominal-precision deployed-stack comparison. External 12 V instrumentation would extend monitored-rail energy to whole-board input energy. The standalone SDP regression should be investigated without weakening the end-to-end oracle policy. Broader source-built `nv_full` validation and deployment policy suitable for non-laboratory images would further extend the work.
 
 The completed project turns an inherited FPGA accelerator and an old software release into a documented modern embedded-Linux system. Its main contribution is not one compatibility fix or one benchmark number, but a reproducible chain of evidence from source patch to exact model output and controlled physical measurement.
 
@@ -552,6 +556,12 @@ scripts/run_board_benchmark.sh cpu resnet50 \
   --cold-starts 1 --warm-starts 2 \
   --steady-samples 3 --settle-seconds 10 \
   --power --power-idle-seconds 5
+
+scripts/run_board_benchmark.sh cpu resnet50 \
+  --precision int8 --threads 4 \
+  --cold-starts 1 --warm-starts 2 \
+  --steady-samples 3 --settle-seconds 10 \
+  --power --power-idle-seconds 5
 ```
 
 ### Appendix B. Upstream Patch-Series Summary
@@ -591,12 +601,13 @@ scripts/run_board_benchmark.sh cpu resnet50 \
 | Target kernel | `6.6.10-xilinx-v2024.1-g3af4295e00ef` |
 | LeNet | `1x1x28x28`, INT8, 10 HWLs, exact vector oracle |
 | ResNet-50 | `1x3x224x224`, INT8, 246 HWLs, 1000-value hash oracle |
-| CPU runtime | ONNX Runtime 1.18.1 CPU EP, FP32, four A53 threads |
+| CPU runtime | ONNX Runtime 1.18.1 CPU EP, FP32 and QDQ INT8, four A53 threads |
 
 ### Appendix D. Evidence and Report Locations
 
-- Final comparative source of truth: [`artifacts/final-reports/comparison/campaign-summary.json`](../artifacts/final-reports/comparison/campaign-summary.json)
-- Human-readable campaign report: [`artifacts/final-reports/comparison/campaign-report.md`](../artifacts/final-reports/comparison/campaign-report.md)
+- Original NVDLA/CPU FP32 comparative source: [`artifacts/final-reports/comparison/campaign-summary.json`](../artifacts/final-reports/comparison/campaign-summary.json)
+- Original human-readable campaign report: [`artifacts/final-reports/comparison/campaign-report.md`](../artifacts/final-reports/comparison/campaign-report.md)
+- CPU INT8 cohort summaries: `artifacts/final-reports/cpu-int8/{lenet,resnet50}/{latency,power}/`
 - Source-built VP configuration audit: `artifacts/20260708T194754Z-vp-small-config-audit/`
 - Legacy/modern trace comparison: `artifacts/20260721T224807Z-vp-trace-diff-small/`
 - VP ResNet-50 golden: `artifacts/20260726T004806Z-vp-modern-resnet50-small/`

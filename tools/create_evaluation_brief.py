@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -28,7 +29,8 @@ GRID = HexColor("#DDE4E2")
 PAPER = HexColor("#FFFFFF")
 PANEL = HexColor("#F4F7F6")
 NVDLA = HexColor("#0D8978")
-CPU = HexColor("#B44B5A")
+CPU_INT8 = HexColor("#3978A8")
+CPU_FP32 = HexColor("#B44B5A")
 GOLD = HexColor("#D99A2B")
 GREEN = HexColor("#2F8F5B")
 BLUE = HexColor("#3978A8")
@@ -113,13 +115,60 @@ def metric_card(c: canvas.Canvas, x: float, y: float, w: float, h: float,
 
 
 def legend(c: canvas.Canvas, x: float, y: float) -> None:
-    for label, color in (("NVDLA INT8", NVDLA), ("ARM CPU FP32, 4 threads", CPU)):
+    entries = (
+        ("NVDLA INT8", NVDLA, 32 * mm),
+        ("CPU INT8, 4 threads", CPU_INT8, 39 * mm),
+        ("CPU FP32, 4 threads", CPU_FP32, 0),
+    )
+    for label, color, advance in entries:
         c.setFillColor(color)
         c.circle(x + 3, y + 3, 3, fill=1, stroke=0)
         c.setFillColor(INK)
-        c.setFont("Helvetica", 8.5)
+        c.setFont("Helvetica", 7.8)
         c.drawString(x + 10, y, label)
-        x += 39 * mm if label.startswith("NVDLA") else 0
+        x += advance
+
+
+def add_cpu_int8(data: dict, root: Path) -> None:
+    """Attach the independently generated five-session CPU INT8 cohorts."""
+    for model in ("lenet", "resnet50"):
+        latency_path = root / model / "latency" / "cpu-performance-summary.json"
+        power_path = root / model / "power" / "cpu-performance-summary.json"
+        latency = json.loads(latency_path.read_text(encoding="utf-8"))
+        power = json.loads(power_path.read_text(encoding="utf-8"))
+        if latency.get("session_count") != 5 or power.get("session_count") != 5:
+            raise ValueError(f"expected five CPU INT8 sessions per cohort for {model}")
+        if latency["provenance"].get("precision") != "int8":
+            raise ValueError(f"unexpected CPU precision for {model}")
+
+        latency_stats = {}
+        for regime, stats in latency["regimes"].items():
+            ci = stats["session_median_bootstrap_95ci"]
+            latency_stats[regime] = {
+                "session_median_ms": ci["estimate_ns"] / 1e6,
+                "ci_lower_ms": ci["lower_ns"] / 1e6,
+                "ci_upper_ms": ci["upper_ns"] / 1e6,
+                "mean_ms": stats["mean_ns"] / 1e6,
+            }
+
+        domain = power["power"]["domains"]["MONITORED"]
+        active_energy = statistics.mean(
+            session["power"]["domains"]["MONITORED"]["active_energy_joules"]
+            / session["power"]["executed_inferences"]
+            for session in power["sessions"]
+        )
+        data["models"][model]["cpu_int8"] = {
+            "latency": latency_stats,
+            "power": {
+                "active_watts": {"mean": domain["active_mean_watts"]},
+                "incremental_watts": {"mean": domain["incremental_mean_watts"]},
+                "active_joules_per_inference": {"mean": active_energy},
+                "incremental_joules_per_inference": {
+                    "mean": domain["incremental_energy_per_executed_inference_joules"]
+                },
+            },
+            "provenance": latency["provenance"],
+        }
 
 
 def draw_summary(c: canvas.Canvas, data: dict) -> None:
@@ -142,10 +191,10 @@ def draw_summary(c: canvas.Canvas, data: dict) -> None:
     cards = [
         ("100 / 100", "LeNet stability", "One boot; no module reload or PL reset", GREEN),
         ("246 / 246", "ResNet-50 hardware layers", "Exact match to source-built nv_small VP golden", BLUE),
-        ("1.30x", "ResNet-50 execution speedup", "507.7 ms NVDLA vs 661.8 ms CPU", NVDLA),
-        ("-27.7%", "ResNet-50 active energy", "1.781 J NVDLA vs 2.463 J CPU", GOLD),
-        ("-77.6%", "ResNet-50 incremental energy", "0.134 J NVDLA vs 0.597 J CPU", GOLD),
-        ("40", "Selected benchmark sessions", "Eight balanced cohorts; five fresh boots each", BLUE),
+        ("1.34x", "CPU INT8 execution advantage", "378.7 ms CPU INT8 vs 507.7 ms NVDLA on ResNet-50", CPU_INT8),
+        ("1.92x", "NVDLA cold-deployment advantage", "1.336 s NVDLA vs 2.566 s CPU INT8 on ResNet-50", NVDLA),
+        ("-62.3%", "NVDLA incremental energy", "0.134 J NVDLA vs 0.356 J CPU INT8 on ResNet-50", GOLD),
+        ("60", "Selected benchmark sessions", "Twelve balanced cohorts; five fresh boots each", BLUE),
     ]
     for i, item in enumerate(cards):
         row, col = divmod(i, 3)
@@ -156,7 +205,7 @@ def draw_summary(c: canvas.Canvas, data: dict) -> None:
     c.roundRect(MARGIN, 16 * mm, PAGE_W - 2 * MARGIN, 16 * mm, 3 * mm, fill=1, stroke=0)
     paragraph(
         c,
-        "<b>Comparison boundary:</b> deployed-system comparison of nv_small NVDLA INT8 against ONNX Runtime FP32 on four Cortex-A53 cores. Power is the sum of monitored PS and PL rails, not external 12 V board input.",
+        "<b>Comparison boundary:</b> nv_small NVDLA INT8 is compared with both FP32 and independently quantized QDQ INT8 ONNX Runtime on four Cortex-A53 cores. Equal nominal precision does not imply identical quantization or graph transformation. Power is monitored PS + PL rails, not external 12 V input.",
         MARGIN + 5 * mm,
         28 * mm,
         PAGE_W - 2 * MARGIN - 10 * mm,
@@ -250,9 +299,9 @@ def draw_correctness(c: canvas.Canvas) -> None:
 
 
 def draw_latency(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Latency", "Cold, warm, and loaded-context execution", 3)
-    footer(c, "Primary latency uses unpowered cohorts; points are medians across five boot-session medians")
-    legend(c, PAGE_W - MARGIN - 83 * mm, PAGE_H - 30 * mm)
+    page_header(c, "Latency", "Three deployed stacks across each timing boundary", 3)
+    footer(c, "Unpowered cohorts; points are medians across five independent boot-session medians")
+    legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
 
     x0 = 63 * mm
     x1 = PAGE_W - MARGIN - 8 * mm
@@ -294,7 +343,11 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
         c.setFont("Helvetica", 7.5)
         c.drawRightString(x0 - 2 * mm, y + 3, regime_label)
         values = []
-        for stack, color, dy in (("nvdla", NVDLA, 5), ("cpu", CPU, -5)):
+        for stack, color, dy in (
+            ("nvdla", NVDLA, 10),
+            ("cpu_int8", CPU_INT8, 0),
+            ("cpu", CPU_FP32, -10),
+        ):
             stat = data["models"][model][stack]["latency"][regime]
             val = stat["session_median_ms"]
             lo, hi = stat["ci_lower_ms"], stat["ci_upper_ms"]
@@ -306,7 +359,11 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
             c.circle(xpos(val), y + dy, 3.2, fill=1, stroke=0)
             label = fmt_ms(val)
             xx = xpos(val)
-            if xx > x1 - 32 * mm:
+            if stack == "cpu_int8":
+                c.setFillColor(color)
+                c.setFont("Helvetica-Bold", 7.5)
+                c.drawRightString(xx - 5, y + dy - 2.5, label)
+            elif xx > x1 - 32 * mm:
                 c.setFillColor(color)
                 c.setFont("Helvetica-Bold", 7.5)
                 c.drawRightString(xx - 5, y + dy - 2.5, label)
@@ -319,8 +376,8 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
         c.line(xpos(min(values)), y, xpos(max(values)), y)
 
     ratios = [
-        ("LeNet cold", 6.28), ("LeNet warm", 9.78), ("LeNet loaded", 0.53),
-        ("ResNet cold", 3.67), ("ResNet warm", 3.56), ("ResNet loaded", 1.30),
+        ("LeNet cold", 5.67), ("LeNet warm", 10.33), ("LeNet loaded", 0.41),
+        ("ResNet cold", 1.92), ("ResNet warm", 2.58), ("ResNet loaded", 0.75),
     ]
     bx = MARGIN
     by = 16 * mm
@@ -337,13 +394,12 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
         c.drawCentredString(xx + bw / 2, by + 5 * mm, label)
     c.setFillColor(MUTED)
     c.setFont("Helvetica", 7.2)
-    c.drawString(MARGIN, 42 * mm, "CPU time / NVDLA time: above 1.0 favors NVDLA; below 1.0 favors CPU")
+    c.drawString(MARGIN, 42 * mm, "CPU INT8 time / NVDLA time: above 1.0 favors NVDLA; below 1.0 favors CPU INT8")
 
 
 def draw_throughput(c: canvas.Canvas, data: dict) -> None:
     page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 4)
     footer(c, "Throughput is reciprocal mean latency, not concurrent pipelined throughput")
-    legend(c, PAGE_W - MARGIN - 83 * mm, PAGE_H - 30 * mm)
 
     left = MARGIN
     mid = PAGE_W / 2 + 2 * mm
@@ -363,18 +419,25 @@ def draw_throughput(c: canvas.Canvas, data: dict) -> None:
         c.setFont("Helvetica-Bold", 10)
         c.drawString(left + 8 * mm, y + 15 * mm, label)
         rates = {}
-        for stack in ("nvdla", "cpu"):
+        for stack in ("nvdla", "cpu_int8", "cpu"):
             mean_ms = data["models"][model][stack]["latency"]["steady"]["mean_ms"]
             rates[stack] = 1000.0 / mean_ms
         max_rate = max(rates.values()) * 1.08
-        for i, (stack, color) in enumerate((("nvdla", NVDLA), ("cpu", CPU))):
-            yy = y + 2 * mm - i * 9 * mm
-            width = 71 * mm * rates[stack] / max_rate
+        for i, (stack, stack_label, color) in enumerate((
+            ("nvdla", "NVDLA", NVDLA),
+            ("cpu_int8", "CPU INT8", CPU_INT8),
+            ("cpu", "CPU FP32", CPU_FP32),
+        )):
+            yy = y + 5 * mm - i * 7.5 * mm
+            width = 62 * mm * rates[stack] / max_rate
+            c.setFillColor(MUTED)
+            c.setFont("Helvetica", 6.8)
+            c.drawRightString(left + 34 * mm, yy + 1.3 * mm, stack_label)
             c.setFillColor(color)
-            c.roundRect(left + 31 * mm, yy, width, 5.5 * mm, 1.5 * mm, fill=1, stroke=0)
+            c.roundRect(left + 36 * mm, yy, width, 5.5 * mm, 1.5 * mm, fill=1, stroke=0)
             c.setFillColor(INK)
             c.setFont("Helvetica-Bold", 8)
-            c.drawString(left + 33 * mm + width, yy + 1, fmt_rate(rates[stack]))
+            c.drawString(left + 38 * mm + width, yy + 1, fmt_rate(rates[stack]))
 
     complexity = {
         "lenet": {"size": "0.446 MB", "hwls": 10, "ops": [("Conv", 4, NVDLA), ("SDP", 4, GOLD), ("PDP", 2, BLUE)]},
@@ -389,8 +452,11 @@ def draw_throughput(c: canvas.Canvas, data: dict) -> None:
         c.drawString(mid + 8 * mm, y, label)
         c.setFillColor(MUTED)
         c.setFont("Helvetica", 8)
-        c.drawString(mid + 8 * mm, y - 7 * mm, f"{info['size']} loadable  |  {info['hwls']} hardware layers")
-        bar_x, bar_y, bar_w = mid + 8 * mm, y - 19 * mm, 101 * mm
+        cpu_sizes = "CPU ONNX: 1.73 MB FP32 / 0.45 MB INT8" if model == "lenet" else "CPU ONNX: 102.48 MB FP32 / 26.09 MB INT8"
+        c.drawString(mid + 8 * mm, y - 7 * mm, f"NVDLA: {info['size']} loadable  |  {info['hwls']} hardware layers")
+        c.setFont("Helvetica", 7.3)
+        c.drawString(mid + 8 * mm, y - 12 * mm, cpu_sizes)
+        bar_x, bar_y, bar_w = mid + 8 * mm, y - 23 * mm, 101 * mm
         total = sum(v for _, v, _ in info["ops"])
         cursor = bar_x
         for name, value, color in info["ops"]:
@@ -418,7 +484,7 @@ def draw_throughput(c: canvas.Canvas, data: dict) -> None:
 def draw_power(c: canvas.Canvas, data: dict) -> None:
     page_header(c, "Power and energy", "Monitored PS + PL rails during inference", 5)
     footer(c, "Power cohorts are separate from primary latency cohorts; 50 ms sampling with endpoint capture")
-    legend(c, PAGE_W - MARGIN - 83 * mm, PAGE_H - 30 * mm)
+    legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
 
     chart_y = 99 * mm
     chart_h = 58 * mm
@@ -444,10 +510,12 @@ def draw_power(c: canvas.Canvas, data: dict) -> None:
     max_power = 4.0
     for m_i, model in enumerate(("lenet", "resnet50")):
         gx = centers[0] - group_w / 2 + m_i * 39 * mm
-        for s_i, (stack, color) in enumerate((("nvdla", NVDLA), ("cpu", CPU))):
+        for s_i, (stack, color) in enumerate((
+            ("nvdla", NVDLA), ("cpu_int8", CPU_INT8), ("cpu", CPU_FP32)
+        )):
             val = metric(model, stack, "active_watts")
             bh = chart_h * val / max_power
-            bx = gx + s_i * 9 * mm
+            bx = gx + s_i * 7.5 * mm
             c.setFillColor(color)
             c.roundRect(bx, chart_y, 7 * mm, bh, 1.2 * mm, fill=1, stroke=0)
             c.setFillColor(INK)
@@ -455,18 +523,20 @@ def draw_power(c: canvas.Canvas, data: dict) -> None:
             c.drawCentredString(bx + 3.5 * mm, chart_y + bh + 2 * mm, f"{val:.2f} W")
         c.setFillColor(MUTED)
         c.setFont("Helvetica", 7.5)
-        c.drawCentredString(gx + 8 * mm, chart_y - 5 * mm, "LeNet" if model == "lenet" else "ResNet-50")
+        c.drawCentredString(gx + 11 * mm, chart_y - 5 * mm, "LeNet" if model == "lenet" else "ResNet-50")
 
     # Active and incremental energy use model-specific scales and labels.
     for panel_i, key in enumerate(("active_joules_per_inference", "incremental_joules_per_inference"), start=1):
         for m_i, model in enumerate(("lenet", "resnet50")):
-            vals = [metric(model, stack, key) for stack in ("nvdla", "cpu")]
+            vals = [metric(model, stack, key) for stack in ("nvdla", "cpu_int8", "cpu")]
             scale = max(vals) * 1.15
             gx = centers[panel_i] - group_w / 2 + m_i * 39 * mm
-            for s_i, (stack, color) in enumerate((("nvdla", NVDLA), ("cpu", CPU))):
+            for s_i, (stack, color) in enumerate((
+                ("nvdla", NVDLA), ("cpu_int8", CPU_INT8), ("cpu", CPU_FP32)
+            )):
                 val = vals[s_i]
                 bh = chart_h * val / scale
-                bx = gx + s_i * 9 * mm
+                bx = gx + s_i * 7.5 * mm
                 c.setFillColor(color)
                 c.roundRect(bx, chart_y, 7 * mm, bh, 1.2 * mm, fill=1, stroke=0)
                 display = f"{val * 1000:.3f} mJ" if model == "lenet" else f"{val:.3f} J"
@@ -474,38 +544,38 @@ def draw_power(c: canvas.Canvas, data: dict) -> None:
                 c.setFont("Helvetica-Bold", 6.8)
                 c.saveState()
                 c.translate(bx + 3.5 * mm, chart_y + bh + 2 * mm)
-                c.rotate(35)
+                c.rotate(60)
                 c.drawString(0, 0, display)
                 c.restoreState()
             c.setFillColor(MUTED)
             c.setFont("Helvetica", 7.5)
-            c.drawCentredString(gx + 8 * mm, chart_y - 5 * mm, "LeNet" if model == "lenet" else "ResNet-50")
+            c.drawCentredString(gx + 11 * mm, chart_y - 5 * mm, "LeNet" if model == "lenet" else "ResNet-50")
 
     # Horizontal grid line and interpretation cards.
     c.setStrokeColor(GRID)
     c.line(MARGIN, chart_y, PAGE_W - MARGIN, chart_y)
     cards = [
-        ("LeNet", "+10.7%", "active energy", "-35.3% incremental", PALE_GOLD, GOLD),
-        ("ResNet-50", "-27.7%", "active energy", "-77.6% incremental", PALE_GREEN, GREEN),
+        ("LeNet", "+28.7%", "NVDLA active energy", "-7.1% incremental", PALE_GOLD),
+        ("ResNet-50", "+21.8%", "NVDLA active energy", "-62.3% incremental", PALE_GREEN),
     ]
     card_w = (PAGE_W - 2 * MARGIN - 8 * mm) / 2
-    for i, (model, value, label, note, fill, accent) in enumerate(cards):
+    for i, (model, value, label, note, fill) in enumerate(cards):
         x = MARGIN + i * (card_w + 8 * mm)
         y = 28 * mm
         panel(c, x, y, card_w, 52 * mm, fill, fill)
         c.setFillColor(INK)
         c.setFont("Helvetica-Bold", 12)
         c.drawString(x + 8 * mm, y + 38 * mm, model)
-        c.setFillColor(accent)
+        c.setFillColor(GOLD)
         c.setFont("Helvetica-Bold", 23)
         c.drawString(x + 8 * mm, y + 23 * mm, value)
         c.setFillColor(INK)
         c.setFont("Helvetica-Bold", 9)
         c.drawString(x + 42 * mm, y + 27 * mm, label)
-        c.setFillColor(accent)
+        c.setFillColor(GREEN)
         c.setFont("Helvetica-Bold", 11)
         c.drawString(x + 42 * mm, y + 17 * mm, note)
-        paragraph(c, "Active includes the complete monitored platform window; incremental subtracts driver-loaded idle.",
+        paragraph(c, "Change is NVDLA relative to CPU INT8. Active includes the monitored platform; incremental subtracts driver-loaded idle.",
                   x + 8 * mm, y + 12 * mm, card_w - 16 * mm, size=7.5, leading=9, color=MUTED)
 
 
@@ -553,7 +623,7 @@ def draw_method(c: canvas.Canvas) -> None:
         ("Latency", "Cold deployment, warm deployment, loaded-context execution, runtime phases", NVDLA),
         ("Throughput", "Images/s for every timing boundary; CPU/NVDLA latency ratios", NVDLA),
         ("Power", "18 PS + PL rails, idle/active/incremental watts, integrated energy/inference", GOLD),
-        ("Environment", "Kernel, binary hashes, clock, CPU affinity/frequency/governor, boot ID", CPU),
+        ("Environment", "Kernel, binary hashes, clock, CPU affinity/frequency/governor, boot ID", CPU_FP32),
         ("Statistics", "Raw samples, mean/median, spread, percentiles, retained outliers, bootstrap CI", BLUE),
         ("Evidence", "Serial, dmesg, runtime profiles, sensor samples, manifests, selection hashes", GREEN),
     ]
@@ -576,20 +646,21 @@ def draw_method(c: canvas.Canvas) -> None:
 
     c.setFillColor(PALE_GOLD)
     c.roundRect(MARGIN, 15 * mm, PAGE_W - 2 * MARGIN, 14 * mm, 2 * mm, fill=1, stroke=0)
-    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus CPU FP32; monitored rails rather than wall input; five independent boots per final cohort.",
+    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus independently quantized CPU INT8 plus an FP32 reference; monitored rails rather than wall input; five independent boots per cohort.",
               MARGIN + 5 * mm, 26 * mm, PAGE_W - 2 * MARGIN - 10 * mm,
               size=8, leading=9.5)
 
 
-def build_pdf(source: Path, output: Path) -> None:
+def build_pdf(source: Path, cpu_int8_root: Path, output: Path) -> None:
     data = json.loads(source.read_text(encoding="utf-8"))
     if data.get("selected_sessions") != 40:
-        raise ValueError("expected the balanced 40-session final campaign")
+        raise ValueError("expected the balanced 40-session NVDLA/CPU FP32 campaign")
+    add_cpu_int8(data, cpu_int8_root)
     output.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output), pagesize=(PAGE_W, PAGE_H), pageCompression=1)
     c.setTitle("NVDLA Evaluation Metrics and Results")
     c.setAuthor("NVDLA PetaLinux project")
-    c.setSubject("Correctness, latency, throughput, power, and ARM CPU comparison")
+    c.setSubject("Correctness, latency, throughput, power, and FP32/INT8 ARM CPU comparison")
     draw_summary(c, data)
     c.showPage()
     draw_correctness(c)
@@ -617,8 +688,13 @@ def main() -> int:
         type=Path,
         default=Path("output/pdf/nvdla-evaluation-brief.pdf"),
     )
+    parser.add_argument(
+        "--cpu-int8-root",
+        type=Path,
+        default=Path("artifacts/final-reports/cpu-int8"),
+    )
     args = parser.parse_args()
-    build_pdf(args.source, args.output)
+    build_pdf(args.source, args.cpu_int8_root, args.output)
     print(args.output.resolve())
     return 0
 
