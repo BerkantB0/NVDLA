@@ -38,6 +38,11 @@ class BoardHostRunnerTests(unittest.TestCase):
         text = MAKEFILE.read_text(encoding="utf-8")
         self.assertNotIn("board-benchmark:", text)
 
+    def test_failed_benchmark_is_collected_before_status_is_returned(self) -> None:
+        text = SCRIPT.read_text(encoding="ascii")
+        self.assertLess(text.index("BENCHMARK_STATUS=$?"), text.index('"${SCP[@]}"'))
+        self.assertLess(text.index('"${SCP[@]}"'), text.index('exit "$BENCHMARK_STATUS"'))
+
     def test_help_documents_host_and_power_passthrough(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"], capture_output=True, text=True, check=False

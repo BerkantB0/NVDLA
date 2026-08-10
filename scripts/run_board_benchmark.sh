@@ -99,7 +99,10 @@ NAME="${KIND}-${MODEL}"
 printf -v COMMAND '%q ' "${REMOTE[@]}"
 
 echo "Running $KIND $MODEL benchmark on boot $BOOT_ID"
+set +e
 "${SSH[@]}" "$TARGET" "$COMMAND"
+BENCHMARK_STATUS=$?
+set -e
 
 mkdir -p "$OUT_DIR" "$(dirname "$STATE")"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -110,3 +113,4 @@ tar -tzf "$ARCHIVE" >/dev/null
 printf '%s\n' "$BOOT_ID" >"$STATE"
 sha256sum "$ARCHIVE"
 echo "Saved $ARCHIVE"
+exit "$BENCHMARK_STATUS"
