@@ -327,7 +327,7 @@ def draw_correctness(c: canvas.Canvas) -> None:
 
 
 def draw_input_variation(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Input sensitivity", "Does execution time depend on the image?", 4)
+    page_header(c, "Input sensitivity", "Does execution time depend on the image?", 5)
     footer(c, "Supplementary control: 20 balanced inputs and three fresh boots per model")
 
     c.setFillColor(PALE_GREEN)
@@ -436,7 +436,7 @@ def draw_input_variation(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_latency(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Latency", "Three deployed stacks across each timing boundary", 3)
+    page_header(c, "Latency", "Three deployed stacks across each timing boundary", 4)
     footer(c, "Unpowered cohorts; points are medians across five independent boot-session medians")
     legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
 
@@ -529,7 +529,7 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_throughput(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 5)
+    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 6)
     footer(c, "Throughput is reciprocal mean latency, not concurrent pipelined throughput")
 
     left = MARGIN
@@ -613,7 +613,7 @@ def draw_throughput(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_phase_breakdown(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Latency composition", "Where does NVDLA deployment time go?", 6)
+    page_header(c, "Latency composition", "Where does NVDLA deployment time go?", 3)
     footer(c, "Phase means from five fresh-boot latency sessions; no power sampling")
 
     phase_specs = (
@@ -900,13 +900,13 @@ def build_pdf(source: Path, cpu_int8_root: Path, report_root: Path, output: Path
     c.showPage()
     draw_correctness(c)
     c.showPage()
+    draw_phase_breakdown(c, data)
+    c.showPage()
     draw_latency(c, data)
     c.showPage()
     draw_input_variation(c, data)
     c.showPage()
     draw_throughput(c, data)
-    c.showPage()
-    draw_phase_breakdown(c, data)
     c.showPage()
     draw_power(c, data)
     c.showPage()
