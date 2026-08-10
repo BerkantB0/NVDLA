@@ -36,7 +36,7 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
             if (
                 env.get("status") != "0"
                 or env.get("classification")
-                != "classification-qualified-input-variation-pass"
+                != "output-stable-input-variation-pass"
                 or env.get("input_set") != "multi20"
             ):
                 raise ValueError(f"{archive}: not a passing multi20 benchmark")
@@ -71,7 +71,7 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
             provenance.append(current)
 
             run = root / "steady-1"
-            if (run / "verification.txt").read_text().strip() != "classification-pass":
+            if (run / "verification.txt").read_text().strip() != "stable-output-pass":
                 raise ValueError(f"{archive}: output qualification did not pass")
             with (run / "input-results.csv").open(newline="", encoding="ascii") as stream:
                 results = {int(item["input_index"]): item for item in csv.DictReader(stream)}
@@ -97,6 +97,7 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
                         "expected_index": int(result["expected_index"]),
                         "predicted_index": int(result["predicted_index"]),
                         "acceptance": result["acceptance"],
+                        "classification_match": int(result["classification_match"]),
                         "runtime_execution_ns": int(sample["runtime_execution_ns"]),
                         "input_update_ns": int(sample.get("input_update_ns", 0)),
                         "output_extract_ns": int(sample["output_extract_ns"]),
@@ -133,6 +134,14 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         "provenance": baseline,
         "runtime_execution": overall,
         "input_update": _summary([row["input_update_ns"] for row in rows]),
+        "classification": {
+            "matches": sum(row["classification_match"] for row in rows),
+            "total": len(rows),
+            "accuracy_percent": 100.0
+            * sum(row["classification_match"] for row in rows)
+            / len(rows),
+            "meaning": "top-1 for LeNet and top-5 for ResNet-50",
+        },
         "per_input": per_input,
         "between_input_median_range_ns": median_range,
         "between_input_median_range_percent": median_range * 100.0 / overall["median_ns"],
@@ -154,10 +163,12 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         f"- Range across per-input medians: {median_range / 1e6:.3f} ms "
         f"({summary['between_input_median_range_percent']:.2f}% of the overall median)",
         f"- Median prepared-input buffer update: {summary['input_update']['median_ns'] / 1e6:.3f} ms",
+        f"- Recorded classification accuracy: {summary['classification']['accuracy_percent']:.1f}% "
+        f"({summary['classification']['matches']}/{summary['classification']['total']})",
         "",
-        "Every output passed its recorded top-1 (LeNet) or top-5 (ResNet-50) "
-        "class check, repeated outputs were stable per input, IRQ activity increased, "
-        "and no bad kernel pattern was recorded.",
+        "Every input produced an output that remained stable when repeated, IRQ activity "
+        "increased, and no bad kernel pattern was recorded. Classification accuracy is "
+        "reported separately and is not treated as a hardware execution criterion.",
     ]
     (out_dir / "input-variation-report.md").write_text(
         "\n".join(lines) + "\n", encoding="ascii"

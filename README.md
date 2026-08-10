@@ -200,9 +200,10 @@ power scope, and final-session rules.
 
 A supplementary `--input-set multi20` NVDLA mode cycles deterministic,
 balanced input sets through one loaded runtime context. It separates prepared
-input-buffer update time from runtime execution and checks every image's
-classification, allowing the primary single-image results to be tested for
-input-selection sensitivity without replacing the frozen campaign.
+input-buffer update time from runtime execution, requires repeat-stable output
+for every image, and reports classification accuracy separately. This tests
+the primary single-image results for input-selection sensitivity without
+replacing the frozen campaign.
 
 ## Reproducibility and Upstreamability
 

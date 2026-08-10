@@ -20,7 +20,7 @@ class InputVariationTests(unittest.TestCase):
                 "\n".join(
                     [
                         "status=0",
-                        "classification=classification-qualified-input-variation-pass",
+                        "classification=output-stable-input-variation-pass",
                         "input_set=multi20",
                         "model=lenet",
                         "boot_id=boot-one",
@@ -49,11 +49,11 @@ class InputVariationTests(unittest.TestCase):
             (artifact / "input-set-manifest.json").write_text(
                 json.dumps({"name": "multi20", "count": 20})
             )
-            (run / "verification.txt").write_text("classification-pass\n")
+            (run / "verification.txt").write_text("stable-output-pass\n")
             (run / "input-results.csv").write_text(
-                "input_index,expected_index,predicted_index,acceptance,output_sha256\n"
+                "input_index,expected_index,predicted_index,acceptance,classification_match,output_sha256\n"
                 + "".join(
-                    f"{index},{index % 10},{index % 10},top1,{'f' * 64}\n"
+                    f"{index},{index % 10},{index % 10},top1,{int(index != 19)},{'f' * 64}\n"
                     for index in range(20)
                 )
             )
@@ -91,6 +91,8 @@ class InputVariationTests(unittest.TestCase):
             self.assertEqual(summary["status"], "pass")
             self.assertEqual(len(summary["per_input"]), 20)
             self.assertEqual(summary["runtime_execution"]["count"], 20)
+            self.assertEqual(summary["classification"]["matches"], 19)
+            self.assertEqual(summary["classification"]["accuracy_percent"], 95.0)
             self.assertTrue((out / "input-variation-raw.csv").is_file())
 
 

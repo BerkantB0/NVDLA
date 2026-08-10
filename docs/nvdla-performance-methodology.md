@@ -88,10 +88,11 @@ The generated `multi20` sets contain two MNIST test images per digit for
 LeNet and two Imagenette validation images per class for ResNet-50. Source
 archives, deterministic selection order, preprocessing, image hashes, and
 expected indices are pinned. Every measured session must contain an equal
-number of samples per input. LeNet outputs require the expected top-1 digit;
-ResNet-50 outputs require the expected ImageNet class in the top five. This is
-a classification-qualified sensitivity experiment, not an exact tensor
-comparison against 20 independently generated VP outputs.
+number of samples per input. Every input must produce the same output when it
+is repeated, while LeNet top-1 and ResNet-50 top-5 accuracy are reported as
+model-quality results rather than hardware pass criteria. This is an
+output-stable sensitivity experiment, not an exact tensor comparison against
+20 independently generated VP outputs.
 
 Each profile calibrates the minimum cost of 1,000 back-to-back timing pairs.
 The importer rejects evidence when that cost exceeds 1% of any measured submit

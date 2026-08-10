@@ -67,7 +67,9 @@ class BoardWorkloadScriptTests(unittest.TestCase):
             ROOT / "patches" / "nvdla-sw" / "0018-umd-support-repeated-runtime-inputs.patch"
         ).read_text(encoding="utf-8")
         self.assertIn("sample.inputIndex", runtime_patch)
-        self.assertIn("classification-qualified-input-variation-pass", text)
+        self.assertIn("output-stable-input-variation-pass", text)
+        self.assertIn("classification_match", text)
+        self.assertIn("best_index = count + 0", text)
         self.assertIn("input-results.csv", text)
         self.assertIn("golden-output.dimg", text)
         self.assertIn("BENCH_CPU=2", text)
