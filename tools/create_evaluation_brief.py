@@ -22,6 +22,7 @@ from reportlab.platypus import Paragraph
 
 PAGE_W, PAGE_H = landscape(A4)
 MARGIN = 17 * mm
+PAGE_COUNT = 8
 
 INK = HexColor("#18212B")
 MUTED = HexColor("#62717C")
@@ -36,6 +37,15 @@ GREEN = HexColor("#2F8F5B")
 BLUE = HexColor("#3978A8")
 PALE_GREEN = HexColor("#E8F4EF")
 PALE_GOLD = HexColor("#FAF1DE")
+PHASE_COLORS = {
+    "runtime_initialization": HexColor("#718E9B"),
+    "model_loading": CPU_INT8,
+    "buffer_preparation": GOLD,
+    "runtime_execution": NVDLA,
+    "result_handling": HexColor("#78A667"),
+    "teardown": CPU_FP32,
+    "unprofiled_process_and_launch": HexColor("#AAB5B2"),
+}
 
 
 def fmt_ms(value: float) -> str:
@@ -76,7 +86,7 @@ def page_header(c: canvas.Canvas, section: str, title: str, page: int) -> None:
     c.drawString(MARGIN, PAGE_H - 12 * mm, section.upper())
     c.setFillColor(MUTED)
     c.setFont("Helvetica", 8.5)
-    c.drawRightString(PAGE_W - MARGIN, PAGE_H - 12 * mm, f"NVDLA evaluation brief  |  {page}/6")
+    c.drawRightString(PAGE_W - MARGIN, PAGE_H - 12 * mm, f"NVDLA evaluation brief  |  {page}/{PAGE_COUNT}")
     c.setStrokeColor(GRID)
     c.setLineWidth(0.7)
     c.line(MARGIN, PAGE_H - 15 * mm, PAGE_W - MARGIN, PAGE_H - 15 * mm)
@@ -171,6 +181,24 @@ def add_cpu_int8(data: dict, root: Path) -> None:
         }
 
 
+def add_supplementary_results(data: dict, root: Path) -> None:
+    """Attach input-sensitivity and NVDLA phase evidence."""
+    for model in ("lenet", "resnet50"):
+        variation_path = root / "input-variation" / model / "input-variation-summary.json"
+        performance_path = root / f"nvdla-{model}-latency" / "performance-summary.json"
+        variation = json.loads(variation_path.read_text(encoding="utf-8"))
+        performance = json.loads(performance_path.read_text(encoding="utf-8"))
+        if variation.get("status") != "pass" or variation.get("sessions") != 3:
+            raise ValueError(f"expected three passing input-variation sessions for {model}")
+        if performance.get("session_count") != 5:
+            raise ValueError(f"expected five NVDLA latency sessions for {model}")
+        data["models"][model]["input_variation"] = variation
+        data["models"][model]["nvdla"]["phases"] = {
+            regime: performance["regimes"][regime]["phases"]["aggregates_mean_ns"]
+            for regime in ("cold", "warm", "steady")
+        }
+
+
 def draw_summary(c: canvas.Canvas, data: dict) -> None:
     c.setFillColor(PAPER)
     c.rect(0, 0, PAGE_W, PAGE_H, fill=1, stroke=0)
@@ -194,7 +222,7 @@ def draw_summary(c: canvas.Canvas, data: dict) -> None:
         ("1.34x", "CPU INT8 execution advantage", "378.7 ms CPU INT8 vs 507.7 ms NVDLA on ResNet-50", CPU_INT8),
         ("1.92x", "NVDLA cold-deployment advantage", "1.336 s NVDLA vs 2.566 s CPU INT8 on ResNet-50", NVDLA),
         ("-62.3%", "NVDLA incremental energy", "0.134 J NVDLA vs 0.356 J CPU INT8 on ResNet-50", GOLD),
-        ("60", "Selected benchmark sessions", "Twelve balanced cohorts; five fresh boots each", BLUE),
+        ("20 x 2", "Input-sensitivity control", "Balanced image sets; three fresh boots per model", BLUE),
     ]
     for i, item in enumerate(cards):
         row, col = divmod(i, 3)
@@ -205,7 +233,7 @@ def draw_summary(c: canvas.Canvas, data: dict) -> None:
     c.roundRect(MARGIN, 16 * mm, PAGE_W - 2 * MARGIN, 16 * mm, 3 * mm, fill=1, stroke=0)
     paragraph(
         c,
-        "<b>Comparison boundary:</b> nv_small NVDLA INT8 is compared with both FP32 and independently quantized QDQ INT8 ONNX Runtime on four Cortex-A53 cores. Equal nominal precision does not imply identical quantization or graph transformation. Power is monitored PS + PL rails, not external 12 V input.",
+        "<b>Comparison boundary:</b> nv_small NVDLA INT8 is compared with both FP32 and independently quantized QDQ INT8 ONNX Runtime on four Cortex-A53 cores. Equal nominal precision does not imply identical quantization or graph transformation. The primary campaign contains 60 sessions; six supplementary sessions test 20 images per model.",
         MARGIN + 5 * mm,
         28 * mm,
         PAGE_W - 2 * MARGIN - 10 * mm,
@@ -298,8 +326,117 @@ def draw_correctness(c: canvas.Canvas) -> None:
         c.drawString(model_x + 14 * mm, y + 4.7 * mm, output)
 
 
+def draw_input_variation(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "Input sensitivity", "Does execution time depend on the image?", 3)
+    footer(c, "Supplementary control: 20 balanced inputs and three fresh boots per model")
+
+    c.setFillColor(PALE_GREEN)
+    c.roundRect(MARGIN, 155 * mm, PAGE_W - 2 * MARGIN, 13 * mm, 2.5 * mm, fill=1, stroke=0)
+    paragraph(
+        c,
+        "<b>Execution-validity result:</b> every input produced a repeat-stable output, increased IRQ activity, and completed without a bad kernel pattern.",
+        MARGIN + 5 * mm,
+        164.5 * mm,
+        PAGE_W - 2 * MARGIN - 10 * mm,
+        size=8.5,
+        leading=10,
+        color=GREEN,
+    )
+
+    gap = 8 * mm
+    pw = (PAGE_W - 2 * MARGIN - gap) / 2
+    py, ph = 31 * mm, 117 * mm
+    for model_i, model in enumerate(("lenet", "resnet50")):
+        x = MARGIN + model_i * (pw + gap)
+        item = data["models"][model]["input_variation"]
+        title = "LeNet / MNIST" if model == "lenet" else "ResNet-50 / Imagenette"
+        repeats = item["runtime_execution"]["count"] // len(item["per_input"])
+        med_ns = item["runtime_execution"]["median_ns"]
+        per_input = [entry["runtime_execution"]["median_ns"] for entry in item["per_input"]]
+        deviations = [(value - med_ns) / med_ns * 100.0 for value in per_input]
+        bound = max(abs(min(deviations)), abs(max(deviations))) * 1.18
+        accuracy = item["classification"]
+        acceptance = "top-1" if model == "lenet" else "top-5"
+
+        panel(c, x, py, pw, ph, PAPER, GRID)
+        c.setFillColor(NVDLA)
+        c.rect(x, py, 3 * mm, ph, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(x + 9 * mm, py + ph - 12 * mm, title)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 8)
+        c.drawString(x + 9 * mm, py + ph - 19 * mm,
+                     f"20 inputs x {repeats} measured executions; loaded model and buffers reused")
+
+        plot_x0, plot_x1 = x + 19 * mm, x + pw - 10 * mm
+        plot_y = py + 66 * mm
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8.5)
+        c.drawString(x + 9 * mm, py + ph - 32 * mm, "Per-input median execution deviation")
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7)
+        c.drawRightString(x + pw - 10 * mm, py + ph - 32 * mm, "model-specific horizontal scale")
+        c.setStrokeColor(GRID)
+        c.setLineWidth(1)
+        c.line(plot_x0, plot_y, plot_x1, plot_y)
+
+        def xpos(value: float) -> float:
+            return plot_x0 + (value + bound) / (2 * bound) * (plot_x1 - plot_x0)
+
+        for value in (-bound, 0.0, bound):
+            xx = xpos(value)
+            c.setStrokeColor(GRID if value else MUTED)
+            c.setLineWidth(0.7 if value else 1.1)
+            c.line(xx, plot_y - 10 * mm, xx, plot_y + 10 * mm)
+            c.setFillColor(MUTED)
+            c.setFont("Helvetica", 6.8)
+            label = "0" if value == 0 else f"{value:+.4f}%"
+            c.drawCentredString(xx, plot_y - 15 * mm, label)
+        for index, value in enumerate(deviations):
+            yy = plot_y + ((index % 5) - 2) * 3.4 * mm
+            c.setFillColor(NVDLA)
+            c.circle(xpos(value), yy, 2.1, fill=1, stroke=0)
+
+        range_pct = item["between_input_median_range_percent"]
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8.2)
+        c.drawString(x + 9 * mm, py + 43 * mm,
+                     f"Observed range across the 20 medians: {range_pct:.4f}%")
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.2)
+        c.drawString(x + 9 * mm, py + 37 * mm, "Input decode and file I/O are outside this execution interval.")
+
+        metric_y = py + 11 * mm
+        metric_w = (pw - 23 * mm) / 4
+        metrics = (
+            (fmt_ms(med_ns / 1e6), "Median execution"),
+            (fmt_ms(item["input_update"]["median_ns"] / 1e6), "Prepared input copy"),
+            ("20 / 20", "Stable outputs"),
+            (f"{accuracy['distinct_input_matches']} / 20", f"Recorded {acceptance}"),
+        )
+        for i, (value, label) in enumerate(metrics):
+            mx = x + 9 * mm + i * (metric_w + 1.7 * mm)
+            c.setFillColor(INK if i != 3 else BLUE)
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(mx, metric_y + 8 * mm, value)
+            paragraph(c, label, mx, metric_y + 4 * mm, metric_w, size=6.7, leading=7.8, color=MUTED)
+
+    c.setFillColor(PALE_GOLD)
+    c.roundRect(MARGIN, 14 * mm, PAGE_W - 2 * MARGIN, 11 * mm, 2 * mm, fill=1, stroke=0)
+    paragraph(
+        c,
+        "<b>Interpretation:</b> class accuracy is descriptive model-quality context from a small curated set. Hardware acceptance is based on repeat-stable output, IRQ progress, and clean kernel logs.",
+        MARGIN + 5 * mm,
+        22 * mm,
+        PAGE_W - 2 * MARGIN - 10 * mm,
+        size=7.5,
+        leading=9,
+    )
+
+
 def draw_latency(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Latency", "Three deployed stacks across each timing boundary", 3)
+    page_header(c, "Latency", "Three deployed stacks across each timing boundary", 4)
     footer(c, "Unpowered cohorts; points are medians across five independent boot-session medians")
     legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
 
@@ -392,7 +529,7 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_throughput(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 4)
+    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 5)
     footer(c, "Throughput is reciprocal mean latency, not concurrent pipelined throughput")
 
     left = MARGIN
@@ -475,8 +612,111 @@ def draw_throughput(c: canvas.Canvas, data: dict) -> None:
               mid + 13 * mm, 47 * mm, 97 * mm, size=8.5, leading=10.5)
 
 
+def draw_phase_breakdown(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "Latency composition", "Where does NVDLA deployment time go?", 6)
+    footer(c, "Phase means from five fresh-boot latency sessions; no power sampling")
+
+    phase_specs = (
+        ("runtime_initialization", "Initialization"),
+        ("model_loading", "Model loading"),
+        ("buffer_preparation", "Input + buffers"),
+        ("runtime_execution", "Runtime execution"),
+        ("result_handling", "Result handling"),
+        ("teardown", "Teardown"),
+        ("unprofiled_process_and_launch", "Launch / unprofiled"),
+    )
+    legend_x = MARGIN
+    legend_y = PAGE_H - 40 * mm
+    for key, label in phase_specs:
+        c.setFillColor(PHASE_COLORS[key])
+        c.rect(legend_x, legend_y, 4 * mm, 4 * mm, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica", 7.2)
+        c.drawString(legend_x + 6 * mm, legend_y + 0.5 * mm, label)
+        legend_x += stringWidth(label, "Helvetica", 7.2) + 13 * mm
+
+    panel_h = 56 * mm
+    panel_w = PAGE_W - 2 * MARGIN
+    for model_i, model in enumerate(("lenet", "resnet50")):
+        y = 94 * mm if model_i == 0 else 31 * mm
+        panel(c, MARGIN, y, panel_w, panel_h, PAPER, GRID)
+        phases = data["models"][model]["nvdla"]["phases"]
+        title = "LeNet" if model == "lenet" else "ResNet-50"
+        cold_total = sum(phases["cold"].values())
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(MARGIN + 8 * mm, y + panel_h - 10 * mm, title)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.3)
+        c.drawString(MARGIN + 30 * mm, y + panel_h - 10 * mm,
+                     "bar length is relative to this model's cold launch-to-exit time")
+
+        bar_x = MARGIN + 41 * mm
+        bar_w = panel_w - 72 * mm
+        bar_h = 7 * mm
+        for row_i, (regime, regime_label) in enumerate((
+            ("cold", "Cold launch"),
+            ("warm", "Warm launch"),
+            ("steady", "Loaded context"),
+        )):
+            yy = y + 30 * mm - row_i * 11 * mm
+            values = phases[regime]
+            total = sum(values.values())
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 7.8)
+            c.drawRightString(bar_x - 4 * mm, yy + 2.2 * mm, regime_label)
+            c.setFillColor(PANEL)
+            c.roundRect(bar_x, yy, bar_w, bar_h, 1.2 * mm, fill=1, stroke=0)
+            cursor = bar_x
+            for key, label in phase_specs:
+                value = values.get(key, 0.0)
+                width = bar_w * value / cold_total
+                if width <= 0:
+                    continue
+                c.setFillColor(PHASE_COLORS[key])
+                c.rect(cursor, yy, width, bar_h, fill=1, stroke=0)
+                if width >= 24 * mm:
+                    share = value / total * 100.0
+                    c.setFillColor(PAPER if key != "unprofiled_process_and_launch" else INK)
+                    c.setFont("Helvetica-Bold", 6.6)
+                    short = {
+                        "runtime_initialization": "Init",
+                        "model_loading": "Model",
+                        "buffer_preparation": "Buffers",
+                        "runtime_execution": "Execution",
+                        "result_handling": "Result",
+                        "teardown": "Teardown",
+                        "unprofiled_process_and_launch": "Launch",
+                    }[key]
+                    c.drawCentredString(cursor + width / 2, yy + 2.2 * mm, f"{short} {share:.1f}%")
+                cursor += width
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 7.8)
+            c.drawString(bar_x + bar_w + 4 * mm, yy + 2.2 * mm, fmt_ms(total / 1e6))
+
+        warm_total = sum(phases["warm"].values())
+        steady_total = sum(phases["steady"].values())
+        warm_execution_share = phases["warm"]["runtime_execution"] / warm_total * 100.0
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7)
+        c.drawRightString(MARGIN + panel_w - 8 * mm, y + panel_h - 10 * mm,
+                          f"Warm runtime execution share {warm_execution_share:.1f}%  |  loaded context {fmt_ms(steady_total / 1e6)}")
+
+    c.setFillColor(PALE_GOLD)
+    c.roundRect(MARGIN, 14 * mm, PAGE_W - 2 * MARGIN, 10 * mm, 2 * mm, fill=1, stroke=0)
+    paragraph(
+        c,
+        "<b>Timing boundary:</b> cold and warm bars span process launch to exit. Loaded context reuses the model and buffers; its blocking runtime execution includes userspace dispatch, ioctl/KMD scheduling, accelerator work, IRQ completion, and emulator tasks.",
+        MARGIN + 5 * mm,
+        21.5 * mm,
+        PAGE_W - 2 * MARGIN - 10 * mm,
+        size=7.2,
+        leading=8.5,
+    )
+
+
 def draw_power(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Power and energy", "Monitored PS + PL rails during inference", 5)
+    page_header(c, "Power and energy", "Monitored PS + PL rails during inference", 7)
     footer(c, "Power cohorts are separate from primary latency cohorts; 50 ms sampling with endpoint capture")
     legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
 
@@ -574,7 +814,7 @@ def draw_power(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_method(c: canvas.Canvas) -> None:
-    page_header(c, "Measurement design", "What was collected, and how to read it", 6)
+    page_header(c, "Measurement design", "What was collected, and how to read it", 8)
     footer(c, "Full provenance and raw samples remain in artifacts/final-reports and the selected session archives")
 
     # Protocol flow.
@@ -640,16 +880,17 @@ def draw_method(c: canvas.Canvas) -> None:
 
     c.setFillColor(PALE_GOLD)
     c.roundRect(MARGIN, 15 * mm, PAGE_W - 2 * MARGIN, 14 * mm, 2 * mm, fill=1, stroke=0)
-    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus independently quantized CPU INT8 plus an FP32 reference; monitored rails rather than wall input; five independent boots per cohort.",
+    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus independently quantized CPU INT8 plus an FP32 reference; monitored rails rather than wall input; five boots per primary cohort and three per input-sensitivity model.",
               MARGIN + 5 * mm, 26 * mm, PAGE_W - 2 * MARGIN - 10 * mm,
               size=8, leading=9.5)
 
 
-def build_pdf(source: Path, cpu_int8_root: Path, output: Path) -> None:
+def build_pdf(source: Path, cpu_int8_root: Path, report_root: Path, output: Path) -> None:
     data = json.loads(source.read_text(encoding="utf-8"))
     if data.get("selected_sessions") != 40:
         raise ValueError("expected the balanced 40-session NVDLA/CPU FP32 campaign")
     add_cpu_int8(data, cpu_int8_root)
+    add_supplementary_results(data, report_root)
     output.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output), pagesize=(PAGE_W, PAGE_H), pageCompression=1)
     c.setTitle("NVDLA Evaluation Metrics and Results")
@@ -659,9 +900,13 @@ def build_pdf(source: Path, cpu_int8_root: Path, output: Path) -> None:
     c.showPage()
     draw_correctness(c)
     c.showPage()
+    draw_input_variation(c, data)
+    c.showPage()
     draw_latency(c, data)
     c.showPage()
     draw_throughput(c, data)
+    c.showPage()
+    draw_phase_breakdown(c, data)
     c.showPage()
     draw_power(c, data)
     c.showPage()
@@ -687,8 +932,13 @@ def main() -> int:
         type=Path,
         default=Path("artifacts/final-reports/cpu-int8"),
     )
+    parser.add_argument(
+        "--report-root",
+        type=Path,
+        default=Path("artifacts/final-reports"),
+    )
     args = parser.parse_args()
-    build_pdf(args.source, args.cpu_int8_root, args.output)
+    build_pdf(args.source, args.cpu_int8_root, args.report_root, args.output)
     print(args.output.resolve())
     return 0
 
