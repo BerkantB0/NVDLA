@@ -91,8 +91,14 @@ class InputVariationTests(unittest.TestCase):
             self.assertEqual(summary["status"], "pass")
             self.assertEqual(len(summary["per_input"]), 20)
             self.assertEqual(summary["runtime_execution"]["count"], 20)
-            self.assertEqual(summary["classification"]["matches"], 19)
-            self.assertEqual(summary["classification"]["accuracy_percent"], 95.0)
+            self.assertEqual(summary["classification"]["distinct_input_matches"], 19)
+            self.assertEqual(summary["classification"]["distinct_input_total"], 20)
+            self.assertEqual(
+                summary["classification"]["distinct_input_accuracy_percent"], 95.0
+            )
+            self.assertEqual(
+                summary["classification"]["repeated_observation_matches"], 19
+            )
             self.assertTrue((out / "input-variation-raw.csv").is_file())
 
 

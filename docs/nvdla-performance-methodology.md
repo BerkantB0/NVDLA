@@ -444,9 +444,11 @@ INPUT_VARIATION_OUT=artifacts/input-variation-lenet \
 ```
 
 The report preserves every sample, summarizes each input separately, and
-reports the range across per-input median execution times. It must be reported
-as a sensitivity analysis alongside, rather than pooled with, the primary
-single-image campaign.
+reports the range across per-input median execution times. Classification
+accuracy uses the 20 distinct images as its sample size; repeated observations
+show output stability and do not increase the accuracy sample size. The result
+must be reported as a sensitivity analysis alongside, rather than pooled with,
+the primary single-image campaign.
 
 ## Interpretation Limits
 

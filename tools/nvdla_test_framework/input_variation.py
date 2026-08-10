@@ -113,11 +113,17 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
     per_input = []
     for index in range(20):
         group = [row for row in rows if row["input_index"] == index]
+        classification_matches = {row["classification_match"] for row in group}
+        if len(classification_matches) != 1:
+            raise ValueError(
+                f"input {index}: classification result changed between repeats"
+            )
         per_input.append(
             {
                 "input_index": index,
                 "expected_index": group[0]["expected_index"],
                 "acceptance": group[0]["acceptance"],
+                "classification_match": group[0]["classification_match"],
                 "runtime_execution": _summary(
                     [row["runtime_execution_ns"] for row in group]
                 ),
@@ -127,20 +133,31 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
     medians = [item["runtime_execution"]["median_ns"] for item in per_input]
     overall = _summary([row["runtime_execution_ns"] for row in rows])
     median_range = max(medians) - min(medians)
+    distinct_matches = sum(item["classification_match"] for item in per_input)
+    repeated_matches = sum(row["classification_match"] for row in rows)
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "sessions": len(archives),
         "provenance": baseline,
         "runtime_execution": overall,
         "input_update": _summary([row["input_update_ns"] for row in rows]),
         "classification": {
-            "matches": sum(row["classification_match"] for row in rows),
-            "total": len(rows),
-            "accuracy_percent": 100.0
-            * sum(row["classification_match"] for row in rows)
+            "distinct_input_matches": distinct_matches,
+            "distinct_input_total": len(per_input),
+            "distinct_input_accuracy_percent": 100.0
+            * distinct_matches
+            / len(per_input),
+            "repeated_observation_matches": repeated_matches,
+            "repeated_observation_total": len(rows),
+            "repeated_observation_accuracy_percent": 100.0
+            * repeated_matches
             / len(rows),
             "meaning": "top-1 for LeNet and top-5 for ResNet-50",
+            "note": (
+                "Accuracy sample size is the number of distinct inputs; repeated "
+                "observations test output stability."
+            ),
         },
         "per_input": per_input,
         "between_input_median_range_ns": median_range,
@@ -163,8 +180,13 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         f"- Range across per-input medians: {median_range / 1e6:.3f} ms "
         f"({summary['between_input_median_range_percent']:.2f}% of the overall median)",
         f"- Median prepared-input buffer update: {summary['input_update']['median_ns'] / 1e6:.3f} ms",
-        f"- Recorded classification accuracy: {summary['classification']['accuracy_percent']:.1f}% "
-        f"({summary['classification']['matches']}/{summary['classification']['total']})",
+        f"- Recorded classification accuracy across distinct inputs: "
+        f"{summary['classification']['distinct_input_accuracy_percent']:.1f}% "
+        f"({summary['classification']['distinct_input_matches']}/"
+        f"{summary['classification']['distinct_input_total']})",
+        f"- Stable repeated classification observations: "
+        f"{summary['classification']['repeated_observation_matches']}/"
+        f"{summary['classification']['repeated_observation_total']}",
         "",
         "Every input produced an output that remained stable when repeated, IRQ activity "
         "increased, and no bad kernel pattern was recorded. Classification accuracy is "
