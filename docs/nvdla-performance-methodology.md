@@ -94,6 +94,45 @@ model-quality results rather than hardware pass criteria. This is an
 output-stable sensitivity experiment, not an exact tensor comparison against
 20 independently generated VP outputs.
 
+### Streamed video throughput
+
+The `stream20` control measures whether loaded-context execution throughput is
+attainable when frames arrive continuously. It does not decode a batch before
+measurement. A GStreamer producer repeatedly decodes the deterministic
+20-frame MJPEG stream into raw `GRAY8` LeNet frames or `BGR` ResNet-50 frames
+and writes them to a FIFO. The runtime reads that FIFO on a producer thread,
+converts each frame to the model tensor layout, and places it in a bounded
+two-frame queue. Its consumer copies the next prepared tensor, executes NVDLA,
+and extracts the output. Acquisition and preparation of frame N+1 can therefore
+overlap execution of frame N.
+
+The upstream-facing runtime feature accepts any raw frame file, pipe, or FIFO
+through `--input-stream`; `--stream-period` only defines the repeated-output
+comparison period. GStreamer and the deterministic test video remain local to
+the board harness. A camera, RTSP receiver, or other live source can replace
+the file-loop producer as long as it emits the same raw frame format.
+
+The primary streamed result is sustained pipeline throughput:
+
+```text
+measured frames / elapsed measured pipeline interval
+```
+
+The interval begins after all warm-ups and ends after extraction of the final
+measured output. Per-frame records include raw-frame acquisition wait, tensor
+preparation, consumer queue wait, input-buffer copy, runtime execution, and
+output extraction. These phases overlap across frames and must not be summed
+to reconstruct pipeline latency. An unpaced source is intentional: it measures
+maximum sustainable classification throughput, not camera frame rate or
+end-to-end sensor latency.
+
+The same 20-frame period and expected labels used by `multi20` qualify each
+run. Every repeated position must produce a stable output, LeNet top-1 or
+ResNet-50 top-5 classification is reported, the NVDLA IRQ count must increase,
+the clock must be verified, and kernel logs must remain clean. This is
+classification-qualified pipeline evidence, not an exact comparison with 20
+independent VP tensors.
+
 Each profile calibrates the minimum cost of 1,000 back-to-back timing pairs.
 The importer rejects evidence when that cost exceeds 1% of any measured submit
 latency and reports the maximum observed fraction.
@@ -449,6 +488,37 @@ accuracy uses the 20 distinct images as its sample size; repeated observations
 show output stability and do not increase the accuracy sample size. The result
 must be reported as a sensitivity analysis alongside, rather than pooled with,
 the primary single-image campaign.
+
+Run the streamed pipeline from fresh boots with measured counts divisible by
+the 20-frame period:
+
+```sh
+scripts/run_board_benchmark.sh nvdla lenet \
+  --regime steady --input-set stream20 \
+  --warmups 20 --steady-samples 200 \
+  --settle-seconds 30 --benchmark-cpu 2 \
+  --output artifacts/video/nvdla/lenet
+
+scripts/run_board_benchmark.sh nvdla resnet50 \
+  --regime steady --input-set stream20 \
+  --warmups 20 --steady-samples 40 \
+  --settle-seconds 30 --benchmark-cpu 2 \
+  --output artifacts/video/nvdla/resnet50
+```
+
+One warm-up traversal primes every stream position. Analyze each model's
+archives with the existing input-variation importer:
+
+```sh
+ARCHIVES="session1.tar.gz session2.tar.gz" \
+INPUT_VARIATION_OUT=artifacts/stream-pipeline-lenet \
+  make input-variation-report
+```
+
+The report presents sustained pipeline frames per second separately from
+per-frame runtime execution. Do not infer camera-to-result latency from the
+unpaced file-backed source; a live-source experiment would additionally need
+source timestamps and a defined buffering/drop policy.
 
 ## Interpretation Limits
 

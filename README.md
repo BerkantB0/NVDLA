@@ -205,6 +205,14 @@ for every image, and reports classification accuracy separately. This tests
 the primary single-image results for input-selection sensitivity without
 replacing the frozen campaign.
 
+The complementary `--input-set stream20` mode feeds the same 20 inputs as a
+looped MJPEG stream through GStreamer and a bounded runtime queue. Frame
+decoding and tensor preparation overlap accelerator execution, so the reported
+sustained frame rate represents a simple camera-like pipeline rather than
+batch preprocessing. The file-backed producer is deterministic; it can later
+be replaced by a live GStreamer source without changing the NVDLA runtime
+interface.
+
 ## Reproducibility and Upstreamability
 
 The pristine pinned `nvdla/sw` checkout is kept separate from the patched work
