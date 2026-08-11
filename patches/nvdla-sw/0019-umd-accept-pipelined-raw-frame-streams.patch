@@ -1,0 +1,561 @@
+From c6e1afbee431fc6e6e8f001ca4412dea88312c9d Mon Sep 17 00:00:00 2001
+From: Berkant Bakisli <berkant.bakisli@gmail.com>
+Date: Tue, 11 Aug 2026 22:01:56 +0100
+Subject: [PATCH 19/19] umd: accept pipelined raw frame streams
+
+Repeated image inputs are decoded before execution, so they cannot represent
+a continuing camera or video source. Add an opt-in raw frame stream input
+backed by a bounded producer/consumer queue. The producer reads and converts
+GRAY8 or BGR8 frames while the consumer executes the previous frame.
+
+Record acquisition, preparation, queue, copy, execution, and output timings
+without changing existing image behavior or the runtime library ABI.
+
+Tested with the Buildroot AArch64 toolchain.
+
+Signed-off-by: Berkant Bakisli <berkant.bakisli@gmail.com>
+---
+ umd/apps/runtime/RuntimeTest.cpp | 314 ++++++++++++++++++++++++++++---
+ umd/apps/runtime/RuntimeTest.h   |  11 +-
+ umd/apps/runtime/main.cpp        |  35 +++-
+ 3 files changed, 335 insertions(+), 25 deletions(-)
+
+diff --git a/umd/apps/runtime/RuntimeTest.cpp b/umd/apps/runtime/RuntimeTest.cpp
+index 893984f..1babdda 100644
+--- a/umd/apps/runtime/RuntimeTest.cpp
++++ b/umd/apps/runtime/RuntimeTest.cpp
+@@ -44,8 +44,12 @@
+ #include "dlatypes.h"
+ 
+ #include <cstdio> // snprintf, fopen
++#include <condition_variable>
+ #include <cstring>
++#include <deque>
++#include <mutex>
+ #include <string>
++#include <thread>
+ #include <vector>
+ 
+ #define OUTPUT_DIMG "output.dimg"
+@@ -104,13 +108,15 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+ 
+     fprintf(output,
+             "{\n"
+-            "  \"schema_version\": 3,\n"
++            "  \"schema_version\": 4,\n"
+             "  \"clock\": \"CLOCK_MONOTONIC_RAW\",\n"
+             "  \"clock_resolution_ns\": %llu,\n"
+             "  \"clock_pair_overhead_ns\": %llu,\n"
+             "  \"warmup_iterations\": %u,\n"
+             "  \"measured_iterations\": %u,\n"
+             "  \"input_count\": %u,\n"
++            "  \"stream_input\": %s,\n"
++            "  \"stream_period\": %u,\n"
+             "  \"outputs_consistent\": %s,\n"
+             "  \"status\": %d,\n"
+             "  \"phases_ns\": {\n"
+@@ -120,6 +126,7 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+             "    \"emu_init\": %llu,\n"
+             "    \"input_setup\": %llu,\n"
+             "    \"output_setup\": %llu,\n"
++            "    \"stream_pipeline\": %llu,\n"
+             "    \"output_write\": %llu,\n"
+             "    \"buffer_cleanup\": %llu,\n"
+             "    \"emu_stop\": %llu,\n"
+@@ -133,7 +140,12 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+             (unsigned long long)profile.clockPairOverheadNs,
+             appArgs->warmupIterations,
+             appArgs->measuredIterations,
+-            (NvU32)inputCount(appArgs),
++            appArgs->inputStream.empty() ? (NvU32)inputCount(appArgs) :
++                (appArgs->streamPeriod == 0 ?
++                    appArgs->warmupIterations + appArgs->measuredIterations :
++                    appArgs->streamPeriod),
++            appArgs->inputStream.empty() ? "false" : "true",
++            appArgs->streamPeriod,
+             profile.outputsConsistent ? "true" : "false",
+             profile.status,
+             (unsigned long long)profile.runtimeCreateNs,
+@@ -142,6 +154,7 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+             (unsigned long long)profile.emuInitNs,
+             (unsigned long long)profile.inputSetupNs,
+             (unsigned long long)profile.outputSetupNs,
++            (unsigned long long)profile.streamPipelineNs,
+             (unsigned long long)profile.outputWriteNs,
+             (unsigned long long)profile.bufferCleanupNs,
+             (unsigned long long)profile.emuStopNs,
+@@ -155,11 +168,16 @@ static bool writePerformanceProfile(const TestAppArgs* appArgs,
+         const PerformanceSample& sample = profile.samples[index];
+         fprintf(output,
+                 "    {\"index\": %u, \"input_index\": %u, "
+-                "\"warmup\": %s, \"input_update_ns\": %llu, "
++                "\"warmup\": %s, \"source_read_ns\": %llu, "
++                "\"input_prepare_ns\": %llu, \"queue_wait_ns\": %llu, "
++                "\"input_update_ns\": %llu, "
+                 "\"runtime_execution_ns\": %llu, \"output_extract_ns\": %llu}%s\n",
+                 sample.index,
+                 sample.inputIndex,
+                 sample.warmup ? "true" : "false",
++                (unsigned long long)sample.sourceReadNs,
++                (unsigned long long)sample.inputPrepareNs,
++                (unsigned long long)sample.queueWaitNs,
+                 (unsigned long long)sample.inputUpdateNs,
+                 (unsigned long long)sample.runtimeExecutionNs,
+                 (unsigned long long)sample.outputExtractNs,
+@@ -234,6 +252,137 @@ fail:
+     return e;
+ }
+ 
++struct StreamFrame
++{
++    NvU32 index;
++    NvU64 sourceReadNs;
++    NvU64 inputPrepareNs;
++    std::vector<NvU8> input;
++};
++
++struct StreamQueue
++{
++    StreamQueue() : stopped(false), finished(false), status(NvDlaSuccess) {}
++
++    std::deque<StreamFrame> frames;
++    std::mutex mutex;
++    std::condition_variable readable;
++    std::condition_variable writable;
++    bool stopped;
++    bool finished;
++    NvDlaError status;
++};
++
++static bool readFrame(FILE* input, std::vector<NvU8>* frame)
++{
++    size_t offset = 0;
++
++    while (offset < frame->size())
++    {
++        size_t count = fread(&(*frame)[offset], 1, frame->size() - offset,
++                             input);
++        if (count == 0)
++            return false;
++        offset += count;
++    }
++    return true;
++}
++
++static NvDlaError prepareRawFrame(const TestAppArgs* appArgs,
++                                  const std::vector<NvU8>& sourceBytes,
++                                  const nvdla::IRuntime::NvDlaTensor* tensorDesc,
++                                  std::vector<NvU8>* preparedInput)
++{
++    NvDlaError e = NvDlaSuccess;
++    NvDlaImage sourceImage;
++    NvDlaImage tensorImage;
++
++    memset(&sourceImage, 0, sizeof(sourceImage));
++    memset(&tensorImage, 0, sizeof(tensorImage));
++    if (tensorDesc->dims.c != 1 && tensorDesc->dims.c != 3)
++        ORIGINATE_ERROR_FAIL(NvDlaError_NotSupported,
++                             "raw input stream requires 1 or 3 channels");
++    sourceImage.m_meta.surfaceFormat = tensorDesc->dims.c == 1 ?
++                                           NvDlaImage::T_R8 :
++                                           NvDlaImage::T_B8G8R8;
++    sourceImage.m_meta.width = tensorDesc->dims.w;
++    sourceImage.m_meta.height = tensorDesc->dims.h;
++    sourceImage.m_meta.channel = tensorDesc->dims.c;
++    sourceImage.m_meta.lineStride = tensorDesc->dims.w * tensorDesc->dims.c;
++    sourceImage.m_meta.surfaceStride = 0;
++    sourceImage.m_meta.size = sourceBytes.size();
++    sourceImage.m_pData = const_cast<NvU8*>(&sourceBytes[0]);
++
++    PROPAGATE_ERROR_FAIL(createImageCopy(appArgs, &sourceImage, tensorDesc,
++                                         &tensorImage));
++    preparedInput->assign(static_cast<NvU8*>(tensorImage.m_pData),
++                          static_cast<NvU8*>(tensorImage.m_pData) +
++                              tensorImage.m_meta.size);
++
++fail:
++    if (tensorImage.m_pData != NULL)
++        NvDlaFree(tensorImage.m_pData);
++    return e;
++}
++
++static void produceStreamFrames(const TestAppArgs* appArgs,
++                                nvdla::IRuntime::NvDlaTensor tensorDesc,
++                                NvU32 frameCount,
++                                StreamQueue* queue)
++{
++    const size_t frameSize = tensorDesc.dims.w * tensorDesc.dims.h *
++                             tensorDesc.dims.c;
++    FILE* input = fopen(appArgs->inputStream.c_str(), "rb");
++    NvDlaError status = NvDlaSuccess;
++
++    if (input != NULL)
++    {
++        for (NvU32 index = 0; index < frameCount; ++index)
++        {
++            StreamFrame frame;
++            std::vector<NvU8> sourceBytes(frameSize);
++            NvU64 phaseStart = monotonicRawNs();
++
++            frame.index = index;
++            if (!readFrame(input, &sourceBytes))
++            {
++                status = NvDlaError_BadParameter;
++                break;
++            }
++            frame.sourceReadNs = elapsedNs(phaseStart);
++
++            phaseStart = monotonicRawNs();
++            status = prepareRawFrame(appArgs, sourceBytes, &tensorDesc,
++                                     &frame.input);
++            frame.inputPrepareNs = elapsedNs(phaseStart);
++            if (status != NvDlaSuccess)
++                break;
++
++            std::unique_lock<std::mutex> lock(queue->mutex);
++            queue->writable.wait(lock, [queue] {
++                return queue->frames.size() < 2 || queue->stopped;
++            });
++            if (queue->stopped)
++                break;
++            queue->frames.push_back(frame);
++            lock.unlock();
++            queue->readable.notify_one();
++        }
++        fclose(input);
++    }
++    else
++    {
++        status = NvDlaError_BadParameter;
++    }
++
++    {
++        std::lock_guard<std::mutex> lock(queue->mutex);
++        queue->status = status;
++        queue->finished = true;
++    }
++    queue->readable.notify_all();
++}
++
+ static NvDlaError prepareOutputTensor
+ (
+     nvdla::IRuntime::NvDlaTensor* pTDesc,
+@@ -280,25 +429,32 @@ NvDlaError setupInputBuffer
+     PROPAGATE_ERROR_FAIL(runtime->allocateSystemMemory(&hMem, tDesc.bufferSize, pInputBuffer));
+     i->inputHandle = (NvU8 *)hMem;
+ 
+-    i->preparedInputs.resize(inputCount(appArgs));
+-    for (size_t index = 0; index < inputCount(appArgs); ++index)
++    if (appArgs->inputStream.empty())
+     {
+-        NvDlaImage tensorImage;
+-        void* preparedInput;
+-
+-        i->preparedInputs[index].resize(tDesc.bufferSize);
+-        preparedInput = &i->preparedInputs[index][0];
+-        e = copyImageToInputTensor(appArgs,
+-                                   inputName(appArgs, index),
+-                                   &tensorImage,
+-                                   &preparedInput,
+-                                   &tDesc);
+-        if (tensorImage.m_pData != NULL)
+-            NvDlaFree(tensorImage.m_pData);
+-        if (e != NvDlaSuccess)
+-            goto fail;
++        i->preparedInputs.resize(inputCount(appArgs));
++        for (size_t index = 0; index < inputCount(appArgs); ++index)
++        {
++            NvDlaImage tensorImage;
++            void* preparedInput;
++
++            i->preparedInputs[index].resize(tDesc.bufferSize);
++            preparedInput = &i->preparedInputs[index][0];
++            e = copyImageToInputTensor(appArgs,
++                                       inputName(appArgs, index),
++                                       &tensorImage,
++                                       &preparedInput,
++                                       &tDesc);
++            if (tensorImage.m_pData != NULL)
++                NvDlaFree(tensorImage.m_pData);
++            if (e != NvDlaSuccess)
++                goto fail;
++        }
++        memcpy(*pInputBuffer, &i->preparedInputs[0][0], tDesc.bufferSize);
++    }
++    else
++    {
++        memset(*pInputBuffer, 0, tDesc.bufferSize);
+     }
+-    memcpy(*pInputBuffer, &i->preparedInputs[0][0], tDesc.bufferSize);
+ 
+     if (!runtime->bindInputTensor(0, hMem))
+         ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "runtime->bindInputTensor() failed");
+@@ -512,6 +668,107 @@ double get_elapsed_time_seconds(struct timespec *before, struct timespec *after)
+   return deltat_s + deltat_ns;
+ }
+ 
++static NvDlaError runStreamIterations(
++    const TestAppArgs* appArgs,
++    TestInfo* i,
++    void* pInputBuffer,
++    void* pOutputBuffer,
++    NvU32 totalIterations,
++    std::vector<std::vector<NvU8> >* referenceOutputs)
++{
++    NvDlaError e = NvDlaSuccess;
++    nvdla::IRuntime::NvDlaTensor tensorDesc;
++    StreamQueue queue;
++    std::thread producer;
++    NvU64 measuredStart = 0;
++
++    PROPAGATE_ERROR_FAIL(i->runtime->getInputTensorDesc(0, &tensorDesc));
++    producer = std::thread(produceStreamFrames, appArgs, tensorDesc,
++                           totalIterations, &queue);
++
++    for (NvU32 index = 0; index < totalIterations; ++index)
++    {
++        StreamFrame frame;
++        PerformanceSample sample;
++        NvU64 phaseStart;
++
++        if (index == appArgs->warmupIterations)
++            measuredStart = monotonicRawNs();
++        phaseStart = monotonicRawNs();
++
++        {
++            std::unique_lock<std::mutex> lock(queue.mutex);
++            queue.readable.wait(lock, [&queue] {
++                return !queue.frames.empty() || queue.finished;
++            });
++            sample.queueWaitNs = elapsedNs(phaseStart);
++            if (queue.frames.empty())
++                ORIGINATE_ERROR_FAIL(queue.status == NvDlaSuccess ?
++                                         NvDlaError_BadParameter : queue.status,
++                                     "input stream ended before frame %u",
++                                     index + 1);
++            frame = queue.frames.front();
++            queue.frames.pop_front();
++        }
++        queue.writable.notify_one();
++
++        sample.index = index + 1;
++        sample.inputIndex = appArgs->streamPeriod == 0 ?
++                                index : index % appArgs->streamPeriod;
++        sample.warmup = index < appArgs->warmupIterations;
++        sample.sourceReadNs = frame.sourceReadNs;
++        sample.inputPrepareNs = frame.inputPrepareNs;
++        if (frame.input.size() != tensorDesc.bufferSize)
++            ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter,
++                                 "prepared frame size does not match input tensor");
++
++        phaseStart = monotonicRawNs();
++        memcpy(pInputBuffer, &frame.input[0], frame.input.size());
++        sample.inputUpdateNs = elapsedNs(phaseStart);
++
++        phaseStart = monotonicRawNs();
++        if (!i->runtime->submit())
++            ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter,
++                                 "runtime->submit() failed");
++        sample.runtimeExecutionNs = elapsedNs(phaseStart);
++
++        phaseStart = monotonicRawNs();
++        PROPAGATE_ERROR_FAIL(DlaBuffer2DIMG(&pOutputBuffer, i->outputImage));
++        sample.outputExtractNs = elapsedNs(phaseStart);
++
++        {
++            const NvU8* outputBytes =
++                static_cast<const NvU8*>(i->outputImage->m_pData);
++            std::vector<NvU8>& referenceOutput =
++                (*referenceOutputs)[sample.inputIndex];
++            if (referenceOutput.empty())
++            {
++                referenceOutput.assign(
++                    outputBytes, outputBytes + i->outputImage->m_meta.size);
++            }
++            else if (referenceOutput.size() != i->outputImage->m_meta.size ||
++                     memcmp(&referenceOutput[0], outputBytes,
++                            referenceOutput.size()) != 0)
++            {
++                i->profile.outputsConsistent = false;
++            }
++        }
++        i->profile.samples.push_back(sample);
++    }
++    if (measuredStart != 0)
++        i->profile.streamPipelineNs = elapsedNs(measuredStart);
++
++fail:
++    {
++        std::lock_guard<std::mutex> lock(queue.mutex);
++        queue.stopped = true;
++    }
++    queue.writable.notify_all();
++    if (producer.joinable())
++        producer.join();
++    return e;
++}
++
+ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+ {
+     NvDlaError e = NvDlaSuccess;
+@@ -519,8 +776,9 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+     void* pOutputBuffer = NULL;
+     NvU32 totalIterations =
+         appArgs->warmupIterations + appArgs->measuredIterations;
+-    std::vector<std::vector<NvU8> > referenceOutputs(
+-        inputCount(appArgs));
++    size_t outputSlots = appArgs->inputStream.empty() ? inputCount(appArgs) :
++        (appArgs->streamPeriod == 0 ? totalIterations : appArgs->streamPeriod);
++    std::vector<std::vector<NvU8> > referenceOutputs(outputSlots);
+     NvU32 currentInput = 0;
+     NvU64 phaseStart;
+     NvU64 testStart;
+@@ -541,12 +799,22 @@ NvDlaError runTest(const TestAppArgs* appArgs, TestInfo* i)
+     PROPAGATE_ERROR_FAIL(setupOutputBuffer(appArgs, i, &pOutputBuffer));
+     i->profile.outputSetupNs = elapsedNs(phaseStart);
+     NvDlaDebugPrintf("submitting tasks...\n");
+-    for (NvU32 index = 0; index < totalIterations; ++index)
++    if (!appArgs->inputStream.empty())
++    {
++        PROPAGATE_ERROR_FAIL(runStreamIterations(appArgs, i, pInputBuffer,
++                                                 pOutputBuffer,
++                                                 totalIterations,
++                                                 &referenceOutputs));
++    }
++    else for (NvU32 index = 0; index < totalIterations; ++index)
+     {
+         PerformanceSample sample;
+         sample.index = index + 1;
+         sample.inputIndex = index % inputCount(appArgs);
+         sample.warmup = index < appArgs->warmupIterations;
++        sample.sourceReadNs = 0;
++        sample.inputPrepareNs = 0;
++        sample.queueWaitNs = 0;
+         sample.inputUpdateNs = 0;
+ 
+         if (sample.inputIndex != currentInput)
+diff --git a/umd/apps/runtime/RuntimeTest.h b/umd/apps/runtime/RuntimeTest.h
+index 2cb7235..0796b99 100644
+--- a/umd/apps/runtime/RuntimeTest.h
++++ b/umd/apps/runtime/RuntimeTest.h
+@@ -44,6 +44,9 @@ struct PerformanceSample
+     NvU32 index;
+     NvU32 inputIndex;
+     bool warmup;
++    NvU64 sourceReadNs;
++    NvU64 inputPrepareNs;
++    NvU64 queueWaitNs;
+     NvU64 inputUpdateNs;
+     NvU64 runtimeExecutionNs;
+     NvU64 outputExtractNs;
+@@ -60,6 +63,7 @@ struct PerformanceProfile
+         emuInitNs(0),
+         inputSetupNs(0),
+         outputSetupNs(0),
++        streamPipelineNs(0),
+         outputWriteNs(0),
+         bufferCleanupNs(0),
+         emuStopNs(0),
+@@ -79,6 +83,7 @@ struct PerformanceProfile
+     NvU64 emuInitNs;
+     NvU64 inputSetupNs;
+     NvU64 outputSetupNs;
++    NvU64 streamPipelineNs;
+     NvU64 outputWriteNs;
+     NvU64 bufferCleanupNs;
+     NvU64 emuStopNs;
+@@ -96,6 +101,7 @@ struct TestAppArgs
+     std::string inputPath;
+     std::string inputName;
+     std::vector<std::string> inputNames;
++    std::string inputStream;
+     std::string loadableName;
+     NvS32 serverPort;
+     NvU8 normalize_value;
+@@ -104,11 +110,13 @@ struct TestAppArgs
+     std::string profilePath;
+     NvU32 warmupIterations;
+     NvU32 measuredIterations;
++    NvU32 streamPeriod;
+ 
+     TestAppArgs() :
+         inputPath("./"),
+         inputName(""),
+         inputNames(),
++        inputStream(""),
+         loadableName(""),
+         serverPort(6666),
+         normalize_value(1),
+@@ -116,7 +124,8 @@ struct TestAppArgs
+         rawOutputDump(false),
+         profilePath(""),
+         warmupIterations(0),
+-        measuredIterations(1)
++        measuredIterations(1),
++        streamPeriod(0)
+     {}
+ };
+ 
+diff --git a/umd/apps/runtime/main.cpp b/umd/apps/runtime/main.cpp
+index 531b78f..a724f2b 100644
+--- a/umd/apps/runtime/main.cpp
++++ b/umd/apps/runtime/main.cpp
+@@ -168,6 +168,26 @@ int main(int argc, char* argv[])
+ 
+             testAppArgs.inputNames.push_back(std::string(argv[++ii]));
+         }
++        else if (std::strcmp(arg, "--input-stream") == 0)
++        {
++            if (ii+1 >= argc)
++            {
++                showHelp = true;
++                break;
++            }
++
++            testAppArgs.inputStream = std::string(argv[++ii]);
++        }
++        else if (std::strcmp(arg, "--stream-period") == 0)
++        {
++            if (ii+1 >= argc ||
++                !parseIterationCount(argv[++ii], false,
++                                     &testAppArgs.streamPeriod))
++            {
++                showHelp = true;
++                break;
++            }
++        }
+         else if (std::strcmp(arg, "--loadable") == 0)
+         {
+             if (ii+1 >= argc)
+@@ -261,7 +281,18 @@ int main(int argc, char* argv[])
+         showHelp = true;
+         missingArg = true;
+     }
+-    if (testAppArgs.inputNames.empty() && !serverMode)
++    if (testAppArgs.inputNames.empty() && testAppArgs.inputStream.empty() &&
++        !serverMode)
++    {
++        showHelp = true;
++        missingArg = true;
++    }
++    if (!testAppArgs.inputNames.empty() && !testAppArgs.inputStream.empty())
++    {
++        showHelp = true;
++        missingArg = true;
++    }
++    if (testAppArgs.streamPeriod != 0 && testAppArgs.inputStream.empty())
+     {
+         showHelp = true;
+         missingArg = true;
+@@ -274,6 +305,8 @@ int main(int argc, char* argv[])
+         NvDlaDebugPrintf("    -h                    print this help message\n");
+         NvDlaDebugPrintf("    -s                    launch test in server mode\n");
+         NvDlaDebugPrintf("    --image <file>        input jpg/pgm file (repeatable)\n");
++        NvDlaDebugPrintf("    --input-stream <file> raw GRAY8/BGR8 frame stream or FIFO\n");
++        NvDlaDebugPrintf("    --stream-period <n>   repeated frame count for output checks\n");
+         NvDlaDebugPrintf("    --normalize <value>   normalize value for input image\n");
+         NvDlaDebugPrintf("    --mean <value>        comma separated mean value for input image\n");
+         NvDlaDebugPrintf("    --rawdump             dump raw dimg data\n");
+-- 
+2.43.0
+

@@ -1,7 +1,7 @@
-From 62e0b1e20fcd6261977d76eb0b40d379f31a1287 Mon Sep 17 00:00:00 2001
+From 084093b6a111b867b3e47534436f859d27c57f4f Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 9 Aug 2026 23:20:30 +0100
-Subject: [PATCH 18/18] umd: support repeated runtime inputs
+Subject: [PATCH 18/19] umd: support repeated runtime inputs
 
 Allow direct runtime invocations to provide --image more than once.
 Decode and prepare every input before execution, then cycle through the
@@ -82,7 +82,7 @@ index d5e9710..893984f 100644
                  (unsigned long long)sample.outputExtractNs,
                  index + 1 == profile.samples.size() ? "" : ",");
 @@ -173,16 +189,16 @@ static TestImageTypes getImageType(std::string imageFileName)
- static NvDlaError copyImageToInputTenso
+ static NvDlaError copyImageToInputTensor
  (
      const TestAppArgs* appArgs,
 -    TestInfo* i,
@@ -101,7 +101,7 @@ index d5e9710..893984f 100644
      TestImageTypes imageType = getImageType(imgPath);
      if (!R8Image)
          ORIGINATE_ERROR(NvDlaError_InsufficientMemory);
-@@ -201,7 +217,6 @@ static NvDlaError copyImageToInputTenso
+@@ -201,7 +217,6 @@ static NvDlaError copyImageToInputTensor
              goto fail;
      }
  
@@ -109,7 +109,7 @@ index d5e9710..893984f 100644
      if (tensorImage == NULL)
          ORIGINATE_ERROR_FAIL(NvDlaError_BadParameter, "NULL input Image");
  
-@@ -264,7 +279,26 @@ NvDlaError setupInputBuffe
+@@ -264,7 +279,26 @@ NvDlaError setupInputBuffer
  
      PROPAGATE_ERROR_FAIL(runtime->allocateSystemMemory(&hMem, tDesc.bufferSize, pInputBuffer));
      i->inputHandle = (NvU8 *)hMem;

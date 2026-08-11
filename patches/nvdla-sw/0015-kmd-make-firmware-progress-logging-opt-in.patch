@@ -1,7 +1,7 @@
-From 7d89122177e87c3725e9a147c18f3833b5e3609c Mon Sep 17 00:00:00 2001
+From 2cc6f5083f269ff5f5acf4234a2b5b46ed418608 Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 17:18:48 +0100
-Subject: [PATCH 15/18] kmd: make firmware progress logging opt-in
+Subject: [PATCH 15/19] kmd: make firmware progress logging opt-in
 
 The firmware emits a large volume of debug and operation progress text from interrupt and submission paths. This can dominate host-observed latency on serial consoles and obscures production performance.
 

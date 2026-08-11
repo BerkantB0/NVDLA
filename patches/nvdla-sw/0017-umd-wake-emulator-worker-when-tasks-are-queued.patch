@@ -1,7 +1,7 @@
-From 05bc7f5940458ef0aa2c0521cc06b840ce9e2217 Mon Sep 17 00:00:00 2001
+From 570837c000fc49a0af702788ada2f60f6ec142d5 Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Sun, 26 Jul 2026 22:14:22 +0100
-Subject: [PATCH 17/18] umd: wake emulator worker when tasks are queued
+Subject: [PATCH 17/19] umd: wake emulator worker when tasks are queued
 
 The emulator worker polls its task queue every 500 ms. This adds up to
 500 ms of avoidable latency to each emulator task and accesses the queue

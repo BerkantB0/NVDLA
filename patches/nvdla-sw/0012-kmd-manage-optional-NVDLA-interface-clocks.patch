@@ -1,7 +1,7 @@
-From 7703a2c383226c381ebe752671856dc6de1b58d4 Mon Sep 17 00:00:00 2001
+From 8393aba4b4e8649c79691dab203e41c61cf4a98d Mon Sep 17 00:00:00 2001
 From: Berkant Bakisli <berkant.bakisli@gmail.com>
 Date: Fri, 24 Jul 2026 02:42:27 +0100
-Subject: [PATCH 12/18] kmd: manage optional NVDLA interface clocks
+Subject: [PATCH 12/19] kmd: manage optional NVDLA interface clocks
 
 Platform firmware can leave the NVDLA interface clocks running, which hid
 their ownership from the original driver. Modern Linux disables unclaimed
