@@ -165,6 +165,18 @@ Host controls use dedicated names such as `--ssh-host`, `--payload`, and
 `--output`; all other options are forwarded to `nvdla-board-cpu-benchmark`.
 The runner does not reboot the board.
 
+For sequential fresh-boot campaigns, use the interactive wrapper from the
+Ubuntu-22.04 WSL repository root:
+
+```sh
+python3 scripts/run_benchmark_campaign.py
+```
+
+It selects CPU or NVDLA presets, model, latency and/or power, and the CPU thread
+count and precision where applicable. After each successful session it sounds
+a notification, waits for manual power-cycle confirmation, pauses for the
+selected delay, and then lets the existing SSH runner wait for the board.
+
 ## Final Campaign Matrix
 
 For each model, first collect five uninstrumented fresh-boot sessions for FP32
