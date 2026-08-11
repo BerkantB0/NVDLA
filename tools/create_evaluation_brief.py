@@ -22,7 +22,7 @@ from reportlab.platypus import Paragraph
 
 PAGE_W, PAGE_H = landscape(A4)
 MARGIN = 17 * mm
-PAGE_COUNT = 8
+PAGE_COUNT = 9
 
 INK = HexColor("#18212B")
 MUTED = HexColor("#62717C")
@@ -37,6 +37,8 @@ GREEN = HexColor("#2F8F5B")
 BLUE = HexColor("#3978A8")
 PALE_GREEN = HexColor("#E8F4EF")
 PALE_GOLD = HexColor("#FAF1DE")
+PS_COLOR = HexColor("#3978A8")
+PL_COLOR = HexColor("#D99A2B")
 PHASE_COLORS = {
     "runtime_initialization": HexColor("#718E9B"),
     "model_loading": CPU_INT8,
@@ -139,6 +141,20 @@ def legend(c: canvas.Canvas, x: float, y: float) -> None:
         x += advance
 
 
+def power_domain_means(report: dict) -> dict:
+    """Return comparable PS/PL means from the five-session power cohort."""
+    if report.get("session_count") != 5:
+        raise ValueError("expected five power sessions for domain comparison")
+    result = {}
+    for domain in ("PS", "PL"):
+        samples = [session["power"]["domains"][domain] for session in report["sessions"]]
+        result[domain] = {
+            key: statistics.mean(sample[key] for sample in samples)
+            for key in ("active_mean_watts", "idle_mean_watts", "incremental_mean_watts")
+        }
+    return result
+
+
 def add_cpu_int8(data: dict, root: Path) -> None:
     """Attach the independently generated five-session CPU INT8 cohorts."""
     for model in ("lenet", "resnet50"):
@@ -177,6 +193,7 @@ def add_cpu_int8(data: dict, root: Path) -> None:
                     "mean": domain["incremental_energy_per_executed_inference_joules"]
                 },
             },
+            "power_domains": power_domain_means(power),
             "provenance": latency["provenance"],
         }
 
@@ -186,8 +203,12 @@ def add_supplementary_results(data: dict, root: Path) -> None:
     for model in ("lenet", "resnet50"):
         variation_path = root / "input-variation" / model / "input-variation-summary.json"
         performance_path = root / f"nvdla-{model}-latency" / "performance-summary.json"
+        nvdla_power_path = root / f"nvdla-{model}-power" / "performance-summary.json"
+        cpu_power_path = root / f"cpu-{model}-power" / "cpu-performance-summary.json"
         variation = json.loads(variation_path.read_text(encoding="utf-8"))
         performance = json.loads(performance_path.read_text(encoding="utf-8"))
+        nvdla_power = json.loads(nvdla_power_path.read_text(encoding="utf-8"))
+        cpu_power = json.loads(cpu_power_path.read_text(encoding="utf-8"))
         if variation.get("status") != "pass" or variation.get("sessions") != 3:
             raise ValueError(f"expected three passing input-variation sessions for {model}")
         if performance.get("session_count") != 5:
@@ -197,6 +218,8 @@ def add_supplementary_results(data: dict, root: Path) -> None:
             regime: performance["regimes"][regime]["phases"]["aggregates_mean_ns"]
             for regime in ("cold", "warm", "steady")
         }
+        data["models"][model]["nvdla"]["power_domains"] = power_domain_means(nvdla_power)
+        data["models"][model]["cpu"]["power_domains"] = power_domain_means(cpu_power)
 
 
 def draw_summary(c: canvas.Canvas, data: dict) -> None:
@@ -813,8 +836,121 @@ def draw_power(c: canvas.Canvas, data: dict) -> None:
                   x + 8 * mm, y + 12 * mm, card_w - 16 * mm, size=7.5, leading=9, color=MUTED)
 
 
+def draw_power_domains(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "Power domains", "How do PS and PL contribute?", 8)
+    footer(c, "Five fresh-boot powered sessions per model and stack; means across monitored rails")
+
+    legend_x = MARGIN
+    legend_y = PAGE_H - 40 * mm
+    for label, color in (("PS rails", PS_COLOR), ("PL rails", PL_COLOR)):
+        c.setFillColor(color)
+        c.rect(legend_x, legend_y, 5 * mm, 5 * mm, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(legend_x + 7 * mm, legend_y + 1 * mm, label)
+        legend_x += 31 * mm
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 8)
+    c.drawRightString(
+        PAGE_W - MARGIN,
+        legend_y + 1 * mm,
+        "Active = complete monitored board state  |  Incremental = active minus stack-specific idle",
+    )
+
+    stack_specs = (
+        ("nvdla", "NVDLA INT8"),
+        ("cpu_int8", "CPU INT8"),
+        ("cpu", "CPU FP32"),
+    )
+
+    def draw_domain_chart(x: float, y: float, bar_x: float, key: str,
+                          maximum: float, minimum: float = 0.0) -> None:
+        bar_w = 75 * mm
+        zero_x = bar_x + bar_w * (-minimum) / (maximum - minimum)
+        positive_w = bar_x + bar_w - zero_x
+        for row_i, (stack, label) in enumerate(stack_specs):
+            yy = y + 31 * mm - row_i * 10 * mm
+            domains = data["models"][model][stack]["power_domains"]
+            values = (("PS", domains["PS"][key], PS_COLOR),
+                      ("PL", domains["PL"][key], PL_COLOR))
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 7.2)
+            c.drawRightString(bar_x - 4 * mm, yy + 2.1 * mm, label)
+            c.setFillColor(PANEL)
+            c.roundRect(bar_x, yy, bar_w, 7 * mm, 1.2 * mm, fill=1, stroke=0)
+            c.setStrokeColor(MUTED)
+            c.setLineWidth(0.6)
+            c.line(zero_x, yy - 1 * mm, zero_x, yy + 8 * mm)
+            cursor = zero_x
+            total = sum(value for _, value, _ in values)
+            for domain, value, color in values:
+                if value >= 0:
+                    width = positive_w * value / maximum
+                    start = cursor
+                    cursor += width
+                else:
+                    width = bar_w * abs(value) / (maximum - minimum)
+                    start = zero_x - width
+                if width > 0:
+                    c.setFillColor(color)
+                    c.rect(start, yy, width, 7 * mm, fill=1, stroke=0)
+                if width >= 12 * mm:
+                    c.setFillColor(PAPER)
+                    c.setFont("Helvetica-Bold", 6.2)
+                    c.drawCentredString(start + width / 2, yy + 2.2 * mm,
+                                        f"{domain} {value:.2f}")
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 7)
+            c.drawString(bar_x + bar_w + 3 * mm, yy + 2.1 * mm, f"{total:.2f} W")
+
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 6.5)
+        c.drawString(bar_x, y + 4 * mm, f"{minimum:.2f} W" if minimum else "0 W")
+        c.drawRightString(bar_x + bar_w, y + 4 * mm, f"{maximum:.1f} W")
+
+    for model_i, model in enumerate(("lenet", "resnet50")):
+        y = 94 * mm if model_i == 0 else 31 * mm
+        panel(c, MARGIN, y, PAGE_W - 2 * MARGIN, 56 * mm, PAPER, GRID)
+        title = "LeNet" if model == "lenet" else "ResNet-50"
+        nvdla_domains = data["models"][model]["nvdla"]["power_domains"]
+        nvdla_incremental = sum(
+            nvdla_domains[domain]["incremental_mean_watts"] for domain in ("PS", "PL")
+        )
+        ps_share = nvdla_domains["PS"]["incremental_mean_watts"] / nvdla_incremental * 100.0
+        pl_share = nvdla_domains["PL"]["incremental_mean_watts"] / nvdla_incremental * 100.0
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(MARGIN + 8 * mm, y + 46 * mm, title)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.2)
+        c.drawString(MARGIN + 8 * mm, y + 39 * mm,
+                     f"NVDLA incremental split: PS {ps_share:.0f}% / PL {pl_share:.0f}%")
+
+        active_bar_x = MARGIN + 49 * mm
+        incremental_bar_x = MARGIN + 176 * mm
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(active_bar_x + 37.5 * mm, y + 46 * mm, "Active power")
+        c.drawCentredString(incremental_bar_x + 37.5 * mm, y + 46 * mm,
+                            "Increase above idle")
+        draw_domain_chart(MARGIN, y, active_bar_x, "active_mean_watts", 4.0)
+        draw_domain_chart(MARGIN, y, incremental_bar_x, "incremental_mean_watts", 1.0, -0.02)
+
+    c.setFillColor(PALE_GOLD)
+    c.roundRect(MARGIN, 14 * mm, PAGE_W - 2 * MARGIN, 10 * mm, 2 * mm, fill=1, stroke=0)
+    paragraph(
+        c,
+        "<b>Reading the split:</b> CPU inference activity is overwhelmingly on PS rails. NVDLA distributes activity across PS and PL; for ResNet-50, PL contributes about 62% of its incremental power. Tiny negative PL deltas are retained and indicate the sensor/idle-subtraction noise floor.",
+        MARGIN + 5 * mm,
+        21.5 * mm,
+        PAGE_W - 2 * MARGIN - 10 * mm,
+        size=7.2,
+        leading=8.5,
+    )
+
+
 def draw_method(c: canvas.Canvas) -> None:
-    page_header(c, "Measurement design", "What was collected, and how to read it", 8)
+    page_header(c, "Measurement design", "What was collected, and how to read it", 9)
     footer(c, "Full provenance and raw samples remain in artifacts/final-reports and the selected session archives")
 
     # Protocol flow.
@@ -909,6 +1045,8 @@ def build_pdf(source: Path, cpu_int8_root: Path, report_root: Path, output: Path
     draw_throughput(c, data)
     c.showPage()
     draw_power(c, data)
+    c.showPage()
+    draw_power_domains(c, data)
     c.showPage()
     draw_method(c)
     c.showPage()
