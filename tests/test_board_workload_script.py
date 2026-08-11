@@ -62,7 +62,11 @@ class BoardWorkloadScriptTests(unittest.TestCase):
         self.assertIn("verified-xsa-rate", text)
         self.assertIn("CLOCK_EXPECTED_HZ", text)
         self.assertIn("outputs_consistent", text)
-        self.assertIn("--input-set {single|multi20}", text)
+        self.assertIn("--input-set {single|multi20|stream20}", text)
+        self.assertIn("--input-stream", text)
+        self.assertIn("--stream-period 20", text)
+        self.assertIn("gst-launch-1.0", text)
+        self.assertIn("stream-pipeline-pass", text)
         runtime_patch = (
             ROOT / "patches" / "nvdla-sw" / "0018-umd-support-repeated-runtime-inputs.patch"
         ).read_text(encoding="utf-8")

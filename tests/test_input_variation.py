@@ -101,6 +101,43 @@ class InputVariationTests(unittest.TestCase):
             )
             self.assertTrue((out / "input-variation-raw.csv").is_file())
 
+            (artifact / "benchmark.env").write_text(
+                (artifact / "benchmark.env")
+                .read_text()
+                .replace(
+                    "classification=output-stable-input-variation-pass",
+                    "classification=stream-pipeline-pass",
+                )
+                .replace("input_set=multi20", "input_set=stream20")
+            )
+            profile = json.loads((run / "profile.json").read_text())
+            profile["schema_version"] = 4
+            profile["phases_ns"] = {"stream_pipeline": 2_000_000_000}
+            for sample in profile["samples"]:
+                sample.update(
+                    source_read_ns=10_000,
+                    input_prepare_ns=20_000,
+                    queue_wait_ns=30_000,
+                )
+            (run / "profile.json").write_text(json.dumps(profile))
+            stream_archive = root / "stream.tar.gz"
+            with tarfile.open(stream_archive, "w:gz") as bundle:
+                bundle.add(artifact, arcname="artifact")
+            stream_out = root / "stream-report"
+            self.assertEqual(
+                import_input_variation_archives([stream_archive], stream_out), 0
+            )
+            stream_summary = json.loads(
+                (stream_out / "input-variation-summary.json").read_text()
+            )
+            self.assertEqual(
+                stream_summary["stream_pipeline"]["sessions"][0][
+                    "frames_per_second"
+                ],
+                10.0,
+            )
+            self.assertEqual(stream_summary["input_prepare"]["median_ns"], 20_000)
+
 
 if __name__ == "__main__":
     unittest.main()

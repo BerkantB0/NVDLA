@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from nvdla_test_framework.board_payload import EXPECTED_LENET_OUTPUT, build_board_payload
 from nvdla_test_framework.common import sha256_file, write_json
 
@@ -167,7 +169,10 @@ class BoardPayloadTests(unittest.TestCase):
             for index in range(20):
                 image = set_dir / "images" / f"{index:02d}.jpg"
                 image.parent.mkdir(parents=True, exist_ok=True)
-                image.write_bytes(f"{model_name}-{index}".encode())
+                size = (28, 28) if model_name == "lenet" else (224, 224)
+                Image.new("L" if model_name == "lenet" else "RGB", size, index).save(
+                    image, format="JPEG", quality=95, subsampling=0
+                )
                 images.append(
                     {
                         "sequence": index,
@@ -284,6 +289,16 @@ class BoardPayloadTests(unittest.TestCase):
                     / "int8"
                     / "test_data_set_0"
                     / "output_0.pb"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "lenet_small"
+                    / "stream20"
+                    / "stream.mjpeg"
                 ).is_file()
             )
             self.assertTrue(

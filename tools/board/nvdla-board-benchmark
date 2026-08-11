@@ -15,7 +15,8 @@ Latency options:
   --runtime-timeout-seconds N      Per-process watchdog timeout
   --benchmark-cpu {N|none}         Runtime CPU affinity (default: 2)
   --firmware-log                   Enable diagnostic firmware progress logging
-  --input-set {single|multi20}     Input sequence (default: single)
+  --input-set {single|multi20|stream20}
+                                     Input mode (default: single)
 
 Power options:
   --power                          Sample power during the steady phase
@@ -162,13 +163,13 @@ case "$REGIME" in
 esac
 case "$INPUT_SET" in
     single) ;;
-    multi20)
-        [ "$REGIME" = "steady" ] || fail_usage "--input-set multi20 requires --regime steady"
-        [ $((WARMUPS % 20)) -eq 0 ] || fail_usage "multi20 warmups must be divisible by 20"
+    multi20|stream20)
+        [ "$REGIME" = "steady" ] || fail_usage "$INPUT_SET requires --regime steady"
+        [ $((WARMUPS % 20)) -eq 0 ] || fail_usage "$INPUT_SET warmups must be divisible by 20"
         [ "$STEADY_SAMPLES" -gt 0 ] && [ $((STEADY_SAMPLES % 20)) -eq 0 ] \
-            || fail_usage "multi20 steady samples must be a positive multiple of 20"
+            || fail_usage "$INPUT_SET steady samples must be a positive multiple of 20"
         ;;
-    *) fail_usage "--input-set must be single or multi20" ;;
+    *) fail_usage "--input-set must be single, multi20, or stream20" ;;
 esac
 if [ "$POWER_SAMPLE" -eq 0 ] && [ "$POWER_OPTIONS_SET" -eq 1 ]; then
     fail_usage "power tuning options require --power"
@@ -233,6 +234,25 @@ if [ "$INPUT_SET" = "multi20" ]; then
         || fail_usage "multi20 image list must contain 20 entries"
     [ "$(wc -l <"$EXPECTED_INDICES" | tr -d ' ')" -eq 20 ] \
         || fail_usage "multi20 expected-index list must contain 20 entries"
+elif [ "$INPUT_SET" = "stream20" ]; then
+    INPUT_SET_ROOT="$WORKLOAD/stream20"
+    INPUT_STREAM="$INPUT_SET_ROOT/stream.mjpeg"
+    if [ "$MODEL" = "lenet" ]; then
+        EXPECTED_INDICES="$INPUT_SET_ROOT/expected-labels.txt"
+        STREAM_CAPS="video/x-raw,format=GRAY8,width=28,height=28"
+    else
+        EXPECTED_INDICES="$INPUT_SET_ROOT/expected-classes.txt"
+        STREAM_CAPS="video/x-raw,format=BGR,width=224,height=224"
+    fi
+    [ -f "$INPUT_STREAM" ] && [ -f "$EXPECTED_INDICES" ] \
+        && [ -f "$INPUT_SET_ROOT/manifest.json" ] \
+        || fail_usage "stream20 input set is incomplete: $INPUT_SET_ROOT"
+    command -v gst-launch-1.0 >/dev/null \
+        || fail_usage "stream20 requires gst-launch-1.0"
+    for element in jpegparse jpegdec videoconvert; do
+        gst-inspect-1.0 "$element" >/dev/null 2>&1 \
+            || fail_usage "stream20 requires GStreamer element: $element"
+    done
 fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -469,6 +489,10 @@ if [ "$INPUT_SET" = "multi20" ]; then
     sha256sum "$INPUT_SET_ROOT/manifest.json" "$INPUT_LIST" "$EXPECTED_INDICES" \
         "$INPUT_SET_ROOT"/images/* >>"$OUT/software-hashes.txt"
     cp "$INPUT_SET_ROOT/manifest.json" "$OUT/input-set-manifest.json"
+elif [ "$INPUT_SET" = "stream20" ]; then
+    sha256sum "$INPUT_SET_ROOT/manifest.json" "$INPUT_STREAM" \
+        "$EXPECTED_INDICES" >>"$OUT/software-hashes.txt"
+    cp "$INPUT_SET_ROOT/manifest.json" "$OUT/input-set-manifest.json"
 fi
 MODULE_PATH="$(modinfo -n opendla 2>/dev/null || true)"
 if [ -n "$MODULE_PATH" ] && [ -f "$MODULE_PATH" ]; then
@@ -680,6 +704,16 @@ run_profile() {
     set +e
     (
         cd "$run_dir"
+        stream_pid=""
+        stream_fifo=""
+        stop_stream() {
+            if [ -n "$stream_pid" ]; then
+                kill "$stream_pid" 2>/dev/null || true
+                wait "$stream_pid" 2>/dev/null || true
+            fi
+            [ -z "$stream_fifo" ] || rm -f "$stream_fifo"
+        }
+        trap stop_stream EXIT HUP INT TERM
         set -- nvdla-benchmark-launch \
             --elapsed-ns launch-elapsed-ns.txt \
             --interval launch-interval.env \
@@ -695,6 +729,16 @@ run_profile() {
             while IFS= read -r image; do
                 set -- "$@" --image "$INPUT_SET_ROOT/$image"
             done <"$INPUT_LIST"
+        elif [ "$INPUT_SET" = "stream20" ]; then
+            stream_fifo="$run_dir/input-stream.raw"
+            mkfifo "$stream_fifo"
+            (
+                while cat "$INPUT_STREAM"; do :; done | \
+                    gst-launch-1.0 -q fdsrc fd=0 ! jpegparse ! jpegdec ! \
+                    videoconvert ! "$STREAM_CAPS" ! fdsink fd=1
+            ) >"$stream_fifo" 2>"$run_dir/stream-producer.stderr.log" &
+            stream_pid=$!
+            set -- "$@" --input-stream "$stream_fifo" --stream-period 20
         else
             set -- "$@" --image "$INPUT"
         fi
@@ -717,7 +761,7 @@ run_profile() {
         echo "runtime-failure" >"$run_dir/verification.txt"
         return 1
     fi
-    if [ "$INPUT_SET" = "multi20" ]; then
+    if [ "$INPUT_SET" = "multi20" ] || [ "$INPUT_SET" = "stream20" ]; then
         verify_multi_output "$run_dir"
     else
         verify_output "$run_dir"
@@ -813,6 +857,9 @@ case "$REGIME" in
         if [ "$INPUT_SET" = "multi20" ]; then
             cat "$LOADABLE" "$INPUT_SET_ROOT"/images/* /usr/bin/nvdla_runtime \
                 /usr/lib/libnvdla_runtime.so >/dev/null
+        elif [ "$INPUT_SET" = "stream20" ]; then
+            cat "$LOADABLE" "$INPUT_STREAM" /usr/bin/nvdla_runtime \
+                /usr/lib/libnvdla_runtime.so >/dev/null
         else
             cat "$LOADABLE" "$INPUT" /usr/bin/nvdla_runtime \
                 /usr/lib/libnvdla_runtime.so >/dev/null
@@ -848,6 +895,8 @@ capture meminfo-after.txt cat /proc/meminfo
 STATUS=0
 if [ "$INPUT_SET" = "multi20" ]; then
     CLASSIFICATION="output-stable-input-variation-pass"
+elif [ "$INPUT_SET" = "stream20" ]; then
+    CLASSIFICATION="stream-pipeline-pass"
 else
     CLASSIFICATION="exact-performance-pass"
 fi

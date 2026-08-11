@@ -63,6 +63,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
             "usr/bin/nvdla-board-cpu-benchmark",
             "usr/bin/nvdla-benchmark-launch",
             "usr/bin/nvdla-power-sampler",
+            "usr/bin/gst-launch-1.0",
+            "usr/bin/gst-inspect-1.0",
+            "usr/lib/gstreamer-1.0/libgstjpeg.so",
+            "usr/lib/gstreamer-1.0/libgstjpegformat.so",
+            "usr/lib/gstreamer-1.0/libgstvideoconvert.so",
             "usr/bin/onnx_test_runner",
             "usr/bin/onnxruntime_perf_test",
             "usr/lib/libonnxruntime.so.1.18.1",
@@ -243,6 +248,11 @@ class PetaLinuxRootfsTests(unittest.TestCase):
         result = self._audit({"usr/bin/nvdla-power-sampler"})
         self.assertEqual(result["status"], "fail")
         self.assertIn("missing power_sampler from rootfs", result["errors"])
+
+    def test_rejects_missing_video_pipeline(self) -> None:
+        result = self._audit({"usr/bin/gst-launch-1.0"})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("missing gst_launch from rootfs", result["errors"])
 
     def test_rejects_missing_cpu_test_runner(self) -> None:
         result = self._audit({"usr/bin/onnx_test_runner"})

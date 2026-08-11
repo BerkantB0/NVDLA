@@ -94,7 +94,7 @@ help:
 	  '  make petalinux-board-payload Build the hash-verified nv_small test payload' \
 	  '  make petalinux-board-collect Import a manual or SSH board evidence archive' \
 	  '  make performance-report Analyze one model benchmark campaign from ARCHIVES' \
-	  '  make input-variation-report Analyze multi20 NVDLA input sensitivity' \
+	  '  make input-variation-report Analyze multi20 sensitivity or stream20 throughput' \
 	  '  make cpu-performance-report Analyze one ARM CPU ONNX campaign from ARCHIVES' \
 	  '' \
 	  'Reports:' \
@@ -368,7 +368,7 @@ performance-report:
 		--out "$${PERFORMANCE_OUT:-artifacts/performance-report}"
 
 input-variation-report:
-	@test -n "$${ARCHIVES:-}" || { echo "Set ARCHIVES to multi20 benchmark tarballs" >&2; exit 2; }
+	@test -n "$${ARCHIVES:-}" || { echo "Set ARCHIVES to multi20 or stream20 benchmark tarballs" >&2; exit 2; }
 	@set -- $${ARCHIVES}; args=""; \
 	for archive in "$$@"; do args="$$args --archive $$archive"; done; \
 	$(PYTHON) -m nvdla_test_framework input-variation-import $$args \

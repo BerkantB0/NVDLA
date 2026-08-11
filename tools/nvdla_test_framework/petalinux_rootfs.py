@@ -19,6 +19,11 @@ BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-benchmark"
 CPU_BENCHMARK_RUNNER_MEMBER = "usr/bin/nvdla-board-cpu-benchmark"
 BENCHMARK_LAUNCHER_MEMBER = "usr/bin/nvdla-benchmark-launch"
 POWER_SAMPLER_MEMBER = "usr/bin/nvdla-power-sampler"
+GST_LAUNCH_MEMBER = "usr/bin/gst-launch-1.0"
+GST_INSPECT_MEMBER = "usr/bin/gst-inspect-1.0"
+GST_JPEG_MEMBER = "usr/lib/gstreamer-1.0/libgstjpeg.so"
+GST_JPEG_PARSE_MEMBER = "usr/lib/gstreamer-1.0/libgstjpegformat.so"
+GST_VIDEO_CONVERT_MEMBER = "usr/lib/gstreamer-1.0/libgstvideoconvert.so"
 CPU_TEST_RUNNER_MEMBER = "usr/bin/onnx_test_runner"
 CPU_PERF_TEST_MEMBER = "usr/bin/onnxruntime_perf_test"
 CPU_LIBRARY_MEMBER = "usr/lib/libonnxruntime.so.1.18.1"
@@ -101,6 +106,11 @@ def audit_petalinux_rootfs(
             "cpu_benchmark_runner": CPU_BENCHMARK_RUNNER_MEMBER,
             "benchmark_launcher": BENCHMARK_LAUNCHER_MEMBER,
             "power_sampler": POWER_SAMPLER_MEMBER,
+            "gst_launch": GST_LAUNCH_MEMBER,
+            "gst_inspect": GST_INSPECT_MEMBER,
+            "gst_jpeg": GST_JPEG_MEMBER,
+            "gst_jpeg_parse": GST_JPEG_PARSE_MEMBER,
+            "gst_video_convert": GST_VIDEO_CONVERT_MEMBER,
             "cpu_test_runner": CPU_TEST_RUNNER_MEMBER,
             "cpu_perf_test": CPU_PERF_TEST_MEMBER,
             "cpu_library": CPU_LIBRARY_MEMBER,
@@ -211,6 +221,11 @@ def audit_petalinux_rootfs(
             "timesync_profile",
             "ssh_policy",
             "shadow",
+            "gst_launch",
+            "gst_inspect",
+            "gst_jpeg",
+            "gst_jpeg_parse",
+            "gst_video_convert",
         }:
             continue
         try:

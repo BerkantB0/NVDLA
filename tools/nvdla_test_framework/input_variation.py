@@ -10,7 +10,7 @@ from .common import read_json, sha256_file, write_json
 from .performance import _hash_records, _load_session_root, _parse_env, _read_profile
 
 
-def _summary(values: list[int]) -> dict[str, float | int]:
+def _summary(values: list[int | float]) -> dict[str, float | int]:
     return {
         "count": len(values),
         "mean_ns": statistics.fmean(values),
@@ -26,6 +26,7 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         raise ValueError("at least one input-variation archive is required")
     rows: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
+    pipeline_sessions: list[dict[str, Any]] = []
     boot_ids: set[str] = set()
 
     with tempfile.TemporaryDirectory() as temporary:
@@ -33,13 +34,15 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         for session, archive in enumerate(archives, start=1):
             root = _load_session_root(archive, extraction / str(session))
             env = _parse_env(root / "benchmark.env")
-            if (
-                env.get("status") != "0"
-                or env.get("classification")
-                != "output-stable-input-variation-pass"
-                or env.get("input_set") != "multi20"
+            input_set = env.get("input_set")
+            expected_classification = {
+                "multi20": "output-stable-input-variation-pass",
+                "stream20": "stream-pipeline-pass",
+            }.get(input_set)
+            if env.get("status") != "0" or not expected_classification or (
+                env.get("classification") != expected_classification
             ):
-                raise ValueError(f"{archive}: not a passing multi20 benchmark")
+                raise ValueError(f"{archive}: not a passing 20-input benchmark")
             if (root / "bad-kernel-patterns.txt").read_text().strip():
                 raise ValueError(f"{archive}: kernel errors were recorded")
             if int((root / "irq-delta.txt").read_text().strip()) <= 0:
@@ -56,6 +59,7 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
             set_manifest = root / "input-set-manifest.json"
             current = {
                 "model": env.get("model"),
+                "input_set": input_set,
                 "loadable_sha256": workload.get("loadable", {}).get("sha256"),
                 "module_sha256": next(iter(module.values()), None),
                 "runtime_sha256": software.get("nvdla_runtime"),
@@ -82,6 +86,18 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
             if int(profile.get("input_count", 0)) != 20:
                 raise ValueError(f"{archive}: profile does not contain 20 inputs")
             measured = [sample for sample in profile["samples"] if not sample["warmup"]]
+            if input_set == "stream20":
+                pipeline_ns = int(profile["phases_ns"].get("stream_pipeline", 0))
+                if pipeline_ns <= 0:
+                    raise ValueError(f"{archive}: missing streamed pipeline duration")
+                pipeline_sessions.append(
+                    {
+                        "session": session,
+                        "duration_ns": pipeline_ns,
+                        "frames": len(measured),
+                        "frames_per_second": len(measured) * 1_000_000_000 / pipeline_ns,
+                    }
+                )
             counts = {index: 0 for index in range(20)}
             for sample in measured:
                 input_index = int(sample["input_index"])
@@ -99,6 +115,9 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
                         "acceptance": result["acceptance"],
                         "classification_match": int(result["classification_match"]),
                         "runtime_execution_ns": int(sample["runtime_execution_ns"]),
+                        "source_read_ns": int(sample.get("source_read_ns", 0)),
+                        "input_prepare_ns": int(sample.get("input_prepare_ns", 0)),
+                        "queue_wait_ns": int(sample.get("queue_wait_ns", 0)),
                         "input_update_ns": int(sample.get("input_update_ns", 0)),
                         "output_extract_ns": int(sample["output_extract_ns"]),
                     }
@@ -142,6 +161,19 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         "provenance": baseline,
         "runtime_execution": overall,
         "input_update": _summary([row["input_update_ns"] for row in rows]),
+        "source_read": _summary([row["source_read_ns"] for row in rows]),
+        "input_prepare": _summary([row["input_prepare_ns"] for row in rows]),
+        "queue_wait": _summary([row["queue_wait_ns"] for row in rows]),
+        "stream_pipeline": (
+            {
+                "sessions": pipeline_sessions,
+                "throughput_frames_per_second": _summary(
+                    [item["frames_per_second"] for item in pipeline_sessions]
+                ),
+            }
+            if pipeline_sessions
+            else {"status": "not-applicable"}
+        ),
         "classification": {
             "distinct_input_matches": distinct_matches,
             "distinct_input_total": len(per_input),
@@ -171,7 +203,8 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         writer.writerows(rows)
     write_json(out_dir / "input-variation-summary.json", summary)
     lines = [
-        f"# {baseline['model']} Multi-Input Sensitivity",
+        f"# {baseline['model']} "
+        + ("Stream Pipeline" if baseline["input_set"] == "stream20" else "Multi-Input Sensitivity"),
         "",
         f"- Sessions: {len(archives)} fresh boots",
         "- Inputs: 20, balanced within every session",
@@ -192,6 +225,14 @@ def import_input_variation_archives(archives: list[Path], out_dir: Path) -> int:
         "increased, and no bad kernel pattern was recorded. Classification accuracy is "
         "reported separately and is not treated as a hardware execution criterion.",
     ]
+    if pipeline_sessions:
+        throughputs = [item["frames_per_second"] for item in pipeline_sessions]
+        lines[8:8] = [
+            f"- Median sustained pipeline throughput: {statistics.median(throughputs):.3f} frames/s",
+            f"- Median stream read/decode wait: {summary['source_read']['median_ns'] / 1e6:.3f} ms",
+            f"- Median input conversion: {summary['input_prepare']['median_ns'] / 1e6:.3f} ms",
+            f"- Median consumer queue wait: {summary['queue_wait']['median_ns'] / 1e6:.3f} ms",
+        ]
     (out_dir / "input-variation-report.md").write_text(
         "\n".join(lines) + "\n", encoding="ascii"
     )

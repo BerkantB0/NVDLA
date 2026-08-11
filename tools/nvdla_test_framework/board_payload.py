@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import shutil
 import sys
 import tarfile
@@ -141,6 +142,87 @@ def _copy_image_input_set(source: Path, destination: Path) -> dict[str, Any]:
     }
 
 
+def _build_mjpeg_stream(
+    source: Path, destination: Path, model: str, pillow_expected: str
+) -> dict[str, Any]:
+    try:
+        from PIL import Image, __version__ as pillow_version
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required to build the video test stream") from exc
+    if pillow_version != pillow_expected:
+        raise RuntimeError(
+            f"Pillow {pillow_expected} is required; found {pillow_version}"
+        )
+
+    manifest = read_json(source / "manifest.json")
+    images = manifest["images"]
+    destination.mkdir(parents=True, exist_ok=True)
+    stream_path = destination / "stream.mjpeg"
+    frames = []
+    with stream_path.open("wb") as stream:
+        for image in images:
+            path = source / image["path"]
+            if model == "resnet50":
+                encoded = path.read_bytes()
+            else:
+                with Image.open(path) as frame:
+                    output = io.BytesIO()
+                    frame.convert("L").save(
+                        output,
+                        format="JPEG",
+                        quality=95,
+                        subsampling=0,
+                        optimize=False,
+                        progressive=False,
+                    )
+                    encoded = output.getvalue()
+            stream.write(encoded)
+            frames.append(
+                {
+                    "index": image["sequence"],
+                    "source_sha256": image["sha256"],
+                    "encoded_size_bytes": len(encoded),
+                }
+            )
+
+    expected = manifest["expected_indices"]
+    _copy_verified(
+        source / expected["path"],
+        destination / expected["path"],
+        expected["sha256"],
+    )
+    width, height, decoded_format = (
+        (28, 28, "GRAY8") if model == "lenet" else (224, 224, "BGR")
+    )
+    stream_manifest = {
+        "schema_version": 1,
+        "name": "stream20",
+        "model": model,
+        "kind": "looped-mjpeg-stream",
+        "frame_period": 20,
+        "encoded_format": "MJPEG",
+        "decoded_format": decoded_format,
+        "width": width,
+        "height": height,
+        "pillow_version": pillow_version if model == "lenet" else None,
+        "stream": {
+            "path": "stream.mjpeg",
+            "sha256": sha256_file(stream_path),
+            "size_bytes": stream_path.stat().st_size,
+        },
+        "expected_indices": expected,
+        "frames": frames,
+    }
+    write_json(destination / "manifest.json", stream_manifest)
+    return {
+        "path": destination.name,
+        "frame_period": 20,
+        "manifest_sha256": sha256_file(destination / "manifest.json"),
+        "stream_sha256": sha256_file(stream_path),
+        "expected_indices_sha256": sha256_file(destination / expected["path"]),
+    }
+
+
 def _copy_cpu_onnx_workloads(source: Path, destination: Path) -> dict[str, Any]:
     manifest_path = source / "manifest.json"
     manifest = read_json(manifest_path)
@@ -212,6 +294,9 @@ def build_board_payload(
     lock = read_json(resolved_lock)
     xsa = lock["hardware"]["xsa"]
     expected_hardware = xsa["expected"]
+    pillow_expected = lock["workloads"]["resnet50_imagenet"]["preprocess"][
+        "pillow_version"
+    ]
 
     if sdp_manifest.get("target", {}).get("config") != "nv_small":
         raise ValueError("SDP workload is not tagged nv_small")
@@ -315,11 +400,14 @@ def build_board_payload(
         "complexity": lenet_complexity,
         "tolerance": {"type": "exact"},
     }
+    lenet_multi = _copy_image_input_set(
+        input_sets_source / "lenet" / "multi20", lenet_out / "multi20"
+    )
     lenet_payload_manifest["input_sets"] = {
-        "multi20": _copy_image_input_set(
-            input_sets_source / "lenet" / "multi20",
-            lenet_out / "multi20",
-        )
+        "multi20": lenet_multi,
+        "stream20": _build_mjpeg_stream(
+            lenet_out / "multi20", lenet_out / "stream20", "lenet", pillow_expected
+        ),
     }
     write_json(lenet_out / "manifest.json", lenet_payload_manifest)
 
@@ -396,11 +484,17 @@ def build_board_payload(
             "tensor_correctness": "exact DIMG match to source-built nv_small VP golden",
         },
     }
+    resnet_multi = _copy_image_input_set(
+        input_sets_source / "resnet50" / "multi20", resnet_out / "multi20"
+    )
     resnet_payload_manifest["input_sets"] = {
-        "multi20": _copy_image_input_set(
-            input_sets_source / "resnet50" / "multi20",
+        "multi20": resnet_multi,
+        "stream20": _build_mjpeg_stream(
             resnet_out / "multi20",
-        )
+            resnet_out / "stream20",
+            "resnet50",
+            pillow_expected,
+        ),
     }
     write_json(resnet_out / "manifest.json", resnet_payload_manifest)
     cpu_onnx_payload = _copy_cpu_onnx_workloads(cpu_onnx_source, cpu_onnx_out)
