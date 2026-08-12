@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import atexit
+import os
 import shutil
 import subprocess
 import time
@@ -103,6 +105,11 @@ def notify() -> None:
 
 
 def main() -> int:
+    runner = ROOT / ".work" / f"run_board_benchmark-{os.getpid()}.sh"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(RUNNER, runner)
+    atexit.register(runner.unlink, missing_ok=True)
+
     kind = choose("Implementation", ["cpu", "nvdla"])
     models = choose("Model", ["lenet", "resnet50", "both"])
     phases = choose("Measurements", ["latency", "power", "both"])
@@ -128,7 +135,7 @@ def main() -> int:
     for number, (model, phase, session) in enumerate(jobs, 1):
         output = output_directory(kind, model, phase, threads, precision)
         command = [
-            str(RUNNER), kind, model,
+            str(runner), kind, model,
             *benchmark_options(kind, model, phase, threads, precision),
             "--output", str(output),
         ]
