@@ -491,20 +491,64 @@ def draw_input_variation(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_latency(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Latency", "Three deployed stacks across each timing boundary", 4)
-    footer(c, "Unpowered cohorts; points are medians across five independent boot-session medians")
-    legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
+    page_header(c, "Latency", "Where does NVDLA sit across the CPU scaling range?", 4)
+    footer(c, "Unpowered cohorts; markers are medians across five independent boot-session medians")
+
+    legend_y = PAGE_H - 39 * mm
+
+    def cpu_marker(x: float, y: float, precision: str, threads: int,
+                   color, radius: float = 3.5) -> None:
+        c.setFillColor(color)
+        c.setStrokeColor(color)
+        c.setLineWidth(0.8)
+        if precision == "int8":
+            c.circle(x, y, radius, fill=1, stroke=1)
+        else:
+            c.rect(x - radius, y - radius, 2 * radius, 2 * radius, fill=1, stroke=1)
+        c.setFillColor(PAPER)
+        c.setFont("Helvetica-Bold", 5.2)
+        c.drawCentredString(x, y - 1.8, str(threads))
+
+    def nvdla_marker(x: float, y: float, radius: float = 4.2) -> None:
+        c.setFillColor(NVDLA)
+        path = c.beginPath()
+        path.moveTo(x, y + radius)
+        path.lineTo(x + radius, y)
+        path.lineTo(x, y - radius)
+        path.lineTo(x - radius, y)
+        path.close()
+        c.drawPath(path, fill=1, stroke=0)
+
+    legend_x = PAGE_W - MARGIN - 126 * mm
+    nvdla_marker(legend_x, legend_y + 3)
+    c.setFillColor(INK)
+    c.setFont("Helvetica", 7.8)
+    c.drawString(legend_x + 7, legend_y, "NVDLA INT8")
+    legend_x += 36 * mm
+    cpu_marker(legend_x, legend_y + 3, "int8", 4, CPU_INT8)
+    c.setFillColor(INK)
+    c.setFont("Helvetica", 7.8)
+    c.drawString(legend_x + 7, legend_y, "CPU INT8")
+    legend_x += 31 * mm
+    cpu_marker(legend_x, legend_y + 3, "fp32", 4, CPU_FP32)
+    c.setFillColor(INK)
+    c.setFont("Helvetica", 7.8)
+    c.drawString(legend_x + 7, legend_y, "CPU FP32")
+    legend_x += 34 * mm
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 7.2)
+    c.drawString(legend_x, legend_y, "marker number = cores")
 
     x0 = 63 * mm
     x1 = PAGE_W - MARGIN - 8 * mm
     chart_top = PAGE_H - 48 * mm
-    chart_bottom = 48 * mm
-    min_v, max_v = 0.5, 6000.0
+    chart_bottom = 50 * mm
+    min_v, max_v = 0.5, 10000.0
 
     def xpos(value: float) -> float:
         return x0 + (math.log10(value) - math.log10(min_v)) / (math.log10(max_v) - math.log10(min_v)) * (x1 - x0)
 
-    for tick in (1, 10, 100, 1000, 5000):
+    for tick in (1, 10, 100, 1000, 10000):
         xx = xpos(tick)
         c.setStrokeColor(GRID)
         c.setLineWidth(0.6)
@@ -534,53 +578,66 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
         c.setFillColor(MUTED)
         c.setFont("Helvetica", 7.5)
         c.drawRightString(x0 - 2 * mm, y + 3, regime_label)
-        for stack, color, dy in (
-            ("nvdla", NVDLA, 10),
-            ("cpu_int8", CPU_INT8, 0),
-            ("cpu", CPU_FP32, -10),
+        cpu_values = []
+        for precision, color, direction in (
+            ("int8", CPU_INT8, 1),
+            ("fp32", CPU_FP32, -1),
         ):
-            stat = data["models"][model][stack]["latency"][regime]
-            val = stat["session_median_ms"]
-            lo, hi = stat["ci_lower_ms"], stat["ci_upper_ms"]
+            points = []
+            for core_index, threads in enumerate((1, 2, 4)):
+                stat = data["models"][model]["cpu_scaling"][precision][threads]["latency"][regime]
+                val = stat["session_median_ms"]
+                cpu_values.append(val)
+                yy = y + direction * (6.6 - core_index * 2.0) * mm
+                points.append((xpos(val), yy, threads))
             c.setStrokeColor(color)
-            c.setLineWidth(1.6)
-            c.line(xpos(lo), y + dy, xpos(hi), y + dy)
-            c.setFillColor(color)
-            c.circle(xpos(val), y + dy, 3.2, fill=1, stroke=0)
-            label = fmt_ms(val)
-            xx = xpos(val)
-            if stack == "cpu_int8":
-                c.setFillColor(color)
-                c.setFont("Helvetica-Bold", 7.5)
-                c.drawRightString(xx - 5, y + dy - 2.5, label)
-            elif xx > x1 - 32 * mm:
-                c.setFillColor(color)
-                c.setFont("Helvetica-Bold", 7.5)
-                c.drawRightString(xx - 5, y + dy - 2.5, label)
-            else:
-                c.setFillColor(color)
-                c.setFont("Helvetica-Bold", 7.5)
-                c.drawString(xx + 5, y + dy - 2.5, label)
-    ratios = [
-        ("LeNet cold", 5.67), ("LeNet warm", 10.33), ("LeNet loaded", 0.41),
-        ("ResNet cold", 1.92), ("ResNet warm", 2.58), ("ResNet loaded", 0.75),
-    ]
+            c.setLineWidth(1.2)
+            c.line(points[0][0], points[0][1], points[1][0], points[1][1])
+            c.line(points[1][0], points[1][1], points[2][0], points[2][1])
+            for xx, yy, threads in points:
+                cpu_marker(xx, yy, precision, threads, color)
+
+        nvdla = data["models"][model]["nvdla"]["latency"][regime]["session_median_ms"]
+        xx = xpos(nvdla)
+        nvdla_marker(xx, y)
+        c.setFillColor(NVDLA)
+        c.setFont("Helvetica-Bold", 7.2)
+        if xx > x1 - 29 * mm:
+            c.drawRightString(xx - 6, y - 2.4, fmt_ms(nvdla))
+        else:
+            c.drawString(xx + 6, y - 2.4, fmt_ms(nvdla))
+
+    ratios = []
+    for model_label, regime_label, model, regime in rows:
+        nvdla = data["models"][model]["nvdla"]["latency"][regime]["session_median_ms"]
+        cpu_values = [
+            data["models"][model]["cpu_scaling"][precision][threads]["latency"][regime]["session_median_ms"]
+            for precision in ("int8", "fp32")
+            for threads in (1, 2, 4)
+        ]
+        best_cpu = min(cpu_values)
+        nvdla_wins = sum(nvdla < value for value in cpu_values)
+        ratios.append((f"{model_label} {regime_label}", best_cpu / nvdla, nvdla_wins))
+
     bx = MARGIN
     by = 16 * mm
     bw = (PAGE_W - 2 * MARGIN - 5 * 4 * mm) / 6
-    for i, (label, ratio) in enumerate(ratios):
+    for i, (label, ratio, nvdla_wins) in enumerate(ratios):
         xx = bx + i * (bw + 4 * mm)
         fill = PALE_GREEN if ratio > 1 else PALE_GOLD
         panel(c, xx, by, bw, 23 * mm, fill, fill)
         c.setFillColor(GREEN if ratio > 1 else GOLD)
         c.setFont("Helvetica-Bold", 15)
-        c.drawCentredString(xx + bw / 2, by + 12 * mm, f"{ratio:.2f}x")
+        c.drawCentredString(xx + bw / 2, by + 13 * mm, f"{ratio:.2f}x")
         c.setFillColor(INK)
         c.setFont("Helvetica", 7.2)
-        c.drawCentredString(xx + bw / 2, by + 5 * mm, label)
+        c.drawCentredString(xx + bw / 2, by + 6.5 * mm, label)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 6.1)
+        c.drawCentredString(xx + bw / 2, by + 2.5 * mm, f"NVDLA ahead of {nvdla_wins}/6")
     c.setFillColor(MUTED)
     c.setFont("Helvetica", 7.2)
-    c.drawString(MARGIN, 42 * mm, "CPU INT8 time / NVDLA time: above 1.0 favors NVDLA; below 1.0 favors CPU INT8")
+    c.drawString(MARGIN, 43 * mm, "Fastest CPU time / NVDLA time: above 1.0 favors NVDLA; below 1.0 favors the fastest CPU configuration")
 
 
 def draw_throughput(c: canvas.Canvas, data: dict) -> None:
