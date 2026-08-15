@@ -76,7 +76,8 @@ OUT_HOST="$(docker_host_path "$BUILD_OUT")"
 "$DOCKER" image inspect --format '{{.Id}}' "$IMAGE" >"$BUILD_OUT/container-image-id.txt"
 (
   cd "$BUILD_OUT"
-  sha256sum lenet/*/model.onnx resnet50/*/model.onnx
+  sha256sum lenet/*/model.onnx lenet/fp32/model.ort \
+    resnet50/*/model.onnx resnet50/fp32/model.ort
 ) >"$BUILD_OUT/model-sha256.txt"
 
 mkdir -p "$(dirname "$OUT_DIR")"

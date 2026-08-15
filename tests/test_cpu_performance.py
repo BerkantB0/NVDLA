@@ -20,6 +20,7 @@ class CpuPerformanceTests(unittest.TestCase):
         governor: str = "userspace",
         frequency_khz: int = 1_199_999,
         ntp_synchronized: str = "yes",
+        model_format: str = "onnx",
     ) -> Path:
         session = root / name
         session.mkdir()
@@ -30,6 +31,7 @@ class CpuPerformanceTests(unittest.TestCase):
                     "implementation=onnxruntime-cpu-execution-provider",
                     "model=resnet50",
                     "precision=int8",
+                    f"model_format={model_format}",
                     f"threads={threads}",
                     f"cpu_affinity_mask=0x{(1 << threads) - 1:x}",
                     f"cpu_governor={governor}",
@@ -79,7 +81,7 @@ class CpuPerformanceTests(unittest.TestCase):
                     "2" * 64 + "  /usr/bin/nvdla-board-cpu-benchmark",
                     "3" * 64 + "  /usr/bin/nvdla-benchmark-launch",
                     "4" * 64 + "  /usr/bin/nvdla-power-sampler",
-                    "d" * 64 + "  /payload/model.onnx",
+                    "d" * 64 + f"  /payload/model.{model_format}",
                     "e" * 64 + "  /payload/input_0.pb",
                     "f" * 64 + "  /payload/output_0.pb",
                     "1" * 64 + "  /payload/SHA256SUMS",
@@ -96,6 +98,14 @@ class CpuPerformanceTests(unittest.TestCase):
                             "models": {
                                 "int8": {
                                     "sha256": "d" * 64,
+                                    "ort": {
+                                        "sha256": "d" * 64,
+                                        "size_bytes": 90,
+                                        "format": "ORT",
+                                        "source_onnx_sha256": "9" * 64,
+                                        "optimization_style": "Fixed",
+                                        "target_platform": "arm",
+                                    },
                                     "size_bytes": 100,
                                     "node_count": 2,
                                     "initializer_count": 1,
@@ -182,6 +192,15 @@ class CpuPerformanceTests(unittest.TestCase):
             archives = [
                 self._archive(root, "session-1", "boot-1", threads=4),
                 self._archive(root, "session-2", "boot-2", threads=1),
+            ]
+            self.assertEqual(import_cpu_performance_archives(archives, root / "report"), 1)
+
+    def test_rejects_mixed_model_formats(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archives = [
+                self._archive(root, "session-1", "boot-1", model_format="onnx"),
+                self._archive(root, "session-2", "boot-2", model_format="ort"),
             ]
             self.assertEqual(import_cpu_performance_archives(archives, root / "report"), 1)
 

@@ -213,10 +213,15 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
     )
     if not isinstance(workload, dict):
         raise ValueError(f"{archive}: model is absent from the CPU workload manifest")
+    model_format = env.get("model_format", "onnx")
+    if model_format not in {"onnx", "ort"}:
+        raise ValueError(f"{archive}: unsupported CPU model format: {model_format}")
+    model_filename = f"model.{model_format}"
     variant = workload.get("models", {}).get(env.get("precision"), {})
+    model_record = variant if model_format == "onnx" else variant.get("ort", {})
     test_data = variant.get("test_data", {})
     if (
-        str(variant.get("sha256", "")).lower() != hashes.get("model.onnx")
+        str(model_record.get("sha256", "")).lower() != hashes.get(model_filename)
         or str(test_data.get("input", {}).get("sha256", "")).lower()
         != hashes.get("input_0.pb")
         or str(test_data.get("output", {}).get("sha256", "")).lower()
@@ -228,13 +233,21 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
         "implementation": env.get("implementation"),
         "model": env.get("model"),
         "precision": env.get("precision"),
+        "model_format": model_format,
+        "source_model_sha256": model_record.get(
+            "source_onnx_sha256", variant.get("sha256")
+        ),
+        "model_optimization_style": model_record.get(
+            "optimization_style", "runtime-on-load"
+        ),
+        "model_target_platform": model_record.get("target_platform", "portable"),
         "threads": int(env.get("threads", "0")),
         "cpu_affinity_mask": env.get("cpu_affinity_mask"),
         "cpu_governor": env.get("cpu_governor"),
         "cpu_frequency_khz": observed_frequency_khz,
         "cpu_frequency_policy": env.get("cpu_frequency_policy"),
         "kernel_release": uname[2] if len(uname) >= 3 else None,
-        "model_sha256": hashes.get("model.onnx"),
+        "model_sha256": hashes.get(model_filename),
         "input_sha256": hashes.get("input_0.pb"),
         "golden_sha256": hashes.get("output_0.pb"),
         "runtime_sha256": hashes.get("onnxruntime_perf_test"),
@@ -248,7 +261,7 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
         "power_interval_ms": env.get("power_interval_ms"),
         "power_sampler_cpu": env.get("power_sampler_cpu"),
         "workload_complexity": {
-            "model_size_bytes": variant.get("size_bytes"),
+            "model_size_bytes": model_record.get("size_bytes"),
             "node_count": variant.get("node_count"),
             "initializer_count": variant.get("initializer_count"),
             "operator_counts": variant.get("operator_counts"),
@@ -289,6 +302,7 @@ def _load_session(archive: Path, destination: Path) -> tuple[dict[str, Any], lis
                         "boot_id": env["boot_id"],
                         "model": env["model"],
                         "precision": env["precision"],
+                        "model_format": model_format,
                         "threads": int(env["threads"]),
                         "regime": regime,
                         "run": run.name,
@@ -440,11 +454,14 @@ def import_cpu_performance_archives(archives: list[Path], out_dir: Path) -> int:
             "",
             f"- Model: `{baseline['model']}`",
             f"- Precision: `{baseline['precision']}`",
+            f"- Model format: `{baseline['model_format'].upper()}`",
+            f"- Model preparation: `{baseline['model_optimization_style']}`, target "
+            f"`{baseline['model_target_platform']}`",
             f"- CPU threads: `{baseline['threads']}`",
             f"- CPU affinity mask: `{baseline['cpu_affinity_mask']}`",
             f"- CPU operating point: `{baseline['cpu_governor']}` governor, "
             f"fixed at `{baseline['cpu_frequency_khz'] / 1_000_000:.3f} GHz`",
-            f"- ONNX graph: `{baseline['workload_complexity']['node_count']}` nodes, "
+            f"- Deployment graph: `{baseline['workload_complexity']['node_count']}` nodes, "
             f"`{baseline['workload_complexity']['model_size_bytes']}` bytes",
             "- Operators: `"
             + ", ".join(

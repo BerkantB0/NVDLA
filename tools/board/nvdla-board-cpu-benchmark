@@ -6,6 +6,7 @@ usage() {
 usage: nvdla-board-cpu-benchmark {lenet|resnet50} PAYLOAD_ROOT [OPTIONS]
 
   --precision {fp32|int8}         ONNX model precision (default: fp32)
+  --model-format {onnx|ort}       Deployment model format (default: onnx)
   --threads N                     ORT intra-op threads (default: 4)
   --regime {all|cold|warm|steady} Measurement regimes (default: all)
   --cold-starts N                 Cold process samples
@@ -35,6 +36,7 @@ shift 2
 case "$MODEL" in lenet|resnet50) ;; *) fail_usage "model must be lenet or resnet50" ;; esac
 
 PRECISION=fp32
+MODEL_FORMAT=onnx
 THREADS=4
 REGIME=all
 POWER_SAMPLE=0
@@ -65,7 +67,7 @@ while [ "$#" -gt 0 ]; do
     case "$option" in
         --help|-h) usage; exit 0 ;;
         --power) mark_option "$option"; POWER_SAMPLE=1; shift ;;
-        --precision|--threads|--regime|--cold-starts|--warm-starts|--steady-samples|\
+        --precision|--model-format|--threads|--regime|--cold-starts|--warm-starts|--steady-samples|\
         --settle-seconds|--timeout-seconds|--power-idle-seconds|--power-interval-ms|\
         --power-sampler-cpu)
             mark_option "$option"
@@ -73,6 +75,7 @@ while [ "$#" -gt 0 ]; do
             value="$2"
             case "$option" in
                 --precision) PRECISION="$value" ;;
+                --model-format) MODEL_FORMAT="$value" ;;
                 --threads) THREADS="$value" ;;
                 --regime) REGIME="$value" ;;
                 --cold-starts) COLD_STARTS="$value" ;;
@@ -92,6 +95,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$PRECISION" in fp32|int8) ;; *) fail_usage "--precision must be fp32 or int8" ;; esac
+case "$MODEL_FORMAT" in onnx|ort) ;; *) fail_usage "--model-format must be onnx or ort" ;; esac
+[ "$MODEL_FORMAT" != ort ] || [ "$PRECISION" = fp32 ] || \
+    fail_usage "the ARM-targeted ORT pilot currently supports fp32 only"
 case "$REGIME" in all|cold|warm|steady) ;; *) fail_usage "--regime must be all, cold, warm, or steady" ;; esac
 for value in "$THREADS" "$COLD_STARTS" "$WARM_STARTS" "$STEADY_SAMPLES" \
     "$SETTLE_SECONDS" "$RUNTIME_TIMEOUT" "$POWER_IDLE_SECONDS" \
@@ -145,8 +151,13 @@ if [ "$POWER_SAMPLE" -eq 1 ]; then
     [ "$POWER_SAMPLER_CPU" -lt "$ONLINE_CPUS" ] || fail_usage "power sampler CPU is not online"
 fi
 
-WORKLOAD="$PAYLOAD_ROOT/cpu_onnx/$MODEL/$PRECISION"
-MODEL_PATH="$WORKLOAD/model.onnx"
+case "$MODEL_FORMAT" in
+    onnx) WORKLOAD_ROOT=cpu_onnx ;;
+    ort) WORKLOAD_ROOT=cpu_ort ;;
+esac
+WORKLOAD="$PAYLOAD_ROOT/$WORKLOAD_ROOT/$MODEL/$PRECISION"
+MODEL_PATH="$WORKLOAD/model.$MODEL_FORMAT"
+WORKLOAD_MANIFEST="$PAYLOAD_ROOT/$WORKLOAD_ROOT/manifest.json"
 for path in "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS" "$MODEL_PATH" \
     "$WORKLOAD/test_data_set_0/input_0.pb" "$WORKLOAD/test_data_set_0/output_0.pb" \
     /usr/bin/onnx_test_runner /usr/bin/onnxruntime_perf_test \
@@ -155,7 +166,7 @@ for path in "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS" "$MODEL_PATH
 done
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-OUT="/tmp/nvdla-board-cpu-benchmark-${MODEL}-${PRECISION}-${THREADS}t-${STAMP}"
+OUT="/tmp/nvdla-board-cpu-benchmark-${MODEL}-${PRECISION}-${MODEL_FORMAT}-${THREADS}t-${STAMP}"
 ARCHIVE="${OUT}.tar.gz"
 LATEST="/tmp/nvdla-board-cpu-benchmark-latest.tar.gz"
 STATUS=1
@@ -265,6 +276,7 @@ finish() {
         echo "implementation=onnxruntime-cpu-execution-provider"
         echo "model=$MODEL"
         echo "precision=$PRECISION"
+        echo "model_format=$MODEL_FORMAT"
         echo "threads=$THREADS"
         echo "cpu_affinity_mask=$CPU_MASK"
         echo "cpu_governor=$CPU_GOVERNOR"
@@ -334,7 +346,7 @@ capture software-hashes.txt sha256sum /usr/bin/onnx_test_runner \
     "$WORKLOAD/test_data_set_0/input_0.pb" "$WORKLOAD/test_data_set_0/output_0.pb" \
     "$PAYLOAD_ROOT/PAYLOAD.json" "$PAYLOAD_ROOT/SHA256SUMS"
 cp "$PAYLOAD_ROOT/PAYLOAD.json" "$OUT/payload-manifest.json"
-cp "$PAYLOAD_ROOT/cpu_onnx/manifest.json" "$OUT/cpu-workload-manifest.json"
+cp "$WORKLOAD_MANIFEST" "$OUT/cpu-workload-manifest.json"
 
 dmesg >"$OUT/dmesg-before.log" 2>&1 || true
 DMESG_LINES="$(wc -l <"$OUT/dmesg-before.log" | tr -d ' ')"

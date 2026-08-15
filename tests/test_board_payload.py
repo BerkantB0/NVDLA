@@ -229,6 +229,14 @@ class BoardPayloadTests(unittest.TestCase):
                         },
                     },
                 }
+                if precision == "fp32":
+                    ort_path = model_dir / "model.ort"
+                    ort_path.write_bytes(f"{model_name}-fp32-ort-model".encode())
+                    variants[precision]["ort"] = {
+                        "path": "model.ort",
+                        "sha256": sha256_file(ort_path),
+                        "format": "ORT",
+                    }
             cpu_models.append({"name": model_name, "models": variants})
         write_json(
             cpu_onnx / "manifest.json",
@@ -268,7 +276,7 @@ class BoardPayloadTests(unittest.TestCase):
             payload = json.loads(
                 (root / "first" / "nvdla-tests" / "PAYLOAD.json").read_text()
             )
-            self.assertEqual(payload["schema_version"], 4)
+            self.assertEqual(payload["schema_version"], 5)
             self.assertEqual(payload["hardware"]["clock"]["expected_hz"], 149985016)
             self.assertEqual(
                 payload["hardware"]["clock"]["linux_tolerance_hz"],
@@ -279,6 +287,7 @@ class BoardPayloadTests(unittest.TestCase):
                 payload["workloads"]["cpu_onnx"]["models"],
                 ["lenet", "resnet50"],
             )
+            self.assertEqual(payload["workloads"]["cpu_ort"]["format"], "ort")
             self.assertTrue(
                 (
                     root
@@ -286,9 +295,20 @@ class BoardPayloadTests(unittest.TestCase):
                     / "nvdla-tests"
                     / "cpu_onnx"
                     / "resnet50"
-                    / "int8"
+                    / "fp32"
                     / "test_data_set_0"
                     / "output_0.pb"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    root
+                    / "first"
+                    / "nvdla-tests"
+                    / "cpu_ort"
+                    / "resnet50"
+                    / "fp32"
+                    / "model.ort"
                 ).is_file()
             )
             self.assertTrue(

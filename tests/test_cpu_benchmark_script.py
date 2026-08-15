@@ -27,6 +27,13 @@ class CpuBenchmarkScriptTests(unittest.TestCase):
         self.assertIn('--cpu-mask "$CPU_MASK"', text)
         self.assertIn("built_in_warmup_inferences=1", text)
 
+    def test_selects_onnx_or_ort_without_changing_the_default(self) -> None:
+        text = SCRIPT.read_text(encoding="ascii")
+        self.assertIn("MODEL_FORMAT=onnx", text)
+        self.assertIn("--model-format {onnx|ort}", text)
+        self.assertIn('MODEL_PATH="$WORKLOAD/model.$MODEL_FORMAT"', text)
+        self.assertIn('echo "model_format=$MODEL_FORMAT"', text)
+
     def test_discovers_cpu_count_without_requiring_getconf(self) -> None:
         text = SCRIPT.read_text(encoding="ascii")
         sysfs = text.index("/sys/devices/system/cpu/online")

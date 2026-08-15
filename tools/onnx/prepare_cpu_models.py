@@ -223,6 +223,37 @@ def session_output(model: Path, input_name: str, value: np.ndarray) -> np.ndarra
     return np.asarray(session.run(None, {input_name: value})[0])
 
 
+def build_ort_variant(
+    model: Path, input_name: str, value: np.ndarray, expected: np.ndarray
+) -> dict[str, Any]:
+    destination = model.with_suffix(".ort")
+    options = ort.SessionOptions()
+    options.optimized_model_filepath = str(destination)
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    options.add_session_config_entry("session.save_model_format", "ORT")
+    options.add_session_config_entry("session.qdqisint8allowed", "1")
+    session = ort.InferenceSession(
+        str(model),
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
+        disabled_optimizers=["NchwcTransformer"],
+    )
+    actual = np.asarray(session.run(None, {input_name: value})[0])
+    if actual.shape != expected.shape or not np.allclose(actual, expected, rtol=1e-5, atol=1e-5):
+        raise ValueError(f"{destination}: optimized model output mismatch")
+    return {
+        "path": destination.name,
+        "sha256": sha256_file(destination),
+        "size_bytes": destination.stat().st_size,
+        "format": "ORT",
+        "source_onnx_sha256": sha256_file(model),
+        "optimization_style": "Fixed",
+        "optimization_level": "all",
+        "target_platform": "arm",
+        "validation": {"rtol": 1e-5, "atol": 1e-5},
+    }
+
+
 def build_model(
     *,
     name: str,
@@ -262,6 +293,7 @@ def build_model(
     ):
         raise ValueError(f"{name}: converted FP32 model did not match Caffe")
     fp32_test_data = save_test_data(fp32_dir, value, fp32_output)
+    fp32_ort = build_ort_variant(fp32_model, input_name, value, fp32_output)
 
     quant_pre_process(
         input_model=str(fp32_model),
@@ -322,6 +354,7 @@ def build_model(
         "models": {
             "fp32": {
                 **inspect_model(fp32_model),
+                "ort": fp32_ort,
                 "caffe_comparison": fp32_comparison,
                 "test_data": fp32_test_data,
             },

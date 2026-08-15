@@ -35,6 +35,7 @@ export PETALINUX_PROJECT=$HOME/build/nvdla-peta/petalinux/zcu102-nvdla
 export CPU_RUNTIME_WORK_DIR=$HOME/build/nvdla-peta/cpu-onnxruntime
 
 make cpu-model-workloads
+make cpu-ort-model-workloads
 make petalinux-cpu-sdk
 JOBS=2 make cpu-onnxruntime
 make petalinux-cpu-runtime
@@ -48,7 +49,16 @@ make petalinux-sd-bundle
 The rootfs audit requires AArch64 binaries, complete dynamic dependencies,
 safe runtime search paths, and no host build paths. The workload payload audit
 checks all ONNX graphs and serialized test tensors before producing the FAT
-partition handoff.
+partition handoff. The optional ORT workload target converts those same graphs
+with ONNX Runtime 1.18.1 using fixed, ARM-targeted offline optimizations and
+reuses the unchanged test tensors. The first pilot intentionally covers FP32
+only. Fixed ARM-target QDQ lowering changes INT8 execution semantics when
+validated on the x86 conversion host, so INT8 ORT promotion requires a
+separate ARM-generated oracle rather than weakened correctness tolerances.
+ONNX Runtime 1.18.1 does not produce byte-identical ORT FlatBuffers across
+otherwise identical conversions. Reproducibility therefore pins the source
+ONNX hash, converter version, and conversion options, records the generated
+ORT hash for each payload, and requires the unchanged tensor oracle to pass.
 
 ## Measurement Definitions
 
@@ -60,6 +70,8 @@ nvdla-board-cpu-benchmark MODEL PAYLOAD_ROOT \
 ```
 
 `MODEL` is `lenet` or `resnet50`; `PRECISION` is `fp32` or `int8`.
+The default `--model-format onnx` preserves the standard portable baseline;
+`--model-format ort` selects its ahead-of-time optimized ORT counterpart.
 
 - **Cold deployment:** a new process after `sync` and dropping Linux page
   caches. Elapsed time covers process launch, file reads, session creation,
@@ -127,6 +139,24 @@ The output contains raw CSV, a machine-readable statistical summary, a compact
 CSV table, and a Markdown report. The importer rejects sessions with different
 governors or fixed frequencies. Cold/warm and steady throughput are reported
 under their distinct timing boundaries and must not be conflated.
+
+### ORT Deployment Pilot
+
+Use the existing ResNet-50 FP32 campaign boundary to isolate model-format
+effects. Run five fresh boots with:
+
+```sh
+scripts/run_board_benchmark.sh cpu resnet50 \
+  --precision fp32 --model-format ort --threads 4 --regime all \
+  --cold-starts 5 --warm-starts 10 --steady-samples 30 \
+  --settle-seconds 30 \
+  --output artifacts/pilot/cpu-ort/resnet50-fp32
+```
+
+Compare it with the existing ONNX cohort using file size, cold and warm
+process latency, reported session-creation time, first-inference time, and
+steady inference. ORT is expected to affect deployment preparation; a material
+steady-latency change must be investigated rather than assumed.
 
 ## SSH Collection
 

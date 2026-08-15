@@ -26,6 +26,7 @@ class BoardHostRunnerTests(unittest.TestCase):
         self.assertIn('BENCHMARK_ARGS+=("$1")', text)
         self.assertIn('== *" --power "*', text)
         self.assertIn('== *" --input-set multi20 "*', text)
+        self.assertIn('== *" --model-format ort "*', text)
         self.assertNotIn('"$TARGET" reboot', text)
 
     def test_runner_uses_documented_test_credential(self) -> None:

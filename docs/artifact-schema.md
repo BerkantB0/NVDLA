@@ -210,14 +210,18 @@ The host importer produces `performance-raw.csv`,
 `docs/nvdla-performance-methodology.md`.
 
 ARM CPU archives named
-`nvdla-board-cpu-benchmark-<model>-<precision>-<threads>t-<timestamp>.tar.gz`
+`nvdla-board-cpu-benchmark-<model>-<precision>-<format>-<threads>t-<timestamp>.tar.gz`
 use standard ONNX Runtime CPU tools. Their schema-1 `benchmark.env` records
-model, precision, intra-op thread count, CPU affinity mask, fresh-boot/NTP
+model, precision, ONNX or ORT model format, intra-op thread count, CPU affinity mask, fresh-boot/NTP
 identity, regimes, correctness tolerances, and power settings. Each run keeps
 the ORT raw result CSV, launcher interval, resource usage, and stdout phase
 summary. Correctness logs from `onnx_test_runner` bracket all measurements.
 The CPU importer emits `cpu-performance-raw.csv`, summary JSON/CSV, a Markdown
 report, and `cpu-latency-distribution.svg`; mixed model, precision, thread,
 software, payload, kernel, or power provenance is rejected.
+
+Legacy archives without the `<format>` filename component predate the ORT
+pilot and are interpreted as `onnx`; the importer records this default
+explicitly in generated provenance.
 
 Large generated artifacts should remain in `artifacts/` and should not be committed.

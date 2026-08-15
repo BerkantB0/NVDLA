@@ -7,7 +7,7 @@ export PYTHONPATH := $(CURDIR)/tools:$(PYTHONPATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-input-sets sources-onnxruntime sources-eigen multi-image-workloads cpu-model-workloads cpu-onnxruntime \
+.PHONY: help doctor lock-check xsa-audit unit sources sources-heavy sources-lenet sources-resnet50 sources-input-sets sources-onnxruntime sources-eigen multi-image-workloads cpu-model-workloads cpu-ort-model-workloads cpu-onnxruntime \
         sources-vp \
         patch-prepare patch-apply patch-status patch-format patch-check \
         workloads abi-check \
@@ -42,6 +42,7 @@ help:
 	  '  make sources-onnxruntime Fetch pinned ONNX Runtime source files' \
 	  '  make sources-eigen   Fetch pinned Eigen source files' \
 	  '  make cpu-model-workloads Convert and validate FP32/INT8 ONNX workloads' \
+	  '  make cpu-ort-model-workloads Build fixed ARM-targeted ORT workloads' \
 	  '  make cpu-onnxruntime Cross-build standard ONNX Runtime CPU tools' \
 	  '  make patch-apply     Apply patches/nvdla-sw into .work/nvdla-sw-patched' \
 	  '  make patch-check     Verify patch queue applies and run checkpatch if available' \
@@ -144,6 +145,8 @@ cpu-model-workloads: $(CPU_MODEL_MANIFEST)
 
 $(CPU_MODEL_MANIFEST): scripts/cpu_model_workloads.sh tools/onnx/prepare_cpu_models.py repro.lock.json | sources-lenet sources-resnet50 vp-resnet50-small-workload
 	@scripts/cpu_model_workloads.sh
+
+cpu-ort-model-workloads: cpu-model-workloads
 
 cpu-onnxruntime: sources-onnxruntime sources-eigen
 	@scripts/cpu_onnxruntime_build.sh
