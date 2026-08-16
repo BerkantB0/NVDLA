@@ -22,7 +22,7 @@ from reportlab.platypus import Paragraph
 
 PAGE_W, PAGE_H = landscape(A4)
 MARGIN = 17 * mm
-PAGE_COUNT = 11
+PAGE_COUNT = 12
 
 INK = HexColor("#18212B")
 MUTED = HexColor("#62717C")
@@ -230,6 +230,69 @@ def add_cpu_scaling(data: dict, root: Path) -> None:
         data["models"][model]["cpu_scaling"] = scaling
 
 
+def add_cpu_format_pilot(data: dict, root: Path) -> None:
+    """Attach matched five-boot ONNX and ORT-format FP32 cohorts."""
+    report_dirs = {
+        "lenet": ("lenet-onnx-baseline-report", "lenet-fp32-report"),
+        "resnet50": ("resnet50-onnx-baseline-report", "resnet50-fp32-report"),
+    }
+    results = {}
+    comparable_fields = (
+        "model",
+        "precision",
+        "threads",
+        "source_model_sha256",
+        "input_sha256",
+        "golden_sha256",
+        "runtime_sha256",
+        "runtime_library_sha256",
+        "kernel_release",
+        "cpu_frequency_khz",
+        "cpu_affinity_mask",
+    )
+    for model, (onnx_dir, ort_dir) in report_dirs.items():
+        reports = {}
+        for model_format, directory in (("onnx", onnx_dir), ("ort", ort_dir)):
+            path = root / directory / "cpu-performance-summary.json"
+            report = json.loads(path.read_text(encoding="utf-8"))
+            provenance = report.get("provenance", {})
+            if report.get("status") != "pass" or report.get("session_count") != 5:
+                raise ValueError(f"expected five passing {model_format} sessions for {model}")
+            if provenance.get("model") != model or provenance.get("model_format") != model_format:
+                raise ValueError(f"CPU format provenance mismatch: {model} {model_format}")
+            if provenance.get("precision") != "fp32" or provenance.get("threads") != 4:
+                raise ValueError(f"unexpected CPU format pilot configuration: {model} {model_format}")
+            reports[model_format] = report
+
+        onnx_provenance = reports["onnx"]["provenance"]
+        ort_provenance = reports["ort"]["provenance"]
+        mismatches = [
+            field for field in comparable_fields
+            if onnx_provenance.get(field) != ort_provenance.get(field)
+        ]
+        if mismatches:
+            raise ValueError(f"ONNX/ORT pilot provenance mismatch for {model}: {mismatches}")
+
+        formats = {}
+        for model_format, report in reports.items():
+            formats[model_format] = {
+                regime: {
+                    "session_median_ms": report["regimes"][regime]["session_median_bootstrap_95ci"]["estimate_ns"] / 1e6,
+                    "ci_lower_ms": report["regimes"][regime]["session_median_bootstrap_95ci"]["lower_ns"] / 1e6,
+                    "ci_upper_ms": report["regimes"][regime]["session_median_bootstrap_95ci"]["upper_ns"] / 1e6,
+                }
+                for regime in ("cold", "warm", "steady")
+            }
+        complexity = ort_provenance["workload_complexity"]
+        results[model] = {
+            "formats": formats,
+            "node_count": complexity["node_count"],
+            "onnx_size_bytes": onnx_provenance["workload_complexity"]["model_size_bytes"],
+            "ort_size_bytes": complexity["model_size_bytes"],
+        }
+    data["cpu_format_pilot"] = results
+
+
 def add_supplementary_results(data: dict, root: Path) -> None:
     """Attach input-sensitivity and NVDLA phase evidence."""
     for model in ("lenet", "resnet50"):
@@ -288,7 +351,7 @@ def draw_summary(c: canvas.Canvas, data: dict) -> None:
     c.roundRect(MARGIN, 16 * mm, PAGE_W - 2 * MARGIN, 16 * mm, 3 * mm, fill=1, stroke=0)
     paragraph(
         c,
-        "<b>Comparison boundary:</b> nv_small NVDLA INT8 is compared with FP32 and independently quantized QDQ INT8 ONNX Runtime using one, two and four Cortex-A53 cores. Equal nominal precision does not imply identical quantization or graph transformation. The performance dataset contains 140 fresh-boot sessions; six supplementary sessions test 20 images per model.",
+        "<b>Comparison boundary:</b> nv_small NVDLA INT8 is compared with FP32 and independently quantized QDQ INT8 ONNX Runtime using one, two and four Cortex-A53 cores. Equal nominal precision does not imply identical quantization or graph transformation. The primary dataset contains 140 fresh-boot sessions; six input-sensitivity sessions, ten ORT sessions and one ONNX continuity run provide supplementary controls.",
         MARGIN + 5 * mm,
         28 * mm,
         PAGE_W - 2 * MARGIN - 10 * mm,
@@ -382,7 +445,7 @@ def draw_correctness(c: canvas.Canvas) -> None:
 
 
 def draw_input_variation(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Input sensitivity", "Does execution time depend on the image?", 5)
+    page_header(c, "Input sensitivity", "Does execution time depend on the image?", 6)
     footer(c, "Supplementary control: 20 balanced inputs and three fresh boots per model")
 
     c.setFillColor(PALE_GREEN)
@@ -640,8 +703,160 @@ def draw_latency(c: canvas.Canvas, data: dict) -> None:
     c.drawString(MARGIN, 43 * mm, "Fastest CPU time / NVDLA time: above 1.0 favors NVDLA; below 1.0 favors the fastest CPU configuration")
 
 
+def draw_cpu_format(c: canvas.Canvas, data: dict) -> None:
+    page_header(c, "CPU deployment format", "Can offline optimization close the deployment gap?", 5)
+    footer(c, "Five boots/format; current-image ResNet-50 ONNX control reproduced the baseline")
+
+    legend_y = PAGE_H - 39 * mm
+    c.setFillColor(GRID)
+    c.rect(PAGE_W - MARGIN - 90 * mm, legend_y - 1, 8 * mm, 4 * mm, fill=1, stroke=0)
+    c.setFillColor(INK)
+    c.setFont("Helvetica", 7.8)
+    c.drawString(PAGE_W - MARGIN - 80 * mm, legend_y, "Portable ONNX")
+    c.setFillColor(CPU_INT8)
+    c.rect(PAGE_W - MARGIN - 48 * mm, legend_y - 1, 8 * mm, 4 * mm, fill=1, stroke=0)
+    c.setFillColor(INK)
+    c.drawString(PAGE_W - MARGIN - 38 * mm, legend_y, "ARM-targeted ORT")
+
+    gap = 7 * mm
+    panel_y = 72 * mm
+    panel_h = 89 * mm
+    panel_w = (PAGE_W - 2 * MARGIN - gap) / 2
+    model_specs = (
+        ("lenet", "LeNet", MARGIN),
+        ("resnet50", "ResNet-50", MARGIN + panel_w + gap),
+    )
+
+    for model, model_label, x in model_specs:
+        pilot = data["cpu_format_pilot"][model]
+        onnx = pilot["formats"]["onnx"]
+        ort = pilot["formats"]["ort"]
+        size_change = (pilot["ort_size_bytes"] / pilot["onnx_size_bytes"] - 1.0) * 100.0
+        panel(c, x, panel_y, panel_w, panel_h, PAPER, GRID)
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(x + 7 * mm, panel_y + panel_h - 11 * mm, model_label)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 7.2)
+        c.drawRightString(
+            x + panel_w - 7 * mm,
+            panel_y + panel_h - 10 * mm,
+            f"{pilot['node_count']} nodes  |  {pilot['onnx_size_bytes'] / 1e6:.2f} MB  |  ORT size {size_change:+.1f}%",
+        )
+
+        bar_x = x + 28 * mm
+        bar_w = 74 * mm
+        for row_index, (regime, regime_label) in enumerate((("cold", "Cold"), ("warm", "Warm"))):
+            row_y = panel_y + panel_h - (34 + row_index * 25) * mm
+            onnx_ms = onnx[regime]["session_median_ms"]
+            ort_ms = ort[regime]["session_median_ms"]
+            ratio = ort_ms / onnx_ms
+            reduction = (1.0 - ratio) * 100.0
+
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 8.5)
+            c.drawString(x + 7 * mm, row_y + 1.5 * mm, regime_label)
+            c.setFillColor(CPU_INT8)
+            c.setFont("Helvetica-Bold", 6.6)
+            c.drawString(x + 7 * mm, row_y - 7.5 * mm, f"{reduction:.1f}% faster")
+
+            c.setFillColor(GRID)
+            c.rect(bar_x, row_y + 2.5 * mm, bar_w, 4.5 * mm, fill=1, stroke=0)
+            c.setFillColor(CPU_INT8)
+            c.rect(bar_x, row_y - 4 * mm, bar_w * ratio, 4.5 * mm, fill=1, stroke=0)
+
+            c.setFillColor(MUTED)
+            c.setFont("Helvetica", 6.8)
+            c.drawRightString(bar_x - 2 * mm, row_y + 3.6 * mm, "ONNX")
+            c.drawRightString(bar_x - 2 * mm, row_y - 2.9 * mm, "ORT")
+            c.setFillColor(INK)
+            c.setFont("Helvetica-Bold", 6.8)
+            c.drawString(bar_x + bar_w + 2 * mm, row_y + 3.6 * mm, fmt_ms(onnx_ms))
+            c.drawString(bar_x + bar_w * ratio + 2 * mm, row_y - 2.9 * mm, fmt_ms(ort_ms))
+
+        loaded_y = panel_y + 6 * mm
+        panel(c, x + 7 * mm, loaded_y, panel_w - 14 * mm, 16 * mm, PANEL, PANEL)
+        loaded_onnx = onnx["steady"]["session_median_ms"]
+        loaded_ort = ort["steady"]["session_median_ms"]
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(x + 12 * mm, loaded_y + 9.5 * mm, "Loaded context")
+        c.setFont("Helvetica-Bold", 9)
+        c.drawCentredString(
+            x + panel_w * 0.57,
+            loaded_y + 9.5 * mm,
+            f"{fmt_ms(loaded_onnx)}  ->  {fmt_ms(loaded_ort)}",
+        )
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 6.8)
+        c.drawCentredString(x + panel_w * 0.57, loaded_y + 4 * mm, "95% boot-level confidence intervals overlap")
+
+    flow_y = 17 * mm
+    flow_h = 43 * mm
+    flow_w = 166 * mm
+    panel(c, MARGIN, flow_y, flow_w, flow_h, PAPER, GRID)
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(MARGIN + 7 * mm, flow_y + flow_h - 9 * mm, "What changes at process startup?")
+
+    def flow_row(y: float, label: str, boxes: tuple[tuple[str, float], ...], color) -> None:
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 7.2)
+        c.drawString(MARGIN + 7 * mm, y + 3 * mm, label)
+        cursor = MARGIN + 32 * mm
+        for index, (text_value, width_mm) in enumerate(boxes):
+            c.setFillColor(color if index == 0 else PANEL)
+            c.setStrokeColor(color)
+            c.roundRect(cursor, y, width_mm * mm, 8 * mm, 1.5 * mm, fill=1, stroke=1)
+            c.setFillColor(PAPER if index == 0 else INK)
+            c.setFont("Helvetica-Bold" if index == 0 else "Helvetica", 6.5)
+            c.drawCentredString(cursor + width_mm * mm / 2, y + 2.8 * mm, text_value)
+            cursor += width_mm * mm
+            if index < len(boxes) - 1:
+                c.setStrokeColor(MUTED)
+                c.line(cursor + 1 * mm, y + 4 * mm, cursor + 4 * mm, y + 4 * mm)
+                cursor += 5 * mm
+
+    flow_row(
+        flow_y + 20 * mm,
+        "ONNX",
+        (("Parse graph", 29), ("Optimize + fuse", 34), ("Build session", 30), ("Execute", 24)),
+        MUTED,
+    )
+    flow_row(
+        flow_y + 7 * mm,
+        "ORT",
+        (("Pre-optimized graph", 42), ("Build session", 35), ("Execute", 27)),
+        CPU_INT8,
+    )
+
+    context_x = MARGIN + flow_w + gap
+    context_w = PAGE_W - MARGIN - context_x
+    panel(c, context_x, flow_y, context_w, flow_h, PALE_GREEN, PALE_GREEN)
+    c.setFillColor(INK)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(context_x + 7 * mm, flow_y + flow_h - 9 * mm, "ResNet-50 NVDLA context")
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 6.8)
+    c.drawString(context_x + 7 * mm, flow_y + flow_h - 15 * mm, "CPU ORT FP32 time / NVDLA INT8 time")
+    resnet_ort = data["cpu_format_pilot"]["resnet50"]["formats"]["ort"]
+    context_values = []
+    for regime, label in (("cold", "Cold"), ("warm", "Warm"), ("steady", "Loaded")):
+        nvdla_ms = data["models"]["resnet50"]["nvdla"]["latency"][regime]["session_median_ms"]
+        context_values.append((resnet_ort[regime]["session_median_ms"] / nvdla_ms, label))
+    metric_w = (context_w - 14 * mm) / 3
+    for index, (value, label) in enumerate(context_values):
+        metric_x = context_x + 7 * mm + index * metric_w
+        c.setFillColor(GREEN)
+        c.setFont("Helvetica-Bold", 15)
+        c.drawCentredString(metric_x + metric_w / 2, flow_y + 14 * mm, f"{value:.2f}x")
+        c.setFillColor(INK)
+        c.setFont("Helvetica", 6.8)
+        c.drawCentredString(metric_x + metric_w / 2, flow_y + 7 * mm, label)
+
+
 def draw_throughput(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 6)
+    page_header(c, "Scale and throughput", "What changes between LeNet and ResNet-50?", 7)
     footer(c, "Throughput is reciprocal mean latency, not concurrent pipelined throughput")
 
     left = MARGIN
@@ -828,7 +1043,7 @@ def draw_phase_breakdown(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_cpu_scaling_latency(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "CPU scaling", "How does execution latency scale with CPU cores?", 7)
+    page_header(c, "CPU scaling", "How does execution latency scale with CPU cores?", 8)
     footer(c, "Loaded-context latency; five fresh-boot sessions for every model, precision and core count")
 
     lx = MARGIN
@@ -973,7 +1188,7 @@ def draw_cpu_scaling_latency(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_cpu_scaling_energy(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "CPU scaling", "What happens to energy as CPU cores are added?", 8)
+    page_header(c, "CPU scaling", "What happens to energy as CPU cores are added?", 9)
     footer(c, "Powered steady batches; active energy includes baseline and incremental energy subtracts idle")
 
     lx = MARGIN
@@ -1100,7 +1315,7 @@ def draw_cpu_scaling_energy(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_power(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Power and energy", "Monitored PS + PL rails during inference", 9)
+    page_header(c, "Power and energy", "Monitored PS + PL rails during inference", 10)
     footer(c, "Power cohorts are separate from primary latency cohorts; 50 ms sampling with endpoint capture")
     legend(c, PAGE_W - MARGIN - 111 * mm, PAGE_H - 37 * mm)
 
@@ -1198,7 +1413,7 @@ def draw_power(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_power_domains(c: canvas.Canvas, data: dict) -> None:
-    page_header(c, "Power domains", "How do PS and PL contribute?", 10)
+    page_header(c, "Power domains", "How do PS and PL contribute?", 11)
     footer(c, "Five fresh-boot powered sessions per model and stack; means across monitored rails")
 
     legend_x = MARGIN
@@ -1311,8 +1526,8 @@ def draw_power_domains(c: canvas.Canvas, data: dict) -> None:
 
 
 def draw_method(c: canvas.Canvas) -> None:
-    page_header(c, "Measurement design", "What was collected, and how to read it", 11)
-    footer(c, "Full provenance and raw samples remain in artifacts/final-reports, artifacts/review and session archives")
+    page_header(c, "Measurement design", "What was collected, and how to read it", 12)
+    footer(c, "Full provenance remains in artifacts/final-reports, artifacts/review, artifacts/pilot and session archives")
 
     # Protocol flow.
     flow_y = PAGE_H - 61 * mm
@@ -1377,24 +1592,25 @@ def draw_method(c: canvas.Canvas) -> None:
 
     c.setFillColor(PALE_GOLD)
     c.roundRect(MARGIN, 15 * mm, PAGE_W - 2 * MARGIN, 14 * mm, 2 * mm, fill=1, stroke=0)
-    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus independently quantized CPU INT8 plus FP32; monitored rails rather than wall input; five boots per performance/scaling cohort and three per input-sensitivity model.",
+    paragraph(c, "<b>Interpret with:</b> one ZCU102 and nv_small implementation; NVDLA INT8 versus independently quantized CPU INT8 plus FP32; monitored rails rather than wall input; five boots per performance, scaling and CPU-format cohort, plus three per input-sensitivity model.",
               MARGIN + 5 * mm, 26 * mm, PAGE_W - 2 * MARGIN - 10 * mm,
               size=8, leading=9.5)
 
 
 def build_pdf(source: Path, cpu_int8_root: Path, cpu_scaling_root: Path,
-              report_root: Path, output: Path) -> None:
+              cpu_format_root: Path, report_root: Path, output: Path) -> None:
     data = json.loads(source.read_text(encoding="utf-8"))
     if data.get("selected_sessions") != 40:
         raise ValueError("expected the balanced 40-session NVDLA/CPU FP32 campaign")
     add_cpu_int8(data, cpu_int8_root)
     add_supplementary_results(data, report_root)
     add_cpu_scaling(data, cpu_scaling_root)
+    add_cpu_format_pilot(data, cpu_format_root)
     output.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(output), pagesize=(PAGE_W, PAGE_H), pageCompression=1)
     c.setTitle("NVDLA Evaluation Metrics and Results")
     c.setAuthor("NVDLA PetaLinux project")
-    c.setSubject("Correctness, latency, throughput, power, and FP32/INT8 ARM CPU scaling")
+    c.setSubject("Correctness, latency, throughput, power, CPU scaling, and ONNX/ORT deployment")
     draw_summary(c, data)
     c.showPage()
     draw_correctness(c)
@@ -1402,6 +1618,8 @@ def build_pdf(source: Path, cpu_int8_root: Path, cpu_scaling_root: Path,
     draw_phase_breakdown(c, data)
     c.showPage()
     draw_latency(c, data)
+    c.showPage()
+    draw_cpu_format(c, data)
     c.showPage()
     draw_input_variation(c, data)
     c.showPage()
@@ -1447,8 +1665,20 @@ def main() -> int:
         type=Path,
         default=Path("artifacts/review/cpu-scaling"),
     )
+    parser.add_argument(
+        "--cpu-format-root",
+        type=Path,
+        default=Path("artifacts/pilot/cpu-ort"),
+    )
     args = parser.parse_args()
-    build_pdf(args.source, args.cpu_int8_root, args.cpu_scaling_root, args.report_root, args.output)
+    build_pdf(
+        args.source,
+        args.cpu_int8_root,
+        args.cpu_scaling_root,
+        args.cpu_format_root,
+        args.report_root,
+        args.output,
+    )
     print(args.output.resolve())
     return 0
 
